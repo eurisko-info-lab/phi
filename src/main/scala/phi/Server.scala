@@ -102,11 +102,80 @@ class ServerState:
   val exprRepo: Repo[Expr] = Repo[Expr]()
   val editors: mutable.Map[String, Editor[?]] = mutable.Map.empty
 
+  // Initialize repository with standard combinators
+  initializeRepo()
+
   def getOrCreateLCEditor(id: String): Editor[LC] =
     editors.getOrElseUpdate(id, Editor.empty[LC]).asInstanceOf[Editor[LC]]
 
   def getOrCreateExprEditor(id: String): Editor[Expr] =
     editors.getOrElseUpdate(id, Editor.empty[Expr]).asInstanceOf[Editor[Expr]]
+
+  /** Initialize the LC repository with standard combinators and examples */
+  private def initializeRepo(): Unit =
+    val standardLibrary: List[(String, String, String)] = List(
+      // Identity and basic combinators
+      ("id", "fn x => x", "Identity combinator"),
+      ("const", "fn x => fn y => x", "Constant combinator (K)"),
+      ("flip", "fn f => fn x => fn y => f y x", "Flip arguments"),
+      ("compose", "fn f => fn g => fn x => f (g x)", "Function composition"),
+      
+      // Boolean Church encodings
+      ("true", "fn t => fn f => t", "Church true"),
+      ("false", "fn t => fn f => f", "Church false"),
+      ("not", "fn b => fn t => fn f => b f t", "Boolean negation"),
+      ("and", "fn p => fn q => p q p", "Boolean and"),
+      ("or", "fn p => fn q => p p q", "Boolean or"),
+      ("if", "fn c => fn t => fn e => c t e", "If-then-else"),
+      
+      // Pairs
+      ("pair", "fn a => fn b => fn f => f a b", "Construct a pair"),
+      ("fst", "fn p => p (fn a => fn b => a)", "First of pair"),
+      ("snd", "fn p => p (fn a => fn b => b)", "Second of pair"),
+      
+      // Church numerals
+      ("zero", "fn f => fn x => x", "Church numeral 0"),
+      ("one", "fn f => fn x => f x", "Church numeral 1"),
+      ("two", "fn f => fn x => f (f x)", "Church numeral 2"),
+      ("three", "fn f => fn x => f (f (f x))", "Church numeral 3"),
+      ("succ", "fn n => fn f => fn x => f (n f x)", "Successor"),
+      ("plus", "fn m => fn n => fn f => fn x => m f (n f x)", "Addition"),
+      ("mult", "fn m => fn n => fn f => m (n f)", "Multiplication"),
+      
+      // Recursion
+      ("omega", "fn x => x x", "Self-application"),
+      ("Y", "fn f => (fn x => f (x x)) (fn x => f (x x))", "Y combinator (fixed-point)"),
+      
+      // Practical examples
+      ("double", "fn x => x + x", "Double a number"),
+      ("square", "fn x => x * x", "Square a number"),
+      ("add", "fn x => fn y => x + y", "Add two numbers"),
+      ("mul", "fn x => fn y => x * y", "Multiply two numbers"),
+      
+      // Example expressions
+      ("example1", "let x = 5 in x * 2 + 1", "Let binding example"),
+      ("example2", "let square = fn x => x * x in square 4", "Function in let"),
+      ("example3", "let add = fn x => fn y => x + y in add 3 4", "Curried addition"),
+      ("example4", "(fn f => fn x => f (f x)) (fn y => y + 1) 0", "Apply twice")
+    )
+
+    // Store each term with a patch for history
+    var lastTerm: Term[LC] = Term.hole[LC]
+    
+    for (name, code, description) <- standardLibrary do
+      Pipeline.parseLC(code) match
+        case Right(term) =>
+          // Store with name
+          lcRepo.store(term, Set(Name(name)))
+          
+          // Create a patch for history
+          val change = Change.replace[LC](term)
+          val patch = Patch.create(s"Add $name: $description", change, lastTerm)
+          lcRepo.applyPatch(patch, lastTerm)
+          lastTerm = term
+          
+        case Left(err) =>
+          System.err.println(s"Failed to parse $name: $err")
 
 // =============================================================================
 // API Response Types
@@ -138,6 +207,8 @@ case class ParseRequest(input: String)
 case class EvalRequest(input: String, env: Map[String, Int])
 case class ChangeRequest(changeType: String, value: Option[Json])
 case class XformRequest(xformName: String, termHash: String)
+case class CommitRequest(code: String, message: String, name: Option[String] = None)
+case class BranchRequest(name: String)
 
 // =============================================================================
 // HTTP Routes
@@ -422,6 +493,94 @@ object PhiRoutes:
       yield resp
 
     // =========================================================================
+    // Repository History & Commit
+    // =========================================================================
+
+    case GET -> Root / "repo" / "lc" / "history" =>
+      val repo = state.lcRepo
+      val patchHistory = repo.listPatches.map { patch =>
+        Json.obj(
+          "id" -> patch.id.value.asJson,
+          "description" -> patch.description.asJson,
+          "timestamp" -> patch.timestamp.asJson,
+          "dependencies" -> patch.dependencies.map(_.value).asJson
+        )
+      }
+      Ok(Json.obj(
+        "branch" -> repo.getCurrentBranch.asJson,
+        "head" -> repo.head.map(_.value).asJson,
+        "patches" -> patchHistory.asJson
+      ))
+
+    case GET -> Root / "repo" / "lc" / "patch" / patchId =>
+      state.lcRepo.getPatch(Hash(patchId)) match
+        case Some(patch) =>
+          Ok(Json.obj(
+            "id" -> patch.id.value.asJson,
+            "description" -> patch.description.asJson,
+            "timestamp" -> patch.timestamp.asJson,
+            "dependencies" -> patch.dependencies.map(_.value).asJson
+          ))
+        case None => NotFound(Json.obj("error" -> s"Patch not found: $patchId".asJson))
+
+    case GET -> Root / "repo" / "lc" / "branches" =>
+      val repo = state.lcRepo
+      val branchList = repo.listBranches.toList.map { name =>
+        Json.obj(
+          "name" -> name.asJson,
+          "head" -> repo.getBranchHead(name).map(_.value).asJson,
+          "isCurrent" -> (name == repo.getCurrentBranch).asJson
+        )
+      }
+      Ok(branchList.asJson)
+
+    case req @ POST -> Root / "repo" / "lc" / "commit" =>
+      for
+        cr <- req.as[CommitRequest]
+        parsed = Pipeline.parseLC(cr.code)
+        resp <- parsed match
+          case Right(term) =>
+            val repo = state.lcRepo
+            val currentTerm = repo.currentTerm.getOrElse(Term.hole[LC])
+            val change = Change.replace[LC](term)
+            val patch = Patch.create(cr.message, change, currentTerm)
+            repo.applyPatch(patch, currentTerm)
+            val hash = repo.store(term, cr.name.map(n => Set(Name(n))).getOrElse(Set.empty))
+            Ok(Json.obj(
+              "success" -> true.asJson,
+              "hash" -> hash.value.asJson,
+              "patchId" -> patch.id.value.asJson,
+              "message" -> cr.message.asJson
+            ))
+          case Left(err) =>
+            BadRequest(Json.obj("success" -> false.asJson, "error" -> err.asJson))
+      yield resp
+
+    case req @ POST -> Root / "repo" / "lc" / "branch" / "create" =>
+      for
+        br <- req.as[BranchRequest]
+        _ = state.lcRepo.createBranch(br.name)
+        resp <- Ok(Json.obj("success" -> true.asJson, "branch" -> br.name.asJson))
+      yield resp
+
+    case POST -> Root / "repo" / "lc" / "branch" / "switch" / branchName =>
+      if state.lcRepo.switchBranch(branchName) then
+        Ok(Json.obj("success" -> true.asJson, "branch" -> branchName.asJson))
+      else
+        NotFound(Json.obj("success" -> false.asJson, "error" -> s"Branch not found: $branchName".asJson))
+
+    case POST -> Root / "repo" / "lc" / "merge" / sourceBranch =>
+      state.lcRepo.merge(sourceBranch) match
+        case MergeResult.Success(term) =>
+          Ok(Json.obj("success" -> true.asJson, "result" -> "merged".asJson))
+        case MergeResult.AlreadyUpToDate =>
+          Ok(Json.obj("success" -> true.asJson, "result" -> "already-up-to-date".asJson))
+        case MergeResult.Conflict(_) =>
+          Ok(Json.obj("success" -> false.asJson, "result" -> "conflict".asJson))
+        case MergeResult.BranchNotFound =>
+          NotFound(Json.obj("success" -> false.asJson, "error" -> s"Branch not found: $sourceBranch".asJson))
+
+    // =========================================================================
     // Static HTML Interface
     // =========================================================================
 
@@ -433,6 +592,11 @@ object PhiRoutes:
     case GET -> Root / "editor.html" =>
       IO.pure(Response[IO](Status.Ok)
         .withBodyStream(fs2.Stream.emits(PhiHtml.editorPage.getBytes("UTF-8")))
+        .withContentType(`Content-Type`(MediaType.text.html, Charset.`UTF-8`)))
+
+    case GET -> Root / "repo.html" =>
+      IO.pure(Response[IO](Status.Ok)
+        .withBodyStream(fs2.Stream.emits(PhiHtml.repoPage.getBytes("UTF-8")))
         .withContentType(`Content-Type`(MediaType.text.html, Charset.`UTF-8`)))
   }
 
@@ -504,7 +668,8 @@ POST /editor/lc/:id/redo</pre>
 
   <div class="section">
     <h2>Try It</h2>
-    <p><a href="/editor.html">Open Structured Editor</a></p>
+    <p><a href="/repo.html">📚 Repository Browser</a> - View history, browse commits, create new code</p>
+    <p><a href="/editor.html">✏️ Structured Editor</a> - Live parsing with AST visualization</p>
   </div>
 </body>
 </html>
@@ -894,6 +1059,430 @@ POST /editor/lc/:id/redo</pre>
     
     // Initial parse on load
     window.onload = () => { parseExpr(); parseLambda(); };
+  </script>
+</body>
+</html>
+"""
+
+  val repoPage: String = """<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Phi Repository Browser</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #1a1a2e; color: #eee; }
+    .container { display: flex; height: 100vh; }
+    
+    /* Sidebar */
+    .sidebar { width: 300px; background: #16213e; border-right: 1px solid #0f3460; display: flex; flex-direction: column; }
+    .sidebar-header { padding: 15px; border-bottom: 1px solid #0f3460; }
+    .sidebar-header h2 { margin: 0; color: #fff; font-size: 18px; }
+    .sidebar-header a { color: #88f; font-size: 12px; }
+    
+    /* Branch selector */
+    .branch-bar { padding: 10px 15px; background: #0f0f23; border-bottom: 1px solid #0f3460; display: flex; gap: 8px; align-items: center; }
+    .branch-bar select { flex: 1; background: #16213e; color: #eee; border: 1px solid #0f3460; padding: 6px; border-radius: 4px; }
+    .branch-bar button { background: #0f3460; color: #eee; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+    .branch-bar button:hover { background: #1a4a80; }
+    
+    /* Terms list */
+    .terms-list { flex: 1; overflow-y: auto; }
+    .term-item { padding: 12px 15px; border-bottom: 1px solid #0f3460; cursor: pointer; transition: background 0.2s; }
+    .term-item:hover { background: #1a2a4a; }
+    .term-item.selected { background: #0f3460; border-left: 3px solid #e94560; }
+    .term-name { font-weight: 600; color: #fff; margin-bottom: 4px; }
+    .term-hash { font-family: monospace; font-size: 11px; color: #888; }
+    .term-preview { font-family: monospace; font-size: 12px; color: #aaa; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    
+    /* History list */
+    .history-section { border-top: 2px solid #0f3460; }
+    .history-header { padding: 10px 15px; background: #0a1628; font-size: 12px; font-weight: 600; color: #888; text-transform: uppercase; }
+    .patch-item { padding: 10px 15px; border-bottom: 1px solid #0f3460; cursor: pointer; font-size: 13px; }
+    .patch-item:hover { background: #1a2a4a; }
+    .patch-msg { color: #fff; margin-bottom: 4px; }
+    .patch-meta { font-size: 11px; color: #666; }
+    
+    /* Main content */
+    .main { flex: 1; display: flex; flex-direction: column; }
+    .toolbar { padding: 10px 20px; background: #0f0f23; border-bottom: 1px solid #0f3460; display: flex; gap: 10px; align-items: center; }
+    .toolbar h3 { margin: 0; flex: 1; color: #fff; font-size: 16px; }
+    .toolbar button { background: linear-gradient(to bottom, #e94560, #c73e54); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; }
+    .toolbar button:hover { background: linear-gradient(to bottom, #ff5a7a, #e94560); }
+    .toolbar button.secondary { background: linear-gradient(to bottom, #0f3460, #0a2647); }
+    
+    /* Content area */
+    .content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .view-tabs { display: flex; background: #16213e; border-bottom: 1px solid #0f3460; }
+    .view-tab { padding: 10px 20px; cursor: pointer; border-bottom: 2px solid transparent; color: #888; }
+    .view-tab:hover { color: #fff; }
+    .view-tab.active { color: #e94560; border-bottom-color: #e94560; }
+    
+    .view-content { flex: 1; overflow: auto; padding: 20px; }
+    
+    /* Code view */
+    .code-view { background: #0f0f23; border-radius: 8px; padding: 20px; font-family: 'JetBrains Mono', monospace; font-size: 14px; min-height: 200px; }
+    .code-view pre { margin: 0; white-space: pre-wrap; color: #0f0; }
+    
+    /* AST view */
+    .ast-view { background: #0f0f23; border-radius: 8px; padding: 20px; }
+    .ast-node { display: inline-block; padding: 4px 8px; margin: 2px; border-radius: 4px; }
+    .ast-var { background: #264653; color: #2a9d8f; }
+    .ast-lam { background: #2d3a4f; border-left: 3px solid #e9c46a; padding-left: 12px; }
+    .ast-app { background: #2d3a4f; border-left: 3px solid #f4a261; }
+    .ast-let { background: #2d3a4f; border-left: 3px solid #e76f51; display: block; padding: 8px; margin: 4px 0; }
+    .ast-lit { background: #1d3557; color: #a8dadc; }
+    .ast-prim { background: #3d2944; color: #f4a8ba; }
+    .ast-hole { background: #5c2a2a; color: #ffcc00; border: 2px dashed #ffcc00; }
+    .ast-keyword { color: #e94560; font-weight: bold; }
+    .ast-param { color: #e9c46a; }
+    .ast-op { color: #f4a261; font-weight: bold; }
+    
+    /* Editor panel */
+    .editor-panel { display: none; flex-direction: column; height: 100%; }
+    .editor-panel.active { display: flex; }
+    .editor-input { flex: 1; display: flex; flex-direction: column; }
+    .editor-input textarea { flex: 1; background: #0f0f23; color: #0f0; border: 1px solid #0f3460; border-radius: 8px; padding: 15px; font-family: 'JetBrains Mono', monospace; font-size: 14px; resize: none; }
+    .editor-input textarea:focus { outline: none; border-color: #e94560; }
+    
+    .commit-bar { padding: 15px; background: #16213e; border-top: 1px solid #0f3460; display: flex; gap: 10px; align-items: center; }
+    .commit-bar input { flex: 1; background: #0f0f23; color: #eee; border: 1px solid #0f3460; padding: 10px; border-radius: 6px; }
+    .commit-bar input:focus { outline: none; border-color: #e94560; }
+    
+    /* Modal */
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); justify-content: center; align-items: center; z-index: 100; }
+    .modal-overlay.active { display: flex; }
+    .modal { background: #16213e; border-radius: 12px; padding: 20px; min-width: 400px; border: 1px solid #0f3460; }
+    .modal h3 { margin: 0 0 15px 0; color: #fff; }
+    .modal input { width: 100%; background: #0f0f23; color: #eee; border: 1px solid #0f3460; padding: 10px; border-radius: 6px; margin-bottom: 15px; }
+    .modal-buttons { display: flex; gap: 10px; justify-content: flex-end; }
+    
+    .empty-state { text-align: center; color: #666; padding: 40px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <h2>🔮 Phi Repository</h2>
+        <a href="/">← Back to API</a> | <a href="/editor.html">Editor</a>
+      </div>
+      
+      <div class="branch-bar">
+        <select id="branchSelect" onchange="switchBranch()"></select>
+        <button onclick="showNewBranchModal()">+ Branch</button>
+      </div>
+      
+      <div class="terms-list" id="termsList"></div>
+      
+      <div class="history-section">
+        <div class="history-header">📜 History</div>
+        <div id="historyList"></div>
+      </div>
+    </div>
+    
+    <!-- Main Content -->
+    <div class="main">
+      <div class="toolbar">
+        <h3 id="currentTitle">Select a term or create new</h3>
+        <button class="secondary" onclick="showView('viewer')">View</button>
+        <button onclick="showView('editor')">✏️ New / Edit</button>
+      </div>
+      
+      <div class="content">
+        <!-- Viewer Panel -->
+        <div id="viewerPanel" class="editor-panel active">
+          <div class="view-tabs">
+            <div class="view-tab active" onclick="showTab('code')">Code</div>
+            <div class="view-tab" onclick="showTab('ast')">AST</div>
+            <div class="view-tab" onclick="showTab('json')">JSON</div>
+          </div>
+          <div class="view-content">
+            <div id="codeView" class="code-view"><pre id="codeContent">Select a term from the sidebar...</pre></div>
+            <div id="astView" class="ast-view" style="display:none"></div>
+            <div id="jsonView" class="code-view" style="display:none"><pre id="jsonContent"></pre></div>
+          </div>
+        </div>
+        
+        <!-- Editor Panel -->
+        <div id="editorPanel" class="editor-panel">
+          <div class="editor-input">
+            <textarea id="codeEditor" placeholder="Enter Lambda Calculus code...
+Examples:
+  fn x => fn y => x + y
+  let square = fn x => x * x in square 5
+  (fn f => fn x => f (f x)) (fn y => y + 1) 0"></textarea>
+          </div>
+          <div class="commit-bar">
+            <input type="text" id="commitName" placeholder="Name (optional, e.g. 'add', 'compose')">
+            <input type="text" id="commitMsg" placeholder="Commit message..." style="flex: 2">
+            <button onclick="commitCode()">💾 Commit</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- New Branch Modal -->
+  <div class="modal-overlay" id="branchModal">
+    <div class="modal">
+      <h3>Create New Branch</h3>
+      <input type="text" id="newBranchName" placeholder="Branch name...">
+      <div class="modal-buttons">
+        <button class="secondary" onclick="closeBranchModal()">Cancel</button>
+        <button onclick="createBranch()">Create</button>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    const API = '';
+    let currentTerm = null;
+    let currentHash = null;
+    
+    // Initialize
+    async function init() {
+      await loadBranches();
+      await loadTerms();
+      await loadHistory();
+    }
+    
+    // Load branches
+    async function loadBranches() {
+      const resp = await fetch(API + '/repo/lc/branches');
+      const branches = await resp.json();
+      const select = document.getElementById('branchSelect');
+      select.innerHTML = branches.map(b => 
+        `<option value="${b.name}" ${b.isCurrent ? 'selected' : ''}>${b.name}${b.isCurrent ? ' ●' : ''}</option>`
+      ).join('');
+    }
+    
+    // Load terms list
+    async function loadTerms() {
+      const resp = await fetch(API + '/repo/lc/terms');
+      const terms = await resp.json();
+      const list = document.getElementById('termsList');
+      
+      if (terms.length === 0) {
+        list.innerHTML = '<div class="empty-state">No terms yet.<br>Create one in the editor!</div>';
+        return;
+      }
+      
+      list.innerHTML = terms.map(t => {
+        const preview = renderPreview(t.term);
+        const names = t.term.names || [];
+        return `<div class="term-item" onclick="selectTerm('${t.hash}')">
+          <div class="term-name">${names[0] || 'unnamed'}</div>
+          <div class="term-hash">${t.hash}</div>
+          <div class="term-preview">${esc(preview)}</div>
+        </div>`;
+      }).join('');
+    }
+    
+    // Load history
+    async function loadHistory() {
+      const resp = await fetch(API + '/repo/lc/history');
+      const data = await resp.json();
+      const list = document.getElementById('historyList');
+      
+      if (!data.patches || data.patches.length === 0) {
+        list.innerHTML = '<div class="empty-state" style="padding:20px;font-size:12px;">No commits yet</div>';
+        return;
+      }
+      
+      list.innerHTML = data.patches.slice(0, 20).map(p => {
+        const date = new Date(p.timestamp);
+        const timeStr = date.toLocaleTimeString();
+        return `<div class="patch-item" onclick="selectPatch('${p.id}')">
+          <div class="patch-msg">${esc(p.description)}</div>
+          <div class="patch-meta">${p.id.substring(0,8)} • ${timeStr}</div>
+        </div>`;
+      }).join('');
+    }
+    
+    // Select a term
+    async function selectTerm(hash) {
+      const resp = await fetch(API + `/repo/lc/term/${hash}`);
+      const data = await resp.json();
+      currentTerm = data.term;
+      currentHash = hash;
+      
+      document.querySelectorAll('.term-item').forEach(el => el.classList.remove('selected'));
+      event.currentTarget?.classList.add('selected');
+      
+      document.getElementById('currentTitle').textContent = `Term: ${hash.substring(0,8)}...`;
+      updateViews();
+      showView('viewer');
+    }
+    
+    // Update all views
+    function updateViews() {
+      if (!currentTerm) return;
+      
+      // Code view
+      document.getElementById('codeContent').textContent = renderLC(currentTerm);
+      
+      // AST view
+      document.getElementById('astView').innerHTML = renderAST(currentTerm);
+      
+      // JSON view
+      document.getElementById('jsonContent').textContent = JSON.stringify(currentTerm, null, 2);
+    }
+    
+    // Render LC term to code string
+    function renderLC(term) {
+      if (term.type === 'hole') return '?' + (term.label || '');
+      const v = term.value;
+      if (!v) return '?';
+      
+      switch (v.type) {
+        case 'var': return v.name;
+        case 'lit': return String(v.value);
+        case 'lam': return `λ${v.param}.${renderLC({type:'done', value: v.body})}`;
+        case 'app': return `(${renderLC({type:'done', value: v.func})} ${renderLC({type:'done', value: v.arg})})`;
+        case 'let': return `let ${v.name} = ${renderLC({type:'done', value: v.value})} in ${renderLC({type:'done', value: v.body})}`;
+        case 'prim':
+          if (v.args && v.args.length === 2 && ['+','-','*','/'].includes(v.op)) {
+            return `(${renderLC({type:'done', value: v.args[0]})} ${v.op} ${renderLC({type:'done', value: v.args[1]})})`;
+          }
+          return `${v.op}(${(v.args||[]).map(a => renderLC({type:'done', value: a})).join(', ')})`;
+        default: return '?';
+      }
+    }
+    
+    // Render AST visualization
+    function renderAST(term) {
+      if (term.type === 'hole') {
+        return `<span class="ast-node ast-hole">?${term.label || ''}</span>`;
+      }
+      const v = term.value;
+      if (!v) return '<span class="ast-node ast-hole">?</span>';
+      
+      switch (v.type) {
+        case 'var':
+          return `<span class="ast-node ast-var">${v.name}</span>`;
+        case 'lit':
+          return `<span class="ast-node ast-lit">${v.value}</span>`;
+        case 'lam':
+          return `<span class="ast-node ast-lam"><span class="ast-keyword">λ</span><span class="ast-param">${v.param}</span>. ${renderAST({type:'done', value: v.body})}</span>`;
+        case 'app':
+          return `<span class="ast-node ast-app">(${renderAST({type:'done', value: v.func})} ${renderAST({type:'done', value: v.arg})})</span>`;
+        case 'let':
+          return `<div class="ast-node ast-let"><span class="ast-keyword">let</span> <span class="ast-param">${v.name}</span> = ${renderAST({type:'done', value: v.value})} <span class="ast-keyword">in</span><br>${renderAST({type:'done', value: v.body})}</div>`;
+        case 'prim':
+          if (v.args && v.args.length === 2 && ['+','-','*','/'].includes(v.op)) {
+            return `<span class="ast-node ast-prim">${renderAST({type:'done', value: v.args[0]})} <span class="ast-op">${v.op}</span> ${renderAST({type:'done', value: v.args[1]})}</span>`;
+          }
+          return `<span class="ast-node ast-prim">${v.op}(${(v.args||[]).map(a => renderAST({type:'done', value: a})).join(', ')})</span>`;
+        default:
+          return '<span class="ast-node ast-hole">?</span>';
+      }
+    }
+    
+    // Preview for term list
+    function renderPreview(term) {
+      return renderLC(term).substring(0, 50);
+    }
+    
+    // Show view/editor panel
+    function showView(panel) {
+      document.getElementById('viewerPanel').classList.toggle('active', panel === 'viewer');
+      document.getElementById('editorPanel').classList.toggle('active', panel === 'editor');
+    }
+    
+    // Show tab in viewer
+    function showTab(tab) {
+      document.querySelectorAll('.view-tab').forEach(el => el.classList.remove('active'));
+      event.currentTarget.classList.add('active');
+      
+      document.getElementById('codeView').style.display = tab === 'code' ? 'block' : 'none';
+      document.getElementById('astView').style.display = tab === 'ast' ? 'block' : 'none';
+      document.getElementById('jsonView').style.display = tab === 'json' ? 'block' : 'none';
+    }
+    
+    // Commit code
+    async function commitCode() {
+      const code = document.getElementById('codeEditor').value.trim();
+      const name = document.getElementById('commitName').value.trim() || null;
+      const message = document.getElementById('commitMsg').value.trim() || 'Update';
+      
+      if (!code) {
+        alert('Please enter some code');
+        return;
+      }
+      
+      try {
+        const resp = await fetch(API + '/repo/lc/commit', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ code, message, name })
+        });
+        const data = await resp.json();
+        
+        if (data.success) {
+          document.getElementById('commitMsg').value = '';
+          document.getElementById('commitName').value = '';
+          await loadTerms();
+          await loadHistory();
+          selectTerm(data.hash);
+        } else {
+          alert('Error: ' + data.error);
+        }
+      } catch (e) {
+        alert('Error: ' + e.message);
+      }
+    }
+    
+    // Branch operations
+    async function switchBranch() {
+      const branch = document.getElementById('branchSelect').value;
+      await fetch(API + `/repo/lc/branch/switch/${branch}`, { method: 'POST' });
+      await loadTerms();
+      await loadHistory();
+    }
+    
+    function showNewBranchModal() {
+      document.getElementById('branchModal').classList.add('active');
+      document.getElementById('newBranchName').focus();
+    }
+    
+    function closeBranchModal() {
+      document.getElementById('branchModal').classList.remove('active');
+    }
+    
+    async function createBranch() {
+      const name = document.getElementById('newBranchName').value.trim();
+      if (!name) return;
+      
+      await fetch(API + '/repo/lc/branch/create', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ name })
+      });
+      
+      document.getElementById('newBranchName').value = '';
+      closeBranchModal();
+      await loadBranches();
+    }
+    
+    // Select patch (show in viewer)
+    async function selectPatch(patchId) {
+      const resp = await fetch(API + `/repo/lc/patch/${patchId}`);
+      const patch = await resp.json();
+      
+      document.getElementById('currentTitle').textContent = `Patch: ${patch.description}`;
+      document.getElementById('codeContent').textContent = `Patch ID: ${patch.id}\nDescription: ${patch.description}\nTimestamp: ${new Date(patch.timestamp).toLocaleString()}`;
+      showView('viewer');
+    }
+    
+    function esc(str) {
+      if (!str) return '';
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    
+    // Initialize on load
+    window.onload = init;
   </script>
 </body>
 </html>

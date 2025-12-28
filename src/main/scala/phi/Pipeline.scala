@@ -103,6 +103,130 @@ object Pipeline:
     private def isAtomStart(c: Char): Boolean =
       c.isLetter || c.isDigit || c == '(' || c == 'λ' || c == '\\' || c == '?'
     
+    // Parse expression for let value - stops at 'in' keyword
+    private def parseLetValue(): Either[String, Term[LC]] =
+      parseLetAdditive()
+    
+    private def parseLetAdditive(): Either[String, Term[LC]] =
+      parseLetMultiplicative().flatMap { left =>
+        var result = left
+        var continue = true
+        while continue do
+          skipWs()
+          if atEnd then continue = false
+          else if peek == '+' then
+            advance()
+            parseLetMultiplicative() match
+              case Right(right) =>
+                result = Term.Done(LC.Prim("+", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
+              case Left(err) => return Left(err)
+          else if peek == '-' then
+            advance()
+            parseLetMultiplicative() match
+              case Right(right) =>
+                result = Term.Done(LC.Prim("-", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
+              case Left(err) => return Left(err)
+          else continue = false
+        Right(result)
+      }
+    
+    private def parseLetMultiplicative(): Either[String, Term[LC]] =
+      parseLetApplication().flatMap { left =>
+        var result = left
+        var continue = true
+        while continue do
+          skipWs()
+          if atEnd then continue = false
+          else if peek == '*' then
+            advance()
+            parseLetApplication() match
+              case Right(right) =>
+                result = Term.Done(LC.Prim("*", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
+              case Left(err) => return Left(err)
+          else if peek == '/' then
+            advance()
+            parseLetApplication() match
+              case Right(right) =>
+                result = Term.Done(LC.Prim("/", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
+              case Left(err) => return Left(err)
+          else continue = false
+        Right(result)
+      }
+    
+    private def parseLetApplication(): Either[String, Term[LC]] =
+      parseLetAtom().flatMap { first =>
+        var result = first
+        var continue = true
+        while continue do
+          skipWs()
+          if !atEnd && isLetAtomStart then
+            parseLetAtom() match
+              case Right(arg) =>
+                result = Term.Done(LC.App(result.getOrElse(LC.Var("?")), arg.getOrElse(LC.Var("?"))))
+              case Left(_) => continue = false
+          else continue = false
+        Right(result)
+      }
+    
+    // Check if next token is an atom (not 'in')
+    private def isLetAtomStart: Boolean =
+      val c = peek
+      if c.isLetter then
+        // Check if it's the 'in' keyword - look ahead
+        val saved = pos
+        val ident = parseIdent()
+        pos = saved
+        ident != "in"
+      else c.isDigit || c == '(' || c == 'λ' || c == '\\' || c == '?'
+    
+    private def parseLetAtom(): Either[String, Term[LC]] =
+      skipWs()
+      if atEnd then return Left("Unexpected end of input")
+      
+      peek match
+        case 'λ' | '\\' =>
+          advance()
+          skipWs()
+          val param = parseIdent()
+          skipWs()
+          if peek == '.' then advance()
+          else if peek2 == "->" || peek2 == "=>" then { advance(); advance() }
+          parseLetValue().map(body => Term.Done(LC.Lam(param, body.getOrElse(LC.Var("?")))))
+        
+        case '(' =>
+          advance()
+          val result = parseExpr()  // Inside parens, can use full expr
+          skipWs()
+          if peek == ')' then advance()
+          result
+        
+        case '?' =>
+          advance()
+          val label = if !atEnd && peek.isLetter then Some(parseIdent()) else None
+          Right(Term.Hole(label))
+        
+        case c if c.isDigit =>
+          Right(Term.Done(LC.Lit(parseNumber())))
+        
+        case c if c.isLetter =>
+          val name = parseIdent()
+          name match
+            case "in" =>
+              // Put it back - let caller handle it
+              pos -= 2
+              Left("Reached 'in' keyword")
+            case "fn" | "fun" =>
+              skipWs()
+              val param = parseIdent()
+              skipWs()
+              expect("=>") || expect("->")
+              parseLetValue().map(body => Term.Done(LC.Lam(param, body.getOrElse(LC.Var("?")))))
+            case _ =>
+              Right(Term.Done(LC.Var(name)))
+        
+        case c =>
+          Left(s"Unexpected character: $c")
+
     // Atom = Var | Lit | '(' Expr ')' | Lambda | Let | Hole
     private def parseAtom(): Either[String, Term[LC]] =
       skipWs()
@@ -154,7 +278,7 @@ object Pipeline:
               skipWs()
               expect("=")
               for
-                value <- parseExpr()
+                value <- parseLetValue()  // Parse value stopping at 'in'
                 _ = { skipWs(); expect("in") }
                 body <- parseExpr()
               yield Term.Done(LC.Let(varName, value.getOrElse(LC.Var("?")), body.getOrElse(LC.Var("?"))))
