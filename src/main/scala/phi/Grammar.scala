@@ -452,7 +452,18 @@ object GrammarParser:
     val base = terminal | grouped | nonTerminal
 
     // Postfix modifiers
-    val withMod = (base ~ (symbol("?") | symbol("*") | symbol("+")).opt).iso(Iso(
+    val modSyntax: Syntax[Option[String]] = new Syntax[Option[String]]:
+      def parse(stream: TokenStream): ParseResult[Option[String]] =
+        stream.skipWs.peek match
+          case Lex.Symbol(s) if s == "?" || s == "*" || s == "+" =>
+            ParseResult.done(Some(s), stream.skipWs.advance)
+          case _ =>
+            ParseResult.done(None, stream)
+      def render(t: Term[Option[String]]): Vector[Lex] = t match
+        case Term.Done(Some(s)) => Vector(Lex.Symbol(s))
+        case _ => Vector.empty
+    
+    val withMod = (base ~ modSyntax).iso(Iso[(GrammarPart, Option[String]), GrammarPart](
       { case (part, mod) =>
         mod match
           case Some("?") => GrammarPart.Optional(part)
@@ -460,7 +471,8 @@ object GrammarParser:
           case Some("+") => GrammarPart.Many(part, atLeastOne = true)
           case _ => part
       },
-      { case GrammarPart.Optional(p) => (p, Some("?"))
+      {
+        case GrammarPart.Optional(p) => (p, Some("?"))
         case GrammarPart.Many(p, false) => (p, Some("*"))
         case GrammarPart.Many(p, true) => (p, Some("+"))
         case p => (p, None)

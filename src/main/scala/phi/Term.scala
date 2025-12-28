@@ -70,7 +70,8 @@ case class TermZipper[A](
   def up: Option[TermZipper[?]] =
     context match
       case ZipperContext.Parent(parent, rebuild) :: rest =>
-        val newFocus = Term.Done(rebuild(parent, focus.asInstanceOf[Term[Any]]))
+        val rebuilt = rebuild.asInstanceOf[(Any, Term[Any]) => Any](parent, focus.asInstanceOf[Term[Any]])
+        val newFocus = Term.Done(rebuilt).asInstanceOf[Term[A]]
         Some(TermZipper(newFocus, rest.asInstanceOf[List[ZipperContext[A]]]))
       case Nil => None
 

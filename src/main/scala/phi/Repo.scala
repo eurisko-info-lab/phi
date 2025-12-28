@@ -293,7 +293,7 @@ class Repo[A]:
 enum MergeResult[+A]:
   case Success(term: Term[A])
   case AlreadyUpToDate
-  case Conflict(conflicts: List[(Patch[A], Patch[A])])
+  case Conflict[B](conflicts: List[(Patch[B], Patch[B])]) extends MergeResult[B]
   case BranchNotFound
 
 /**

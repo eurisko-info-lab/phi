@@ -1,434 +1,317 @@
 package phi
 
-import phi.Term.*
-import phi.Syntax.*
-import phi.Repo.*
-import phi.HashConsing.*
-import phi.Xform.*
-import phi.Attributes.*
-import phi.Grammar.*
-
 /**
- * INTERTWINING RULES
+ * INTERTWINING RULES - End-to-end pipeline demonstration
  * 
- * This module demonstrates the complete end-to-end pipeline:
- * 
- *   parsing → Term[A] → repo → editor → changes → Xforms → typecheck → evaluation → rendering → repo
- * 
- * Each stage is connected to the next, with bidirectional transformations ensuring
- * consistency across all representations.
+ * This module demonstrates the complete pipeline:
+ *   parsing → Term[A] → repo → editor → changes → Xforms → typecheck → rendering → repo
  */
 object Pipeline:
 
   // ============================================================================
-  // STAGE 1: Parsing - Text → Term[A]
+  // STAGE 1: Parsing - Text → Term[LC]
   // ============================================================================
   
-  /** Parse source text into a Term using a given syntax */
-  def parse[A](syntax: Syntax[A], source: String): Either[String, Term[A]] =
-    val tokens = Lexer.tokenize(source)
-    syntax.parse(tokens) match
-      case Some((term, remaining)) if remaining.isEmpty => Right(term)
-      case Some((term, remaining)) => 
-        Right(term) // Allow partial parse, remaining tokens ignored
-      case None => Left(s"Failed to parse: $source")
-
   /** Parse LC expression from string */
   def parseLC(source: String): Either[String, Term[LC]] =
-    parse(LCSyntax.lcSyntax, source)
+    val parser = new LCParser(source.trim)
+    parser.parseExpr()
 
-  // ============================================================================
-  // STAGE 2: Term[A] → Repository Storage
-  // ============================================================================
-  
-  /** Store a term in the repository with hash-consing */
-  def storeInRepo[A](repo: Repo[A], term: Term[A], message: String)(using hasher: TermHasher[A]): (Repo[A], Hash) =
-    val hash = HashConsing.hashTerm(term)
-    val change = Change.Replace(Term.Hole("root"), term)
-    val patch = Patch(
-      id = s"patch-${System.currentTimeMillis()}",
-      changes = List(change),
-      dependencies = Nil,
-      metadata = Map("message" -> message, "hash" -> hash.toString)
-    )
-    (repo.addPatch(patch), hash)
-
-  /** Retrieve a term from the repo by applying all patches */
-  def retrieveFromRepo[A](repo: Repo[A]): Term[A] =
-    repo.currentState
-
-  // ============================================================================
-  // STAGE 3: Repository → Editor (Zipper-based navigation)
-  // ============================================================================
-  
-  /** Create an editor session from the current repo state */
-  def openEditor[A](repo: Repo[A]): Editor[A] =
-    val term = repo.currentState
-    Editor(term, TermZipper.fromTerm(term), List.empty)
-
-  /** Editor state with history tracking */
-  case class Editor[A](
-    original: Term[A],
-    zipper: TermZipper[A],
-    history: List[Change[A]]
-  ):
-    def currentTerm: Term[A] = zipper.toTerm
+  /** Proper recursive descent parser for LC with operators */
+  private class LCParser(input: String):
+    private var pos = 0
     
-    def navigate(direction: Direction): Editor[A] =
-      direction match
-        case Direction.Up => 
-          zipper.up match
-            case Some(z) => copy(zipper = z)
-            case None => this
-        case Direction.Down(index) =>
-          zipper.down(index) match
-            case Some(z) => copy(zipper = z)
-            case None => this
+    private def peek: Char = if pos < input.length then input(pos) else '\u0000'
+    private def peek2: String = if pos + 1 < input.length then input.substring(pos, pos + 2) else ""
+    private def advance(): Char = { val c = peek; pos += 1; c }
+    private def atEnd: Boolean = pos >= input.length
+    private def skipWs(): Unit = while !atEnd && peek.isWhitespace do advance()
     
-    def applyChange(change: Change[A]): Editor[A] =
-      val newTerm = ChangeApplicator.apply(change, currentTerm)
-      Editor(original, TermZipper.fromTerm(newTerm), change :: history)
+    private def parseIdent(): String =
+      skipWs()
+      val sb = new StringBuilder
+      while !atEnd && (peek.isLetterOrDigit || peek == '_') do sb += advance()
+      sb.toString
     
-    def fillHole(name: String, value: A): Editor[A] =
-      val change = Change.Replace(Term.Hole(name), Term.Done(value))
-      applyChange(change)
-
-  enum Direction:
-    case Up
-    case Down(index: Int)
+    private def parseNumber(): Int =
+      skipWs()
+      val sb = new StringBuilder
+      while !atEnd && peek.isDigit do sb += advance()
+      sb.toString.toIntOption.getOrElse(0)
+    
+    private def expect(s: String): Boolean =
+      skipWs()
+      if input.substring(pos).startsWith(s) then { pos += s.length; true }
+      else false
+    
+    // Expression = Additive
+    def parseExpr(): Either[String, Term[LC]] =
+      skipWs()
+      if atEnd then return Left("Unexpected end of input")
+      parseAdditive()
+    
+    // Additive = Multiplicative (('+' | '-') Multiplicative)*
+    private def parseAdditive(): Either[String, Term[LC]] =
+      parseMultiplicative().flatMap { left =>
+        var result = left
+        var continue = true
+        while continue do
+          skipWs()
+          if !atEnd && (peek == '+' || peek == '-') then
+            val op = advance().toString
+            parseMultiplicative() match
+              case Right(right) =>
+                result = Term.Done(LC.Prim(op, List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
+              case Left(e) => return Left(e)
+          else continue = false
+        Right(result)
+      }
+    
+    // Multiplicative = Application (('*' | '/') Application)*
+    private def parseMultiplicative(): Either[String, Term[LC]] =
+      parseApplication().flatMap { left =>
+        var result = left
+        var continue = true
+        while continue do
+          skipWs()
+          if !atEnd && (peek == '*' || peek == '/') then
+            val op = advance().toString
+            parseApplication() match
+              case Right(right) =>
+                result = Term.Done(LC.Prim(op, List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
+              case Left(e) => return Left(e)
+          else continue = false
+        Right(result)
+      }
+    
+    // Application = Atom+
+    private def parseApplication(): Either[String, Term[LC]] =
+      parseAtom().flatMap { first =>
+        var result = first
+        var continue = true
+        while continue do
+          skipWs()
+          if !atEnd && isAtomStart(peek) then
+            parseAtom() match
+              case Right(arg) =>
+                result = Term.Done(LC.App(result.getOrElse(LC.Var("?")), arg.getOrElse(LC.Var("?"))))
+              case Left(_) => continue = false
+          else continue = false
+        Right(result)
+      }
+    
+    private def isAtomStart(c: Char): Boolean =
+      c.isLetter || c.isDigit || c == '(' || c == 'λ' || c == '\\' || c == '?'
+    
+    // Atom = Var | Lit | '(' Expr ')' | Lambda | Let | Hole
+    private def parseAtom(): Either[String, Term[LC]] =
+      skipWs()
+      if atEnd then return Left("Unexpected end of input")
+      
+      peek match
+        // Lambda: λx.body or \x.body
+        case 'λ' | '\\' =>
+          advance()
+          skipWs()
+          val param = parseIdent()
+          skipWs()
+          if peek == '.' then advance()
+          else if peek2 == "->" || peek2 == "=>" then { advance(); advance() }
+          parseExpr().map(body => Term.Done(LC.Lam(param, body.getOrElse(LC.Var("?")))))
+        
+        // Parenthesized expression
+        case '(' =>
+          advance()
+          val result = parseExpr()
+          skipWs()
+          if peek == ')' then advance()
+          result
+        
+        // Hole
+        case '?' =>
+          advance()
+          val label = if !atEnd && peek.isLetter then Some(parseIdent()) else None
+          Right(Term.Hole(label))
+        
+        // Number
+        case c if c.isDigit =>
+          Right(Term.Done(LC.Lit(parseNumber())))
+        
+        // Identifier or keyword
+        case c if c.isLetter =>
+          val name = parseIdent()
+          name match
+            case "fn" | "fun" =>
+              skipWs()
+              val param = parseIdent()
+              skipWs()
+              expect("=>") || expect("->")
+              parseExpr().map(body => Term.Done(LC.Lam(param, body.getOrElse(LC.Var("?")))))
+            
+            case "let" =>
+              skipWs()
+              val varName = parseIdent()
+              skipWs()
+              expect("=")
+              for
+                value <- parseExpr()
+                _ = { skipWs(); expect("in") }
+                body <- parseExpr()
+              yield Term.Done(LC.Let(varName, value.getOrElse(LC.Var("?")), body.getOrElse(LC.Var("?"))))
+            
+            case _ =>
+              Right(Term.Done(LC.Var(name)))
+        
+        case c =>
+          Left(s"Unexpected character: $c")
 
   // ============================================================================
-  // STAGE 4: Editor Changes → Xform Application
+  // STAGE 2: Repository Storage
   // ============================================================================
   
-  /** Apply Xform to propagate changes across representations */
-  def propagateViaXform[A, B](
-    editor: Editor[A],
-    xform: Xform[A, B]
-  ): Either[String, Term[B]] =
-    val term = editor.currentTerm
-    termToB(term, xform)
-
-  /** Transform Term[A] → Term[B] using an Xform */
-  def termToB[A, B](term: Term[A], xform: Xform[A, B]): Either[String, Term[B]] =
-    term match
-      case Term.Done(a) =>
-        xform.forward(a) match
-          case Some(b) => Right(Term.Done(b))
-          case None => Left(s"Xform forward failed for: $a")
-      case Term.Hole(name) =>
-        Right(Term.Hole(name)) // Holes propagate through
-
-  /** Transform Term[B] → Term[A] (backward direction) */
-  def termToA[A, B](term: Term[B], xform: Xform[A, B]): Either[String, Term[A]] =
-    term match
-      case Term.Done(b) =>
-        xform.backward(b) match
-          case Some(a) => Right(Term.Done(a))
-          case None => Left(s"Xform backward failed for: $b")
-      case Term.Hole(name) =>
-        Right(Term.Hole(name))
+  /** Store a term in the repository */
+  def storeInRepo[A](repo: Repo[A], term: Term[A], name: Name): Hash =
+    repo.store(term, Set(name))
 
   // ============================================================================
-  // STAGE 5: Xform Output → Type Checking
+  // STAGE 3: Editor (Zipper-based)
   // ============================================================================
   
-  /** Type check an LC term, returning typed version */
-  def typeCheck(term: Term[LC]): Either[String, Term[TypedLC]] =
-    term match
-      case Term.Done(lc) =>
-        TypeChecker.infer(lc, Map.empty) match
-          case Some(typed) => Right(Term.Done(typed))
-          case None => Left(s"Type checking failed for: $lc")
-      case Term.Hole(name) =>
-        Right(Term.Hole(name))
-
-  /** Full LC → TypedLC Xform application with type checking */
-  def lcToTypedLC(term: Term[LC]): Either[String, Term[TypedLC]] =
-    typeCheck(term)
+  /** Create an editor for a term */
+  def createEditor[A](term: Term[A]): TermZipper[A] =
+    TermZipper(term)
 
   // ============================================================================
-  // STAGE 6: Type-Checked Term → Evaluation
+  // STAGE 4: Apply Changes
   // ============================================================================
   
-  /** Evaluate a typed LC term to a value */
-  def evaluate(term: Term[TypedLC]): Either[String, Term[TypedLC]] =
-    term match
-      case Term.Done(typed) =>
-        Right(Term.Done(evaluateTypedLC(typed)))
-      case Term.Hole(name) =>
-        Left(s"Cannot evaluate term with hole: $name")
-
-  /** Evaluate typed LC to normal form */
-  def evaluateTypedLC(typed: TypedLC): TypedLC =
-    typed match
-      case TypedLC.TVar(name, ty) => typed
-      case TypedLC.TLam(param, paramTy, body, ty) => typed // Lambda is a value
-      case TypedLC.TApp(func, arg, ty) =>
-        val evalFunc = evaluateTypedLC(func)
-        val evalArg = evaluateTypedLC(arg)
-        evalFunc match
-          case TypedLC.TLam(param, _, body, _) =>
-            evaluateTypedLC(substituteTyped(body, param, evalArg))
-          case _ => TypedLC.TApp(evalFunc, evalArg, ty)
-      case TypedLC.TLet(name, value, body, ty) =>
-        val evalValue = evaluateTypedLC(value)
-        evaluateTypedLC(substituteTyped(body, name, evalValue))
-
-  /** Substitute in typed LC */
-  def substituteTyped(term: TypedLC, name: String, replacement: TypedLC): TypedLC =
-    term match
-      case TypedLC.TVar(n, ty) if n == name => replacement
-      case TypedLC.TVar(_, _) => term
-      case TypedLC.TLam(param, paramTy, body, ty) if param == name => term
-      case TypedLC.TLam(param, paramTy, body, ty) =>
-        TypedLC.TLam(param, paramTy, substituteTyped(body, name, replacement), ty)
-      case TypedLC.TApp(func, arg, ty) =>
-        TypedLC.TApp(
-          substituteTyped(func, name, replacement),
-          substituteTyped(arg, name, replacement),
-          ty
-        )
-      case TypedLC.TLet(n, value, body, ty) =>
-        val newValue = substituteTyped(value, name, replacement)
-        val newBody = if n == name then body else substituteTyped(body, name, replacement)
-        TypedLC.TLet(n, newValue, newBody, ty)
+  /** Apply a change to a term */
+  def applyChange[A](change: Change[A], term: Term[A]): Term[A] =
+    ChangeApplicator(change, term)
 
   // ============================================================================
-  // STAGE 7: Evaluation Result → Rendering
+  // STAGE 5: Transform via Xform (LC → TypedLC)
   // ============================================================================
   
-  /** Render a term back to source text */
-  def render[A](term: Term[A], syntax: Syntax[A]): String =
-    syntax.render(term).map(_.toString).mkString(" ")
+  /** Transform LC to TypedLC using the TypeChecker Xform */
+  def typeCheck(term: Term[LC]): Term[TypedLC] =
+    TypeChecker.forward(term)
 
+  /** Transform LC to ICNet */
+  def toInteractionNet(term: Term[LC]): Term[ICNet] =
+    LCToIC.forward(term)
+
+  // ============================================================================
+  // STAGE 6: Rendering
+  // ============================================================================
+  
   /** Render LC term to string */
-  def renderLC(term: Term[LC]): String =
-    render(term, LCSyntax.lcSyntax)
+  def renderLC(term: Term[LC]): String = term match
+    case Term.Done(lc) => renderLCValue(lc)
+    case Term.Hole(l)  => l.map(n => s"?$n").getOrElse("?")
 
-  /** Render TypedLC to string (showing types) */
-  def renderTypedLC(term: Term[TypedLC]): String =
-    term match
-      case Term.Done(typed) => renderTypedLCValue(typed)
-      case Term.Hole(name) => s"?$name"
+  def renderLCValue(lc: LC): String = lc match
+    case LC.Var(n)       => n
+    case LC.Lam(p, b)    => s"λ$p.${renderLCValue(b)}"
+    case LC.App(f, a)    => s"(${renderLCValue(f)} ${renderLCValue(a)})"
+    case LC.Let(n, v, b) => s"let $n = ${renderLCValue(v)} in ${renderLCValue(b)}"
+    case LC.Lit(n)       => n.toString
+    case LC.Prim(op, List(a, b)) if Set("+", "-", "*", "/").contains(op) =>
+      s"(${renderLCValue(a)} $op ${renderLCValue(b)})"
+    case LC.Prim(op, as) => s"$op(${as.map(renderLCValue).mkString(", ")})"
 
-  def renderTypedLCValue(typed: TypedLC): String =
-    typed match
-      case TypedLC.TVar(name, ty) => s"$name : ${renderType(ty)}"
-      case TypedLC.TLam(param, paramTy, body, ty) =>
-        s"(λ$param : ${renderType(paramTy)}. ${renderTypedLCValue(body)}) : ${renderType(ty)}"
-      case TypedLC.TApp(func, arg, ty) =>
-        s"(${renderTypedLCValue(func)} ${renderTypedLCValue(arg)}) : ${renderType(ty)}"
-      case TypedLC.TLet(name, value, body, ty) =>
-        s"let $name = ${renderTypedLCValue(value)} in ${renderTypedLCValue(body)} : ${renderType(ty)}"
+  /** Render TypedLC term to string with types */
+  def renderTypedLC(term: Term[TypedLC]): String = term match
+    case Term.Done(typed) => renderTypedLCValue(typed)
+    case Term.Hole(l)     => l.map(n => s"?$n").getOrElse("?")
 
-  def renderType(ty: LCType): String =
-    ty match
-      case LCType.Base(name) => name
-      case LCType.Arrow(from, to) => s"(${renderType(from)} → ${renderType(to)})"
-      case LCType.Var(name) => s"'$name"
-
-  // ============================================================================
-  // STAGE 8: Rendered Output → Back to Repository
-  // ============================================================================
-  
-  /** Commit the current editor state back to the repository */
-  def commitToRepo[A](repo: Repo[A], editor: Editor[A], message: String)(using hasher: TermHasher[A]): Repo[A] =
-    if editor.history.isEmpty then
-      repo // No changes to commit
-    else
-      val patch = Patch(
-        id = s"patch-${System.currentTimeMillis()}",
-        changes = editor.history.reverse, // Apply in order
-        dependencies = repo.branches.get("main").toList,
-        metadata = Map("message" -> message)
-      )
-      repo.addPatch(patch)
+  def renderTypedLCValue(typed: TypedLC): String = typed match
+    case TypedLC.TVar(n, ty)       => s"$n:${ty.render}"
+    case TypedLC.TLam(p, pty, b)   => s"λ$p:${pty.render}.${renderTypedLCValue(b)}"
+    case TypedLC.TApp(f, a)        => s"(${renderTypedLCValue(f)} ${renderTypedLCValue(a)})"
+    case TypedLC.TLet(n, ty, v, b) => s"let $n:${ty.render} = ${renderTypedLCValue(v)} in ${renderTypedLCValue(b)}"
+    case TypedLC.TLit(n)           => n.toString
+    case TypedLC.TAnn(t, ty)       => s"(${renderTypedLCValue(t)} : ${ty.render})"
 
   // ============================================================================
-  // FULL PIPELINE: End-to-End Integration
+  // FULL PIPELINE
   // ============================================================================
   
-  /** 
-   * Complete pipeline execution:
-   * parsing → Term[A] → repo → editor → changes → Xforms → typecheck → evaluation → rendering → repo
-   */
   case class PipelineResult(
-    parsedTerm: Term[LC],
-    storedHash: Hash,
-    editorState: Editor[LC],
-    transformedTerm: Term[TypedLC],
-    evaluatedTerm: Term[TypedLC],
-    renderedOutput: String,
-    finalRepo: Repo[LC]
+    source: String,
+    parsed: Term[LC],
+    hash: Hash,
+    typed: Term[TypedLC],
+    icNet: Term[ICNet],
+    rendered: String
   )
 
-  def runFullPipeline(
-    source: String,
-    edits: List[Change[LC]] = Nil,
-    message: String = "Pipeline execution"
-  ): Either[String, PipelineResult] =
-    given TermHasher[LC] = LCHasher
-
-    // Stage 1: Parse
+  def runPipeline(source: String): Either[String, PipelineResult] =
     for
-      parsedTerm <- parseLC(source)
-      
-      // Stage 2: Store in repo
-      initialRepo = Repo.empty[LC]
-      (repoWithTerm, hash) = storeInRepo(initialRepo, parsedTerm, "Initial parse")
-      
-      // Stage 3: Open editor
-      editor0 = openEditor(repoWithTerm)
-      
-      // Stage 4: Apply edits
-      editor1 = edits.foldLeft(editor0)((ed, change) => ed.applyChange(change))
-      
-      // Stage 5: Transform via Xform (LC → TypedLC)
-      transformedTerm <- lcToTypedLC(editor1.currentTerm)
-      
-      // Stage 6: Evaluate
-      evaluatedTerm <- evaluate(transformedTerm)
-      
-      // Stage 7: Render
-      rendered = renderTypedLC(evaluatedTerm)
-      
-      // Stage 8: Commit back to repo
-      finalRepo = commitToRepo(repoWithTerm, editor1, message)
-      
-    yield PipelineResult(
-      parsedTerm = parsedTerm,
-      storedHash = hash,
-      editorState = editor1,
-      transformedTerm = transformedTerm,
-      evaluatedTerm = evaluatedTerm,
-      renderedOutput = rendered,
-      finalRepo = finalRepo
-    )
+      parsed <- parseLC(source)
+    yield
+      val repo = new Repo[LC]
+      val hash = repo.store(parsed, Set(Name("input")))
+      val typed = typeCheck(parsed)
+      val icNet = toInteractionNet(parsed)
+      val rendered = renderLC(parsed)
+      PipelineResult(source, parsed, hash, typed, icNet, rendered)
 
   // ============================================================================
-  // LC-specific Hasher
+  // DEMO
   // ============================================================================
   
-  given LCHasher: TermHasher[LC] with
-    def hash(value: LC): Hash =
-      val content = value match
-        case LC.Var(name) => s"var:$name"
-        case LC.Lam(param, body) => s"lam:$param:${hash(body)}"
-        case LC.App(func, arg) => s"app:${hash(func)}:${hash(arg)}"
-        case LC.Let(name, value, body) => s"let:$name:${hash(value)}:${hash(body)}"
-      HashConsing.computeHash(content)
-
-  // ============================================================================
-  // BIDIRECTIONAL PIPELINE VERIFICATION
-  // ============================================================================
-  
-  /** Verify round-trip: A → B → A preserves semantics */
-  def verifyRoundTrip[A, B](
-    term: Term[A],
-    xform: Xform[A, B]
-  ): Either[String, Boolean] =
-    for
-      termB <- termToB(term, xform)
-      termA2 <- termToA(termB, xform)
-    yield term == termA2
-
-  /** Verify that parsing and rendering are inverse operations */
-  def verifyParseRender(source: String): Either[String, Boolean] =
-    for
-      term <- parseLC(source)
-      rendered = renderLC(term)
-      reparsed <- parseLC(rendered)
-    yield term == reparsed
-
-  // ============================================================================
-  // PIPELINE STAGES AS XFORMS
-  // ============================================================================
-  
-  /** Each pipeline stage can be viewed as an Xform */
-  object StageXforms:
-    
-    /** Parse stage as Xform[String, Term[LC]] */
-    val parseXform: Xform[String, Term[LC]] = new Xform[String, Term[LC]]:
-      def forward(source: String): Option[Term[LC]] = parseLC(source).toOption
-      def backward(term: Term[LC]): Option[String] = Some(renderLC(term))
-
-    /** TypeCheck stage as Xform[Term[LC], Term[TypedLC]] */
-    val typeCheckXform: Xform[Term[LC], Term[TypedLC]] = new Xform[Term[LC], Term[TypedLC]]:
-      def forward(term: Term[LC]): Option[Term[TypedLC]] = typeCheck(term).toOption
-      def backward(typed: Term[TypedLC]): Option[Term[LC]] =
-        // Strip types to get back to LC
-        typed match
-          case Term.Done(t) => Some(Term.Done(stripTypes(t)))
-          case Term.Hole(name) => Some(Term.Hole(name))
-
-    /** Evaluate stage as Xform (one-way, evaluation is not reversible) */
-    val evalXform: Xform[Term[TypedLC], Term[TypedLC]] = new Xform[Term[TypedLC], Term[TypedLC]]:
-      def forward(term: Term[TypedLC]): Option[Term[TypedLC]] = evaluate(term).toOption
-      def backward(term: Term[TypedLC]): Option[Term[TypedLC]] = Some(term) // Evaluation is not invertible
-
-    /** Strip types from TypedLC to get LC */
-    def stripTypes(typed: TypedLC): LC =
-      typed match
-        case TypedLC.TVar(name, _) => LC.Var(name)
-        case TypedLC.TLam(param, _, body, _) => LC.Lam(param, stripTypes(body))
-        case TypedLC.TApp(func, arg, _) => LC.App(stripTypes(func), stripTypes(arg))
-        case TypedLC.TLet(name, value, body, _) => LC.Let(name, stripTypes(value), stripTypes(body))
-
-  // ============================================================================
-  // INTERACTIVE PIPELINE RUNNER
-  // ============================================================================
-  
-  /** Run pipeline interactively with step-by-step output */
-  def runInteractive(source: String): Unit =
-    println(s"=== PIPELINE EXECUTION ===")
-    println(s"Input: $source")
+  def runDemo(): Unit =
+    println("═" * 60)
+    println("  PHI PIPELINE DEMONSTRATION")
+    println("═" * 60)
     println()
     
-    runFullPipeline(source) match
-      case Right(result) =>
-        println(s"1. PARSED:")
-        println(s"   ${result.parsedTerm}")
-        println()
-        println(s"2. STORED IN REPO:")
-        println(s"   Hash: ${result.storedHash}")
-        println()
-        println(s"3. EDITOR STATE:")
-        println(s"   Current: ${result.editorState.currentTerm}")
-        println(s"   History: ${result.editorState.history.length} changes")
-        println()
-        println(s"4. TYPE CHECKED:")
-        println(s"   ${result.transformedTerm}")
-        println()
-        println(s"5. EVALUATED:")
-        println(s"   ${result.evaluatedTerm}")
-        println()
-        println(s"6. RENDERED:")
-        println(s"   ${result.renderedOutput}")
-        println()
-        println(s"7. REPO STATE:")
-        println(s"   Patches: ${result.finalRepo.patches.size}")
-        println()
-        println("=== PIPELINE COMPLETE ===")
-        
-      case Left(error) =>
-        println(s"PIPELINE ERROR: $error")
+    val examples = List(
+      "λx.x",
+      "λf.λx.f x",
+      "(λx.x) y"
+    )
+    
+    for source <- examples do
+      println(s"Input: $source")
+      runPipeline(source) match
+        case Right(result) =>
+          println(s"  Parsed:   ${result.parsed}")
+          println(s"  Hash:     ${result.hash.short}")
+          println(s"  Typed:    ${renderTypedLC(result.typed)}")
+          println(s"  IC nodes: ${result.icNet match { case Term.Done(net) => net.nodes.size; case _ => 0 }}")
+          println(s"  Rendered: ${result.rendered}")
+        case Left(err) =>
+          println(s"  Error: $err")
+      println()
+    
+    println("═" * 60)
+    println("  ROUND-TRIP VERIFICATION")
+    println("═" * 60)
+    println()
+    
+    // Verify LC ↔ IC round-trip
+    val lcTerm = Term.Done(LC.Lam("x", LC.Var("x")))
+    val icNet = LCToIC.forward(lcTerm)
+    val lcBack = LCToIC.backward(icNet)
+    println(s"LC → IC → LC round-trip:")
+    println(s"  Original: ${renderLC(lcTerm)}")
+    println(s"  IC nodes: ${icNet match { case Term.Done(net) => net.nodes.size; case _ => 0 }}")
+    println(s"  Restored: ${renderLC(lcBack)}")
+    println()
+    
+    // Verify LC ↔ TypedLC round-trip  
+    val typed = TypeChecker.forward(lcTerm)
+    val erased = TypeChecker.backward(typed)
+    println(s"LC → TypedLC → LC round-trip:")
+    println(s"  Original: ${renderLC(lcTerm)}")
+    println(s"  Typed:    ${renderTypedLC(typed)}")
+    println(s"  Erased:   ${renderLC(erased)}")
+    println()
+    
+    println("═" * 60)
 
-  // ============================================================================
-  // DEMONSTRATION
-  // ============================================================================
-  
-  @main def runPipelineDemo(): Unit =
-    // Demo 1: Identity function
-    println("\n--- Demo 1: Identity Function ---")
-    runInteractive("λx.x")
-    
-    // Demo 2: Application
-    println("\n--- Demo 2: Application ---")
-    runInteractive("(λx.x) y")
-    
-    // Demo 3: Let binding
-    println("\n--- Demo 3: Let Binding ---")
-    runInteractive("let id = λx.x in id")
+  @main def pipelineMain(): Unit = runDemo()
 
 end Pipeline

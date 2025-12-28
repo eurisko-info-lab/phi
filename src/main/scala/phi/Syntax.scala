@@ -217,10 +217,10 @@ trait Syntax[A]:
   def ~[B](that: Syntax[B]): Syntax[(A, B)] = Syntax.Seq(this, that)
 
   /** Sequence: parse this then that, keep right */
-  def *>[B](that: Syntax[B]): Syntax[B] = (this ~ that).iso(Iso(_._2, ((), _).asInstanceOf[(A, B)]).asInstanceOf[Iso[(A, B), B]])
+  def *>[B](that: Syntax[B]): Syntax[B] = (this ~ that).iso(Iso[(A, B), B](p => p._2, b => (().asInstanceOf[A], b)))
 
   /** Sequence: parse this then that, keep left */
-  def <*[B](that: Syntax[B]): Syntax[A] = (this ~ that).iso(Iso(_._1, (_, ()).asInstanceOf[(A, B)]).asInstanceOf[Iso[(A, B), A]])
+  def <*[B](that: Syntax[B]): Syntax[A] = (this ~ that).iso(Iso[(A, B), A](p => p._1, a => (a, ().asInstanceOf[B])))
 
   /** Choice: try this, if fails try that */
   def |[B >: A](that: Syntax[B]): Syntax[B] = Syntax.Choice(this.asInstanceOf[Syntax[B]], that)
