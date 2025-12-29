@@ -1661,25 +1661,24 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
     result.isRight shouldBe true
     val spec = result.toOption.get
     
-    // Should have local sorts
-    spec.sorts.exists(_.name == "PhiSpec") shouldBe true
-    spec.sorts.exists(_.name == "PhiType") shouldBe true
+    // Should have local sorts (Phi AST)
+    spec.sorts.exists(_.name == "Decl") shouldBe true
+    spec.sorts.exists(_.name == "Type") shouldBe true
+    spec.sorts.exists(_.name == "Pat") shouldBe true
     
-    // Should have imported sorts from scala.phi
+    // Should have imported sorts from scala.phi (imports all since no selectors)
     spec.sorts.exists(_.name == "Defn") shouldBe true
     spec.sorts.exists(_.name == "TypeRef") shouldBe true
+    spec.sorts.exists(_.name == "Expr") shouldBe true
     
     // Should have local constructors
-    spec.constructors.exists(_.name == "MkSpec") shouldBe true
-    spec.constructors.exists(_.name == "PSortRef") shouldBe true
+    spec.constructors.exists(_.name == "DSort") shouldBe true
+    spec.constructors.exists(_.name == "TArrow") shouldBe true
     
-    // Should have imported constructors from scala.phi (with selectors)
+    // Should have imported constructors from scala.phi
     spec.constructors.exists(_.name == "CaseClass") shouldBe true
     spec.constructors.exists(_.name == "SealedTrait") shouldBe true
-    
-    // Should NOT have non-selected constructors
-    spec.constructors.exists(_.name == "SimpleName") shouldBe false
-    spec.constructors.exists(_.name == "QualName") shouldBe false
+    spec.constructors.exists(_.name == "SimpleName") shouldBe true
   }
 
   // ===========================================================================

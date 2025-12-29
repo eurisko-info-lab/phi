@@ -2,45 +2,164 @@
 // Phi2Scala: Transform Phi specs to Scala code
 // =============================================================
 //
-// Demonstrates the import mechanism
+// Transforms Phi language specs to Scala 3 code.
+// Uses scala.phi for the target AST - pretty-printing is automatic.
 
 language Phi2Scala {
 
-  import "scala.phi" { Defn, Expr, TypeRef, CaseClass, SealedTrait }
+  import "scala.phi"
 
   // =============================================================
-  // Phi AST sorts (subset of phi.phi)
+  // Phi AST (from phi.phi)
   // =============================================================
   
-  sort PhiSpec
-  sort PhiSort
-  sort PhiConstructor
-  sort PhiType
+  sort Decl       // Phi declaration
+  sort Type       // Phi type expression
+  sort Pat        // Phi pattern
+  sort RuleDir    // Rule direction
+  sort RuleCase   // Rule case
+  
+  // Declarations
+  constructor DSort : String → Decl
+  constructor DCon : String → Type → Decl
+  constructor DRule : String → RuleDir → RuleCase* → Decl
+  constructor DDef : String → Pat → Decl
+  constructor DXform : String → String → String → Decl
+  
+  // Rule directions
+  constructor Forward : RuleDir
+  constructor Backward : RuleDir
+  constructor Both : RuleDir
+  
+  // Rule cases
+  constructor RuleCase : Pat → Pat → Guard* → RuleCase
+  
+  // Types
+  constructor TName : String → Type
+  constructor TArrow : Type → Type → Type
+  constructor TProd : Type → Type → Type
+  constructor TList : Type → Type
+  
+  // Patterns
+  constructor PVar : String → Pat
+  constructor PCon : String → Pat* → Pat
+  constructor PApp : Pat → Pat → Pat
 
-  constructor MkSpec : String → PhiSort* → PhiConstructor* → PhiSpec
-  constructor MkSort : String → String* → PhiSort
-  constructor MkCtor : String → PhiType* → String → PhiConstructor
+  // =============================================================
+  // Transform: Phi Decl → Scala Defn
+  // =============================================================
   
-  // Phi types
-  constructor PSortRef : String → PhiType
-  constructor PArrow : PhiType → PhiType → PhiType
-  constructor PProduct : PhiType → PhiType → PhiType
-  constructor PListOf : PhiType → PhiType
-  constructor PTypeVar : String → PhiType
+  xform Decl2Scala : Decl ⇄ Defn
+  
+  rule Decl2Scala.sort {
+    DSort(name) ↦ SealedTrait(name, [])
+  }
+  
+  rule Decl2Scala.con0 {
+    DCon(name, TName(ret)) ↦ 
+      CaseClassExtends(name, [], [], TyName(SimpleName(ret)))
+  }
+  
+  rule Decl2Scala.conArrow {
+    DCon(name, TArrow(arg, TName(ret))) ↦
+      CaseClassExtends(name, [], [Param("arg0", Type2Scala.forward(arg))], TyName(SimpleName(ret)))
+  }
 
   // =============================================================
-  // Transformations
+  // Transform: Phi Type → Scala TypeRef
   // =============================================================
   
-  xform Sort2Scala : PhiSort ⇄ Defn
-  xform Ctor2Scala : PhiConstructor ⇄ Defn  
-  xform Type2Scala : PhiType ⇄ TypeRef
-  xform Spec2Scala : PhiSpec ⇄ Defn*
+  xform Type2Scala : Type ⇄ TypeRef
+  
+  rule Type2Scala.name {
+    TName(n) ↦ TyName(SimpleName(n))
+  }
+  
+  rule Type2Scala.arrow {
+    TArrow(a, b) ↦ TyFunc(Type2Scala.forward(a), Type2Scala.forward(b))
+  }
+  
+  rule Type2Scala.prod {
+    TProd(a, b) ↦ TyTuple([Type2Scala.forward(a), Type2Scala.forward(b)])
+  }
+  
+  rule Type2Scala.list {
+    TList(a) ↦ TyApp(SimpleName("List"), [Type2Scala.forward(a)])
+  }
 
   // =============================================================
-  // Example: Create a case class using imported constructor
+  // Transform: Phi Pat → Scala Pattern  
   // =============================================================
   
-  def example : Defn = CaseClass("Person", [], [])
+  xform Pat2ScalaPat : Pat ⇄ Pattern
+  
+  rule Pat2ScalaPat.var {
+    PVar(x) ↦ PVar(x)
+  }
+  
+  rule Pat2ScalaPat.con {
+    PCon(name, args) ↦ PCon(SimpleName(name), Pat2ScalaPatList.forward(args))
+  }
+  
+  xform Pat2ScalaPatList : Pat* ⇄ Pattern*
+  
+  rule Pat2ScalaPatList.nil {
+    [] ↦ []
+  }
+  
+  rule Pat2ScalaPatList.cons {
+    [p | ps] ↦ [Pat2ScalaPat.forward(p) | Pat2ScalaPatList.forward(ps)]
+  }
+
+  // =============================================================
+  // Transform: Phi Pat → Scala Expr (for RHS of rules)
+  // =============================================================
+  
+  xform Pat2ScalaExpr : Pat ⇄ Expr
+  
+  rule Pat2ScalaExpr.var {
+    PVar(x) ↦ EVar(x)
+  }
+  
+  rule Pat2ScalaExpr.con {
+    PCon(name, args) ↦ EApp(EVar(name), Pat2ScalaExprList.forward(args))
+  }
+  
+  rule Pat2ScalaExpr.app {
+    PApp(f, a) ↦ EApp(Pat2ScalaExpr.forward(f), [Pat2ScalaExpr.forward(a)])
+  }
+  
+  xform Pat2ScalaExprList : Pat* ⇄ Expr*
+  
+  rule Pat2ScalaExprList.nil {
+    [] ↦ []
+  }
+  
+  rule Pat2ScalaExprList.cons {
+    [p | ps] ↦ [Pat2ScalaExpr.forward(p) | Pat2ScalaExprList.forward(ps)]
+  }
+
+  // =============================================================
+  // Transform: Rule Case → Scala Case
+  // =============================================================
+  
+  xform RuleCase2Scala : RuleCase ⇄ Case
+  
+  rule RuleCase2Scala.simple {
+    RuleCase(lhs, rhs, []) ↦ 
+      CaseSimple(Pat2ScalaPat.forward(lhs), Pat2ScalaExpr.forward(rhs))
+  }
+
+  // =============================================================
+  // Examples
+  // =============================================================
+  
+  // Example: DSort("Term") → sealed trait Term
+  def exSort : Decl = DSort("Term")
+  def exSortScala : Defn = SealedTrait("Term", [])
+  
+  // Example: DCon("Zero", TName("Term")) → case class Zero() extends Term
+  def exCon : Decl = DCon("Zero", TName("Term"))
+  def exConScala : Defn = CaseClassExtends("Zero", [], [], TyName(SimpleName("Term")))
 
 }
