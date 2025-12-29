@@ -119,7 +119,7 @@ language Abella extends λProlog {
     (Exact(t), Prf(g)) ↦ Prf(Call(t))
     (Case(t, tac), Prf(g)) ↦ ApplyTactic.forward(tac, Prf(g))   // functorial action
     (Induction(t, tac), Prf(g)) ↦ ApplyTactic.forward(tac, Prf(g))
-    (Rewrite(t1,t2,tac), Prf(g)) ↦ ApplyTactic.forward(tac, Prf(Call(Subst.forward((x,t2),t1))))
+    (Rewrite(Var(x),t2,tac), Prf(g)) ↦ ApplyTactic.forward(tac, Prf(Call(Subst.forward((x,t2),g))))
   }
 
   rule ExtendCtx.forward {
@@ -167,7 +167,7 @@ language Abella extends λProlog {
   // Natural transformation: rewriting preserves structure
   def rewriteThm : Theorem = Thm("rewrite", Call(Const("S")))
   def test_rewriteProof : Proof = ApplyTactic.forward(
-    Rewrite(Var("x"), Var("y"), Id), Prf(Call(Const("S"))))  //<cat>naturality</cat>
+    Rewrite(Var("x"), Const("y"), Id), Prf(Call(Var("x"))))  //<cat>naturality</cat>
 
   // Composition of morphisms: Induction then Split
   def indSplitThm : Theorem = Thm("ind_split", And(Call(Const("P")), Call(Const("Q"))))
