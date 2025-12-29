@@ -3,6 +3,81 @@ package phi
 import java.nio.file.{Files, Paths, Path}
 import Val.*
 
+// =============================================================================
+// Parse Phi type syntax into LangType
+// =============================================================================
+// Handles: Token, Token*, (A × B), A → B, List[A]
+
+def parsePhiType(s: String): LangType =
+  val trimmed = s.trim
+  
+  // Handle star types: A* → List[A]
+  if trimmed.endsWith("*") then
+    LangType.ListOf(parsePhiType(trimmed.dropRight(1)))
+  
+  // Handle arrow types: A → B
+  else if trimmed.contains("→") then
+    val parts = trimmed.split("→", 2).map(_.trim)
+    LangType.Arrow(parsePhiType(parts(0)), parsePhiType(parts(1)))
+  
+  // Handle product types: (A × B) or ((A × B) × C)
+  else if trimmed.startsWith("(") && trimmed.endsWith(")") then
+    val inner = trimmed.drop(1).dropRight(1).trim
+    // Find the × at the right nesting level
+    var depth = 0
+    var splitIdx = -1
+    for i <- inner.indices if splitIdx < 0 do
+      inner(i) match
+        case '(' => depth += 1
+        case ')' => depth -= 1
+        case '×' if depth == 0 => splitIdx = i
+        case _ =>
+    if splitIdx > 0 then
+      val left = inner.take(splitIdx).trim
+      val right = inner.drop(splitIdx + 1).trim
+      LangType.Product(parsePhiType(left), parsePhiType(right))
+    else
+      // Just parenthesized, recurse
+      parsePhiType(inner)
+  
+  // Handle type application: List[A]
+  else if trimmed.contains("[") then
+    val baseEnd = trimmed.indexOf('[')
+    val base = trimmed.take(baseEnd)
+    val argsStr = trimmed.drop(baseEnd + 1).dropRight(1)
+    val args = argsStr.split(",").map(_.trim).map(parsePhiType).toList
+    LangType.TypeApp(base, args)
+  
+  // Simple name
+  else
+    LangType.SortRef(trimmed)
+
+/** Convert dotted names to camelCase: Parse.forward → parseForward */
+def toCamelCase(s: String): String =
+  val parts = s.split("[._]")
+  parts.head.toLowerCase + parts.tail.map(_.capitalize).mkString
+
+/** LangType → Scala TypeRef */
+def type2Scala(ty: LangType): Val = ty match
+  case LangType.SortRef(name) => 
+    VCon("TyName", List(VCon("SimpleName", List(VCon(name, Nil)))))
+  case LangType.TypeApp(base, args) =>
+    VCon("TyApp", List(
+      VCon("SimpleName", List(VCon(base, Nil))),
+      VCon("nil", args.map(type2Scala))
+    ))
+  case LangType.TypeVar(name) =>
+    VCon("TyName", List(VCon("SimpleName", List(VCon(name, Nil)))))
+  case LangType.Arrow(from, to) =>
+    VCon("TyFunc", List(type2Scala(from), type2Scala(to)))
+  case LangType.Product(a, b) =>
+    VCon("TyTuple", List(VCon("nil", List(type2Scala(a), type2Scala(b)))))
+  case LangType.ListOf(elem) =>
+    VCon("TyApp", List(
+      VCon("SimpleName", List(VCon("List", Nil))),
+      VCon("nil", List(type2Scala(elem)))
+    ))
+
 /**
  * Generate Scala code from Phi language specs.
  * 
@@ -81,16 +156,19 @@ def buildInterpreterClass(spec: LangSpec): Val =
   val methods = spec.xforms.flatMap { xform =>
     val forwardRules = spec.rules.filter(_.name.startsWith(xform.name + "."))
     if forwardRules.isEmpty then None
-    else Some(VCon("MethodDef", List(
-      VCon(toCamelCase(xform.name), Nil),
-      VCon("nil", Nil),
-      VCon("nil", List(VCon("Param", List(VCon("input", Nil), VCon("TyName", List(VCon("SimpleName", List(VCon(xform.source, Nil))))))))),
-      VCon("TyApp", List(VCon("SimpleName", List(VCon("Option", Nil))), VCon("nil", List(VCon("TyName", List(VCon("SimpleName", List(VCon(xform.target, Nil))))))))),
-      VCon("EApp", List(
-        VCon("EVar", List(VCon(toCamelCase(xform.name) + "Forward", Nil))),
-        VCon("nil", List(VCon("EVar", List(VCon("input", Nil)))))
-      ))
-    )))
+    else
+      val srcTy = type2Scala(parsePhiType(xform.source))
+      val tgtTy = type2Scala(parsePhiType(xform.target))
+      Some(VCon("MethodDef", List(
+        VCon(toCamelCase(xform.name), Nil),
+        VCon("nil", Nil),
+        VCon("nil", List(VCon("Param", List(VCon("input", Nil), srcTy)))),
+        VCon("TyApp", List(VCon("SimpleName", List(VCon("Option", Nil))), VCon("nil", List(tgtTy)))),
+        VCon("EApp", List(
+          VCon("EVar", List(VCon(toCamelCase(xform.name) + "Forward", Nil))),
+          VCon("nil", List(VCon("EVar", List(VCon("input", Nil)))))
+        ))
+      )))
   }
   
   VCon("Class", List(
@@ -159,32 +237,13 @@ def ctor2Scala(ctor: Constructor): Val =
       VCon("TyName", List(VCon("SimpleName", List(VCon(ctor.returnSort, Nil)))))
     ))
 
-/** LangType → Scala TypeRef */
-def type2Scala(ty: LangType): Val = ty match
-  case LangType.SortRef(name) => 
-    VCon("TyName", List(VCon("SimpleName", List(VCon(name, Nil)))))
-  case LangType.TypeApp(base, args) =>
-    VCon("TyApp", List(
-      VCon("SimpleName", List(VCon(base, Nil))),
-      VCon("nil", args.map(type2Scala))
-    ))
-  case LangType.TypeVar(name) =>
-    VCon("TyName", List(VCon("SimpleName", List(VCon(name, Nil)))))
-  case LangType.Arrow(from, to) =>
-    VCon("TyFunc", List(type2Scala(from), type2Scala(to)))
-  case LangType.Product(a, b) =>
-    VCon("TyTuple", List(VCon("nil", List(type2Scala(a), type2Scala(b)))))
-  case LangType.ListOf(elem) =>
-    VCon("TyApp", List(
-      VCon("SimpleName", List(VCon("List", Nil))),
-      VCon("nil", List(type2Scala(elem)))
-    ))
-
 /** Xform + Rules → MethodDef with match expression */
 def xform2Scala(xform: XformSpec, rules: List[Rule]): Option[Val] =
   val forwardRules = rules.filter(_.name.startsWith(xform.name + "."))
   if forwardRules.isEmpty then None
   else
+    val srcTy = type2Scala(parsePhiType(xform.source))
+    val tgtTy = type2Scala(parsePhiType(xform.target))
     val cases = forwardRules.flatMap(_.cases).map { rcase =>
       VCon("CaseSimple", List(
         pat2ScalaPat(rcase.lhs),
@@ -194,8 +253,8 @@ def xform2Scala(xform: XformSpec, rules: List[Rule]): Option[Val] =
     Some(VCon("MethodDef", List(
       VCon(toCamelCase(xform.name) + "Forward", Nil),
       VCon("nil", Nil),  // no type params
-      VCon("nil", List(VCon("Param", List(VCon("input", Nil), VCon("TyName", List(VCon("SimpleName", List(VCon(xform.source, Nil))))))))),
-      VCon("TyName", List(VCon("SimpleName", List(VCon(xform.target, Nil))))),
+      VCon("nil", List(VCon("Param", List(VCon("input", Nil), srcTy)))),
+      tgtTy,
       VCon("EMatch", List(
         VCon("EVar", List(VCon("input", Nil))),
         VCon("nil", cases)
@@ -205,13 +264,13 @@ def xform2Scala(xform: XformSpec, rules: List[Rule]): Option[Val] =
 /** MetaPattern → Scala Pattern */
 def pat2ScalaPat(p: MetaPattern): Val = p match
   case MetaPattern.PVar(name) => VCon("PVar", List(VCon(name, Nil)))
+  // Handle nil as Nil - must come before generic nullary case
+  case MetaPattern.PCon("nil", Nil) =>
+    VCon("PVar", List(VCon("Nil", Nil)))
   case MetaPattern.PCon(name, Nil) => VCon("PVar", List(VCon(name, Nil)))  // nullary as variable
   // Handle cons as :: infix pattern
   case MetaPattern.PCon("cons", List(h, t)) =>
     VCon("PInfix", List(pat2ScalaPat(h), VCon("::", Nil), pat2ScalaPat(t)))
-  // Handle nil as Nil
-  case MetaPattern.PCon("nil", Nil) =>
-    VCon("PVar", List(VCon("Nil", Nil)))
   // Handle pair as tuple
   case MetaPattern.PCon("pair", List(a, b)) =>
     VCon("PTuple", List(VCon("nil", List(pat2ScalaPat(a), pat2ScalaPat(b)))))
@@ -239,6 +298,12 @@ def pat2ScalaExpr(p: MetaPattern): Val = p match
   // Handle pair as tuple
   case MetaPattern.PCon("pair", List(a, b)) =>
     VCon("ETuple", List(VCon("nil", List(pat2ScalaExpr(a), pat2ScalaExpr(b)))))
+  // Handle xform calls: Parse.forward(x) → parseForward(x)
+  case MetaPattern.PCon(name, args) if name.contains(".") =>
+    VCon("EApp", List(
+      VCon("EVar", List(VCon(toCamelCase(name), Nil))),
+      VCon("nil", args.map(pat2ScalaExpr))
+    ))
   case MetaPattern.PCon(name, args) =>
     VCon("EApp", List(
       VCon("EVar", List(VCon(name, Nil))),
@@ -254,10 +319,6 @@ def pat2ScalaExpr(p: MetaPattern): Val = p match
       VCon("EVar", List(VCon("subst", Nil))),
       VCon("nil", List(pat2ScalaExpr(body), VCon("ELit", List(VCon("LitString", List(VCon(v, Nil))))), pat2ScalaExpr(repl)))
     ))
-
-def toCamelCase(s: String): String =
-  val parts = s.split("[._]")
-  parts.head.toLowerCase + parts.tail.map(_.capitalize).mkString
 
 // =============================================================================
 // Bidirectional Pretty-Printer for Scala AST
