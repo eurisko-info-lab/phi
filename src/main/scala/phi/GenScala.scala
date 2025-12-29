@@ -37,10 +37,68 @@ import Val.*
 
 /** Build Scala AST from Phi spec */
 def buildScalaAST(spec: LangSpec): List[Val] =
-  val sortDefns = spec.sorts.map(sort2Scala)
-  val ctorDefns = spec.constructors.map(ctor2Scala)
+  // Group constructors by return sort
+  val ctorsBySortRaw = spec.constructors.groupBy(_.returnSort)
+  
+  // Determine which sorts can be enums (all constructors nullary)
+  val enumSorts = spec.sorts.filter { sort =>
+    ctorsBySortRaw.get(sort.name) match
+      case Some(ctors) => ctors.nonEmpty && ctors.forall(_.params.isEmpty)
+      case None => false
+  }.map(_.name).toSet
+  
+  // Generate enums for simple sorts, sealed traits for complex ones
+  val sortDefns = spec.sorts.flatMap { sort =>
+    if enumSorts.contains(sort.name) then
+      val cases = ctorsBySortRaw(sort.name).map(c => VCon("EnumVal", List(VCon(c.name, Nil))))
+      List(VCon("Enum", List(
+        VCon(sort.name, Nil),
+        VCon("nil", Nil),  // no type params for enums
+        VCon("nil", cases)
+      )))
+    else
+      List(sort2Scala(sort))
+  }
+  
+  // Only generate case classes for non-enum constructors
+  val ctorDefns = spec.constructors.filterNot(c => enumSorts.contains(c.returnSort)).map(ctor2Scala)
+  
   val xformDefns = spec.xforms.flatMap(x => xform2Scala(x, spec.rules))
-  sortDefns ++ ctorDefns ++ xformDefns
+  
+  // Generate interpreter class if there are xforms
+  val interpClass = if spec.xforms.nonEmpty then
+    List(buildInterpreterClass(spec))
+  else Nil
+  
+  sortDefns ++ ctorDefns ++ xformDefns ++ interpClass
+
+/** Build an interpreter class that wraps the xform methods */
+def buildInterpreterClass(spec: LangSpec): Val =
+  // Index rules by name
+  val rulesByName = spec.rules.groupBy(r => r.name.takeWhile(_ != '.'))
+  
+  // Generate method wrappers for each xform
+  val methods = spec.xforms.flatMap { xform =>
+    val forwardRules = spec.rules.filter(_.name.startsWith(xform.name + "."))
+    if forwardRules.isEmpty then None
+    else Some(VCon("MethodDef", List(
+      VCon(toCamelCase(xform.name), Nil),
+      VCon("nil", Nil),
+      VCon("nil", List(VCon("Param", List(VCon("input", Nil), VCon("TyName", List(VCon("SimpleName", List(VCon(xform.source, Nil))))))))),
+      VCon("TyApp", List(VCon("SimpleName", List(VCon("Option", Nil))), VCon("nil", List(VCon("TyName", List(VCon("SimpleName", List(VCon(xform.target, Nil))))))))),
+      VCon("EApp", List(
+        VCon("EVar", List(VCon(toCamelCase(xform.name) + "Forward", Nil))),
+        VCon("nil", List(VCon("EVar", List(VCon("input", Nil)))))
+      ))
+    )))
+  }
+  
+  VCon("Class", List(
+    VCon(spec.name + "Interpreter", Nil),
+    VCon("nil", Nil),  // no type params
+    VCon("nil", List(VCon("Param", List(VCon("spec", Nil), VCon("TyName", List(VCon("SimpleName", List(VCon("LangSpec", Nil))))))))),
+    VCon("nil", methods)
+  ))
 
 /** Sort → SealedTrait(name, typeParams) */
 def sort2Scala(sort: Sort): Val =
@@ -49,10 +107,42 @@ def sort2Scala(sort: Sort): Val =
     VCon("nil", sort.typeParams.map(p => VCon(p, Nil)))  // List of type params
   ))
 
+/** Infer parameter name from type */
+def inferParamName(ty: LangType, index: Int, usedNames: Set[String]): String =
+  val base = ty match
+    case LangType.SortRef(name) => name.toLowerCase.take(4) match
+      case "stri" => "name"
+      case "type" => "ty"
+      case "pat" | "patt" => "pat"
+      case "decl" => "decl"
+      case "expr" => "expr"
+      case "bind" => "env"
+      case "rule" => "rule"
+      case "stra" => "strat"
+      case "valu" | "val" => "value"
+      case "attr" => "attr"
+      case _ => name.toLowerCase.take(1)
+    case LangType.ListOf(elem) => inferParamName(elem, 0, Set.empty) + "s"
+    case LangType.Arrow(_, _) => "f"
+    case LangType.Product(_, _) => "pair"
+    case _ => s"arg$index"
+  
+  // Ensure uniqueness
+  if !usedNames.contains(base) then base
+  else
+    var n = 2
+    while usedNames.contains(s"$base$n") do n += 1
+    s"$base$n"
+
 /** Constructor → CaseClass or CaseObject */
 def ctor2Scala(ctor: Constructor): Val =
+  var usedNames = Set.empty[String]
   val params = ctor.params.zipWithIndex.map { case ((nameOpt, ty), i) =>
-    val argName = nameOpt.getOrElse(s"arg$i")
+    val argName = nameOpt.getOrElse {
+      val inferred = inferParamName(ty, i, usedNames)
+      usedNames += inferred
+      inferred
+    }
     VCon("Param", List(VCon(argName, Nil), type2Scala(ty)))
   }
   
@@ -180,6 +270,12 @@ def showScalaDefn(v: Val): String = v match
     val tpStr = showTypeParams(tps)
     s"sealed trait ${showName(name)}$tpStr"
   
+  // Enum(n, tps, cases) <-> "enum " n tps " { " cases " }"
+  case VCon("Enum", List(name, tps, VCon("nil", cases))) =>
+    val tpStr = showTypeParams(tps)
+    val casesStr = cases.map(showEnumCase).mkString(", ")
+    s"enum ${showName(name)}$tpStr { case $casesStr }"
+  
   // CaseClass(n, tps, ps) <-> "case class " n tps "(" ps ")"
   case VCon("CaseClass", List(name, tps, ps)) =>
     val tpStr = showTypeParams(tps)
@@ -202,12 +298,25 @@ def showScalaDefn(v: Val): String = v match
     val psStr = showParams(ps)
     s"def ${showName(name)}$tpStr($psStr): ${showTypeRef(ret)} = ${showExpr(body)}"
   
+  // Class(n, tps, ps, members) <-> "class " n tps "(" ps ") {" members "}"
+  case VCon("Class", List(name, tps, ps, VCon("nil", members))) =>
+    val tpStr = showTypeParams(tps)
+    val psStr = showParams(ps)
+    val membersStr = members.map(m => "  " + showScalaDefn(m)).mkString("\n")
+    s"class ${showName(name)}$tpStr($psStr) {\n$membersStr\n}"
+  
   case other => s"/* unknown: ${other.show} */"
 
 def showName(v: Val): String = v match
   case VCon(name, Nil) => name
   case VCon("SimpleName", List(VCon(n, Nil))) => n
   case VCon("QualName", List(base, VCon(n, Nil))) => s"${showName(base)}.$n"
+  case other => other.show
+
+def showEnumCase(v: Val): String = v match
+  case VCon("EnumVal", List(name)) => showName(name)
+  case VCon("EnumClass", List(name, VCon("nil", params))) => 
+    s"${showName(name)}(${params.map(showParam).mkString(", ")})"
   case other => other.show
 
 def showTypeParams(v: Val): String = v match
