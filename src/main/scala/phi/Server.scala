@@ -1125,7 +1125,27 @@ POST /editor/lc/:id/redo</pre>
     .code-view pre { margin: 0; white-space: pre-wrap; color: #0f0; }
     
     /* AST view */
-    .ast-view { background: #0f0f23; border-radius: 8px; padding: 20px; }
+    .ast-view { background: #0f0f23; border-radius: 8px; padding: 20px; font-family: 'JetBrains Mono', monospace; }
+    
+    /* AST Tree styles */
+    .ast-tree { font-size: 14px; line-height: 1.6; }
+    .tree-node { margin: 2px 0; }
+    .tree-label { color: #e94560; font-weight: 600; }
+    .tree-param { color: #e9c46a; font-style: italic; }
+    .tree-op { color: #f4a261; font-weight: bold; font-size: 16px; }
+    .tree-field { color: #888; font-size: 12px; margin-right: 6px; }
+    .tree-children { margin-left: 20px; padding-left: 12px; border-left: 2px solid #333; }
+    .tree-child { margin: 4px 0; }
+    
+    .tree-var { display: inline-block; background: #264653; color: #2a9d8f; padding: 2px 10px; border-radius: 4px; }
+    .tree-lit { display: inline-block; background: #1d3557; color: #a8dadc; padding: 2px 10px; border-radius: 4px; }
+    .tree-hole { display: inline-block; background: #5c2a2a; color: #ffcc00; padding: 2px 10px; border-radius: 4px; border: 2px dashed #ffcc00; }
+    .tree-lam { background: #1a2a3a; border-left: 3px solid #e9c46a; padding: 8px 12px; border-radius: 0 6px 6px 0; margin: 4px 0; }
+    .tree-app { background: #1a2a3a; border-left: 3px solid #f4a261; padding: 8px 12px; border-radius: 0 6px 6px 0; margin: 4px 0; }
+    .tree-let { background: #1a2a3a; border-left: 3px solid #e76f51; padding: 8px 12px; border-radius: 0 6px 6px 0; margin: 4px 0; }
+    .tree-prim { background: #2a1a3a; border-left: 3px solid #9b59b6; padding: 8px 12px; border-radius: 0 6px 6px 0; margin: 4px 0; }
+    
+    /* Legacy AST styles (for editor page) */
     .ast-node { display: inline-block; padding: 4px 8px; margin: 2px; border-radius: 4px; }
     .ast-var { background: #264653; color: #2a9d8f; }
     .ast-lam { background: #2d3a4f; border-left: 3px solid #e9c46a; padding-left: 12px; }
@@ -1324,59 +1344,115 @@ Examples:
       document.getElementById('codeContent').textContent = renderLC(currentTerm);
       
       // AST view
-      document.getElementById('astView').innerHTML = renderAST(currentTerm);
+      document.getElementById('astView').innerHTML = renderASTTree(currentTerm);
       
       // JSON view
       document.getElementById('jsonContent').textContent = JSON.stringify(currentTerm, null, 2);
     }
     
+    // Normalize LC node to consistent format
+    function normalizeLC(node) {
+      if (!node) return null;
+      // Top-level Term wrapper
+      if (node.type === 'done' && node.value) return normalizeLC(node.value);
+      if (node.type === 'hole') return { kind: 'hole', label: node.label };
+      // Already has type field
+      if (node.type === 'var') return { kind: 'var', name: node.name };
+      if (node.type === 'lit') return { kind: 'lit', value: node.value };
+      if (node.type === 'lam') return { kind: 'lam', param: node.param, body: normalizeLC(node.body) };
+      if (node.type === 'app') return { kind: 'app', func: normalizeLC(node.func), arg: normalizeLC(node.arg) };
+      if (node.type === 'let') return { kind: 'let', name: node.name, value: normalizeLC(node.value), body: normalizeLC(node.body) };
+      if (node.type === 'prim') return { kind: 'prim', op: node.op, args: (node.args || []).map(normalizeLC) };
+      // Capitalized format (Var, Lam, etc)
+      if (node.Var) return { kind: 'var', name: node.Var.name };
+      if (node.Lit) return { kind: 'lit', value: node.Lit.value };
+      if (node.Lam) return { kind: 'lam', param: node.Lam.param, body: normalizeLC(node.Lam.body) };
+      if (node.App) return { kind: 'app', func: normalizeLC(node.App.func), arg: normalizeLC(node.App.arg) };
+      if (node.Let) return { kind: 'let', name: node.Let.name, value: normalizeLC(node.Let.value), body: normalizeLC(node.Let.body) };
+      if (node.Prim) return { kind: 'prim', op: node.Prim.op, args: (node.Prim.args || []).map(normalizeLC) };
+      return { kind: 'unknown' };
+    }
+    
     // Render LC term to code string
     function renderLC(term) {
-      if (term.type === 'hole') return '?' + (term.label || '');
-      const v = term.value;
-      if (!v) return '?';
-      
-      switch (v.type) {
-        case 'var': return v.name;
-        case 'lit': return String(v.value);
-        case 'lam': return `λ${v.param}.${renderLC({type:'done', value: v.body})}`;
-        case 'app': return `(${renderLC({type:'done', value: v.func})} ${renderLC({type:'done', value: v.arg})})`;
-        case 'let': return `let ${v.name} = ${renderLC({type:'done', value: v.value})} in ${renderLC({type:'done', value: v.body})}`;
+      const n = normalizeLC(term);
+      return renderNormLC(n);
+    }
+    
+    function renderNormLC(n) {
+      if (!n) return '?';
+      switch (n.kind) {
+        case 'hole': return '?' + (n.label || '');
+        case 'var': return n.name;
+        case 'lit': return String(n.value);
+        case 'lam': return `λ${n.param}.${renderNormLC(n.body)}`;
+        case 'app': return `(${renderNormLC(n.func)} ${renderNormLC(n.arg)})`;
+        case 'let': return `let ${n.name} = ${renderNormLC(n.value)} in ${renderNormLC(n.body)}`;
         case 'prim':
-          if (v.args && v.args.length === 2 && ['+','-','*','/'].includes(v.op)) {
-            return `(${renderLC({type:'done', value: v.args[0]})} ${v.op} ${renderLC({type:'done', value: v.args[1]})})`;
+          if (n.args && n.args.length === 2 && ['+','-','*','/'].includes(n.op)) {
+            return `(${renderNormLC(n.args[0])} ${n.op} ${renderNormLC(n.args[1])})`;
           }
-          return `${v.op}(${(v.args||[]).map(a => renderLC({type:'done', value: a})).join(', ')})`;
+          return `${n.op}(${(n.args||[]).map(renderNormLC).join(', ')})`;
         default: return '?';
       }
     }
     
-    // Render AST visualization
-    function renderAST(term) {
-      if (term.type === 'hole') {
-        return `<span class="ast-node ast-hole">?${term.label || ''}</span>`;
-      }
-      const v = term.value;
-      if (!v) return '<span class="ast-node ast-hole">?</span>';
+    // Render AST as a collapsible tree
+    function renderASTTree(term) {
+      const n = normalizeLC(term);
+      return '<div class="ast-tree">' + renderTreeNode(n, 0) + '</div>';
+    }
+    
+    function renderTreeNode(n, depth) {
+      if (!n) return '<span class="tree-node tree-hole">?</span>';
+      const indent = '  '.repeat(depth);
       
-      switch (v.type) {
+      switch (n.kind) {
+        case 'hole':
+          return `<span class="tree-node tree-hole">?${n.label || ''}</span>`;
         case 'var':
-          return `<span class="ast-node ast-var">${v.name}</span>`;
+          return `<span class="tree-node tree-var">${esc(n.name)}</span>`;
         case 'lit':
-          return `<span class="ast-node ast-lit">${v.value}</span>`;
+          return `<span class="tree-node tree-lit">${n.value}</span>`;
         case 'lam':
-          return `<span class="ast-node ast-lam"><span class="ast-keyword">λ</span><span class="ast-param">${v.param}</span>. ${renderAST({type:'done', value: v.body})}</span>`;
+          return `<div class="tree-node tree-lam">
+            <span class="tree-label">λ <span class="tree-param">${esc(n.param)}</span> →</span>
+            <div class="tree-children">${renderTreeNode(n.body, depth + 1)}</div>
+          </div>`;
         case 'app':
-          return `<span class="ast-node ast-app">(${renderAST({type:'done', value: v.func})} ${renderAST({type:'done', value: v.arg})})</span>`;
+          return `<div class="tree-node tree-app">
+            <span class="tree-label">App</span>
+            <div class="tree-children">
+              <div class="tree-child"><span class="tree-field">func:</span> ${renderTreeNode(n.func, depth + 1)}</div>
+              <div class="tree-child"><span class="tree-field">arg:</span> ${renderTreeNode(n.arg, depth + 1)}</div>
+            </div>
+          </div>`;
         case 'let':
-          return `<div class="ast-node ast-let"><span class="ast-keyword">let</span> <span class="ast-param">${v.name}</span> = ${renderAST({type:'done', value: v.value})} <span class="ast-keyword">in</span><br>${renderAST({type:'done', value: v.body})}</div>`;
+          return `<div class="tree-node tree-let">
+            <span class="tree-label">let <span class="tree-param">${esc(n.name)}</span> =</span>
+            <div class="tree-children">
+              <div class="tree-child"><span class="tree-field">value:</span> ${renderTreeNode(n.value, depth + 1)}</div>
+              <div class="tree-child"><span class="tree-field">in:</span> ${renderTreeNode(n.body, depth + 1)}</div>
+            </div>
+          </div>`;
         case 'prim':
-          if (v.args && v.args.length === 2 && ['+','-','*','/'].includes(v.op)) {
-            return `<span class="ast-node ast-prim">${renderAST({type:'done', value: v.args[0]})} <span class="ast-op">${v.op}</span> ${renderAST({type:'done', value: v.args[1]})}</span>`;
+          if (n.args && n.args.length === 2 && ['+','-','*','/'].includes(n.op)) {
+            return `<div class="tree-node tree-prim">
+              <span class="tree-label"><span class="tree-op">${n.op}</span></span>
+              <div class="tree-children">
+                <div class="tree-child"><span class="tree-field">left:</span> ${renderTreeNode(n.args[0], depth + 1)}</div>
+                <div class="tree-child"><span class="tree-field">right:</span> ${renderTreeNode(n.args[1], depth + 1)}</div>
+              </div>
+            </div>`;
           }
-          return `<span class="ast-node ast-prim">${v.op}(${(v.args||[]).map(a => renderAST({type:'done', value: a})).join(', ')})</span>`;
+          return `<div class="tree-node tree-prim">
+            <span class="tree-label">${n.op}</span>
+            <div class="tree-children">
+              ${(n.args||[]).map((a, i) => `<div class="tree-child"><span class="tree-field">[${i}]:</span> ${renderTreeNode(a, depth + 1)}</div>`).join('')}
+            </div>
+          </div>`;
         default:
-          return '<span class="ast-node ast-hole">?</span>';
+          return '<span class="tree-node tree-hole">?</span>';
       }
     }
     
