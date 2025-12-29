@@ -21,7 +21,8 @@ case class LangSpec(
   rules: List[Rule],
   defs: List[Def],
   strategies: Map[String, Strat],
-  theorems: List[Theorem] = Nil
+  theorems: List[Theorem] = Nil,
+  parent: Option[String] = None  // For "extends" - parent language name
 )
 
 case class Sort(name: String)

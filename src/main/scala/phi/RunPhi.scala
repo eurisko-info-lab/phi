@@ -1,6 +1,6 @@
 package phi
 
-import java.nio.file.{Files, Paths}
+import java.nio.file.{Files, Paths, Path}
 
 /**
  * CLI for running Phi language specifications.
@@ -11,22 +11,13 @@ import java.nio.file.{Files, Paths}
   println(s"=== Phi Language Runner ===")
   println(s"Loading: $specFile")
   
-  // Read file
-  val source = try
-    Files.readString(Paths.get(specFile))
-  catch
-    case e: Exception =>
-      println(s"Error reading file: ${e.getMessage}")
-      return
-  
-  // Parse
-  println("Parsing...")
-  val parseResult: Either[String, LangSpec] = PhiParser.parse(source)
-  parseResult match
+  // Parse spec with inheritance resolution
+  parseSpecWithInheritance(specFile) match
     case Left(err) =>
       println(s"Parse error: $err")
     case Right(spec) =>
       println(s"Language: ${spec.name}")
+      spec.parent.foreach(p => println(s"  Extends: $p"))
       println(s"  Sorts: ${spec.sorts.map(_.name).mkString(", ")}")
       println(s"  Constructors: ${spec.constructors.map(_.name).mkString(", ")}")
       println(s"  Rules: ${spec.rules.map(_.name).mkString(", ")}")
@@ -65,3 +56,63 @@ import java.nio.file.{Files, Paths}
         case e: Exception =>
           println(s"Error: ${e.getMessage}")
           e.printStackTrace()
+
+/** Parse a spec file and resolve inheritance */
+def parseSpecWithInheritance(specFile: String): Either[String, LangSpec] =
+  val basePath = Paths.get(specFile).getParent
+  
+  def parseFile(file: String): Either[String, LangSpec] =
+    val source = try
+      Files.readString(Paths.get(file))
+    catch
+      case e: Exception =>
+        return Left(s"Error reading $file: ${e.getMessage}")
+    
+    PhiParser.parse(source)
+  
+  def resolveParent(spec: LangSpec, visited: Set[String]): Either[String, LangSpec] =
+    spec.parent match
+      case None => Right(spec)
+      case Some(parentName) if visited.contains(parentName) =>
+        Left(s"Circular inheritance: ${visited.mkString(" -> ")} -> $parentName")
+      case Some(parentName) =>
+        // Look for parent file: try λProlog.phi, prolog.phi, etc.
+        val candidates = List(
+          basePath.resolve(s"$parentName.phi"),
+          basePath.resolve(s"${parentName.toLowerCase}.phi")
+        )
+        
+        candidates.find(Files.exists(_)) match
+          case Some(parentFile) =>
+            for
+              parentSpec <- parseFile(parentFile.toString)
+              resolvedParent <- resolveParent(parentSpec, visited + parentName)
+            yield mergeSpecs(resolvedParent, spec)
+          case None =>
+            Left(s"Parent language file not found: tried ${candidates.map(_.toString).mkString(", ")}")
+  
+  for
+    spec <- parseFile(specFile)
+    resolved <- resolveParent(spec, Set.empty)
+  yield resolved
+
+/** Merge parent spec into child (child overrides parent) */
+def mergeSpecs(parent: LangSpec, child: LangSpec): LangSpec =
+  // Child's defs/rules/etc override parent's by name
+  val childRuleNames = child.rules.map(_.name).toSet
+  val childDefNames = child.defs.map(_.name).toSet
+  val childConstructorNames = child.constructors.map(_.name).toSet
+  val childSortNames = child.sorts.map(_.name).toSet
+  
+  LangSpec(
+    name = child.name,
+    sorts = parent.sorts.filterNot(s => childSortNames.contains(s.name)) ++ child.sorts,
+    constructors = parent.constructors.filterNot(c => childConstructorNames.contains(c.name)) ++ child.constructors,
+    xforms = parent.xforms ++ child.xforms,  // Merge xforms
+    changes = parent.changes ++ child.changes,
+    rules = parent.rules.filterNot(r => childRuleNames.contains(r.name)) ++ child.rules,
+    defs = parent.defs.filterNot(d => childDefNames.contains(d.name)) ++ child.defs,
+    strategies = parent.strategies ++ child.strategies,  // Child strategies override
+    theorems = parent.theorems ++ child.theorems,
+    parent = child.parent  // Keep the original parent reference
+  )

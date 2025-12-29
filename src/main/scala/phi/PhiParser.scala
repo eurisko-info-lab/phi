@@ -72,14 +72,15 @@ object PhiParser extends RegexParsers:
   def TIMES: Parser[String] = "×" | "*"
   def NEQ: Parser[String] = "≠" | "!="
   def CONS: Parser[String] = "::" | "|"  // | is safe inside [...] brackets
+  def EXTENDS = "extends"
   
   // =========================================================================
   // Top Level
   // =========================================================================
   
   def spec: Parser[LangSpec] =
-    LANGUAGE ~> ident ~ ("{" ~> rep(declaration) <~ "}") ^^ {
-      case name ~ decls =>
+    LANGUAGE ~> ident ~ opt(EXTENDS ~> ident) ~ ("{" ~> rep(declaration) <~ "}") ^^ {
+      case name ~ parent ~ decls =>
         val flat = decls.flatten
         LangSpec(
           name,
@@ -90,7 +91,8 @@ object PhiParser extends RegexParsers:
           flat.collect { case r: Rule => r },
           flat.collect { case d: Def => d },
           flat.collect { case (n: String, s: Strat) => (n, s) }.toMap,
-          flat.collect { case t: Theorem => t }
+          flat.collect { case t: Theorem => t },
+          parent  // Store the parent language name
         )
     }
   
@@ -109,11 +111,16 @@ object PhiParser extends RegexParsers:
   
   def sortDecl: Parser[Sort] = SORT ~> ident ^^ Sort.apply
   
-  // Constructor declaration: single line only
-  // constructor Foo : A -> B
-  // For multi-line in source files, just repeat the keyword on each line
+  // Constructor declaration: either single line or block
+  // Single: constructor Foo : A -> B
+  // Block: constructor
+  //          Foo : A -> B
+  //          Bar : C -> D
   def constructorBlock: Parser[List[Constructor]] =
-    CONSTRUCTOR ~> constructorLine ^^ (List(_))
+    CONSTRUCTOR ~> (
+      rep1(constructorLine) |  // Block: constructor followed by indented lines
+      constructorLine ^^ (List(_))  // Single line on same line
+    )
   
   def constructorLine: Parser[Constructor] =
     ident ~ (":" ~> constructorType) ^^ {
@@ -264,8 +271,16 @@ object PhiParser extends RegexParsers:
   def tokenBlock: Parser[Unit] = TOKEN ~> rep(tokenLine) ^^^ ()
   def tokenLine: Parser[Unit] = nonKeywordIdent ~ opt(stringLit) ^^^ ()
   
-  // Syntax declarations
-  def syntaxDecl: Parser[Unit] = SYNTAX ~> ident ~ (":" ~> ident) ^^^ ()
+  // Syntax declarations - can be simple `syntax X : Y` or complex `syntax "kw" ~ pattern...`
+  def syntaxDecl: Parser[Unit] = SYNTAX ~> syntaxPattern ^^^ ()
+  def syntaxPattern: Parser[Unit] = 
+    syntaxSeq ~ rep("|" ~> syntaxSeq) ^^^ ()
+  def syntaxSeq: Parser[Unit] =
+    syntaxAtom ~ rep("~" ~> syntaxAtom) ^^^ ()
+  def syntaxAtom: Parser[Unit] =
+    stringLit ^^^ () |
+    ("(" ~> syntaxPattern <~ ")") |
+    ident ~ opt(":" ~> ident) ^^^ ()
   
   // Grammar blocks
   def grammarBlock: Parser[Unit] = 
@@ -312,6 +327,7 @@ object PhiParser extends RegexParsers:
     "(" ~> termPattern <~ ")" |
     termListLit |
     number ^^ numeral |
+    stringLit ^^ { s => Pat.PCon(s, Nil) } |  // String literals become constructors
     LAMBDA ~> rep1(nonKeywordIdent) ~ ("." ~> termPattern) ^^ { case params ~ body =>
       params.foldRight(body)((p, b) => Pat.PCon("lam", List(Pat.PCon(p, Nil), Pat.PVar("_"), b)))
     } |
@@ -388,6 +404,7 @@ object PhiParser extends RegexParsers:
         (first :: rest).reduceRight((a, b) => Pat.PCon("pair", List(a, b)))
     } |
     number ^^ numeral |
+    stringLit ^^ { s => Pat.PCon(s, Nil) } |  // String literals become nullary constructors
     LAMBDA ~> rep1(nonKeywordIdent) ~ ("." ~> patternNoComma) ^^ { case params ~ body =>
       params.foldRight(body)((p, b) => Pat.PCon("lam", List(Pat.PCon(p, Nil), Pat.PVar("_"), b)))
     } |

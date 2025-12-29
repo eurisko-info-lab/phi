@@ -131,6 +131,9 @@ language Abella extends λProlog {
     (cons(Hyp(x,g),rest), t) ↦ ApplyTactic.forward(t, Prf(g))
   }
 
+  // Strategy for normalization
+  strategy normalize := repeat (Subst.forward | Beta | ApplyTactic.forward | ExtendCtx.forward | ApplyCtx.forward)
+
   // =====================================================
   // Syntax
   // =====================================================

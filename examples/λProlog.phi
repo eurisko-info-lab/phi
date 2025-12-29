@@ -1,110 +1,218 @@
 // =======================================================
-// Abella in Phi
-// Builds upon λProlog
+// λProlog in Phi
+// Parser + Interpreter
+// Examples written in *actual λProlog syntax*
 // =======================================================
 
-language Abella extends λProlog {
+language λProlog {
 
   // =====================================================
   // Core sorts
   // =====================================================
-  sort Proof
-  sort Theorem
-  sort Hypothesis
-  sort Tactic
-  sort Context
+
+  sort Type
+  sort Term
+  sort Goal
+  sort Clause
+  sort Program
 
   // =====================================================
-  // Constructors for Theorems and Proofs
+  // Types (simple types, implicit)
   // =====================================================
-  constructor Thm       : String → Goal → Theorem
-  constructor Hyp       : String → Goal → Hypothesis
-  constructor Prf       : Goal → Proof
+
+  constructor
+    TyConst : String → Type
+    TyArr   : Type → Type → Type
 
   // =====================================================
-  // Proof Tactics
-  // =====================================================
-  constructor Apply     : Term → Tactic
-  constructor Assume    : String → Tactic
-  constructor Split     : Tactic
-  constructor Intros    : Tactic
-  constructor Exact     : Term → Tactic
-  constructor Repeat    : Tactic → Tactic
-  constructor Seq       : Tactic → Tactic → Tactic
-  constructor Id        : Tactic
-  constructor Fail      : Tactic
+  // Terms (λProlog core)
+// =====================================================
+
+  constructor
+    Var   : String → Term
+    Const : String → Term
+    Lam   : String → Term → Term
+    App   : Term → Term → Term
 
   // =====================================================
-  // Xforms for tactic application
+  // Goals and clauses
   // =====================================================
-  xform ApplyTactic : Tactic × Proof ⇄ Proof
 
-  rule ApplyTactic.forward {
-    (Id, p) ↦ p
-    (Fail, p) ↦ p
-    (Seq(t1, t2), p) ↦ ApplyTactic.forward(t2, ApplyTactic.forward(t1, p))
-    (Repeat(t), p) ↦ ApplyTactic.forward(t, ApplyTactic.forward(Repeat(t), p))
-    (Apply(c), Prf(g)) ↦ Prf(Call(c))
-    (Assume(x), Prf(g)) ↦ Prf(And(Call(Var(x)), g))
-    (Split, Prf(And(g1,g2))) ↦ Prf(And(Prf(g1), Prf(g2)))
-    (Intros, Prf(Call(App(Lam(x,b),v)))) ↦ Prf(Call(Subst.forward((x,v),b)))
-    (Exact(t), Prf(g)) ↦ Prf(Call(t))
+  constructor
+    True  : Goal
+    And   : Goal → Goal → Goal
+    Call  : Term → Goal
+
+  constructor
+    Clause : Term → Goal → Clause
+    Program : Clause* → Program
+
+  // =====================================================
+  // Substitution
+  // =====================================================
+
+  xform Subst : (String × Term) × Term ⇄ Term
+
+  rule Subst.forward {
+    (x,v), Var x       ↦ v
+    (x,v), Var y       ↦ Var y          where x ≠ y
+    (x,v), Const c     ↦ Const c
+    (x,v), Lam y t     ↦ Lam y t         where x = y
+    (x,v), Lam y t     ↦ Lam y (Subst.forward((x,v), t))
+      where x ≠ y
+    (x,v), App f a     ↦ App (Subst.forward((x,v), f))
+                               (Subst.forward((x,v), a))
   }
 
   // =====================================================
-  // Example: trivial theorem
+  // β-reduction
   // =====================================================
-  // <lean>
-  // theorem trivial : true :=
-  //   by trivial
-  // </lean>
-  def trivialThm : Theorem = Thm("trivial", True)
-  def trivialProof : Proof = ApplyTactic.forward(Id, Prf(True))
 
-  // =====================================================
-  // Example: modus ponens
-  // <lean>
-  // theorem mp {P Q : Prop} (h1 : P → Q) (h2 : P) : Q :=
-  //   by apply h1; exact h2
-  // </lean>
-  def mpThm : Theorem = Thm("mp", Call(Const("Q")))
-  def mpProof : Proof =
-    ApplyTactic.forward(
-      Seq(Apply(Const("h1")), Exact(Const("h2"))),
-      Prf(Call(Const("Q")))
-    )
+  change Beta : Term ⇄ Term
 
-  // =====================================================
-  // Context management
-  // =====================================================
-  xform ExtendCtx : Context × Hypothesis ⇄ Context
-
-  rule ExtendCtx.forward {
-    (ctx, Hyp(x,g)) ↦ cons(Hyp(x,g), ctx)
+  rule Beta {
+    App (Lam x b) v ↦ Subst.forward((x,v), b)
   }
 
-  xform ApplyCtx : Context × Tactic ⇄ Proof
+  strategy normalizeTerm := repeat Beta
 
-  rule ApplyCtx.forward {
-    (nil, t) ↦ Prf(True)
-    (cons(Hyp(x,g),rest), t) ↦ ApplyTactic.forward(t, Prf(g))
+  // =====================================================
+  // Higher-order pattern unification (fragment)
+  // =====================================================
+
+  xform Unify : Term × Term ⇄ (String × Term)*
+
+  rule Unify.forward {
+    (Var x, t) ↦ [(x,t)]
+    (t, Var x) ↦ [(x,t)]
+    (Const c1, Const c2) ↦ [] where c1 = c2
+    (App f1 a1, App f2 a2) ↦ s1 ++ s2
+      where s1 = Unify.forward(f1,f2)
+        and s2 = Unify.forward(a1,a2)
   }
 
   // =====================================================
-  // Example usage with context
+  // Goal solving
   // =====================================================
-  def ctx : Context = cons(Hyp("H", Call(Const("P"))), nil)
-  def proofWithCtx : Proof = ApplyCtx.forward(ctx, Assume("H"))
+
+  xform Solve : Program × Goal ⇄ Goal
+
+  rule Solve.forward {
+    (P, True) ↦ True
+    (P, And g1 g2) ↦ And (Solve.forward(P,g1))
+                          (Solve.forward(P,g2))
+    (Program cs, Call t) ↦ SolveClauses(cs, t)
+  }
+
+  xform SolveClauses : Clause* × Term ⇄ Goal
+
+  rule SolveClauses.forward {
+    ([Clause h b | rest], t) ↦
+      Solve.forward(
+        Program([Clause h b | rest]),
+        applySubsts(Unify.forward(h,t), b)
+      )
+    ([ _ | rest ], t) ↦ SolveClauses.forward(rest, t)
+  }
 
   // =====================================================
-  // Syntax declarations
+  // Apply substitutions to goals
   // =====================================================
-  syntax "theorem" ~ ident ~ ":" ~ ident ~ ":=" ~ tactic
-  syntax "proof" ~ ident ~ ":=" ~ tactic
-  syntax "hypothesis" ~ ident ~ ":" ~ goal
 
-  // Example syntax usage (AST construction)
-  def synThm : Theorem = Thm("trivial", True)
-  def synProof : Proof = ApplyTactic.forward(Id, Prf(True))
-  def synHyp : Hypothesis = Hyp("H", Call(Const("P")))
+  xform applySubsts : (String × Term)* × Goal ⇄ Goal
+
+  rule applySubsts.forward {
+    ([], g) ↦ g
+    ((x,t)::xs, g) ↦
+      applySubsts.forward(xs, substGoal(x,t,g))
+  }
+
+  xform substGoal : String × Term × Goal ⇄ Goal
+
+  rule substGoal.forward {
+    (x,t, True) ↦ True
+    (x,t, And g1 g2) ↦ And (substGoal(x,t,g1))
+                             (substGoal(x,t,g2))
+    (x,t, Call tm) ↦ Call (Subst.forward((x,t), tm))
+  }
+
+  // =====================================================
+  // Lexer
+  // =====================================================
+
+  token
+    IDENT
+    LAMBDA  "\\"
+    DOT     "."
+    COLON   ":"
+    ARROW   ":-"
+    LPAREN  "("
+    RPAREN  ")"
+    COMMA   ","
+    PERIOD  "."
+
+  // =====================================================
+  // Parser (real λProlog concrete syntax)
+  // =====================================================
+
+  syntax ident : String
+
+  syntax term : Term
+  syntax goal : Goal
+  syntax clause : Clause
+  syntax program : Program
+
+  grammar term {
+    IDENT                          => Var
+    IDENT IDENT                    => App
+    "(" term term ")"              => App
+    "\\" IDENT "." term            => Lam
+  }
+
+  grammar goal {
+    "true"                         => True
+    goal "," goal                  => And
+    term                           => Call
+  }
+
+  grammar clause {
+    term ":-" goal "."             => Clause
+    term "."                       => Clause(_, True)
+  }
+
+  grammar program {
+    clause*                        => Program
+  }
+
+  // =====================================================
+  // =================== EXAMPLES ========================
+  // Written in real λProlog syntax
+  // =====================================================
+
+  // Example program:
+  //
+  // parent alice.
+  // parent bob.
+  // ancestor X :- parent X.
+  // ancestor X :- parent Y, ancestor Y.
+  //
+
+  def exampleProgram : Program =
+    parse program """
+      parent alice.
+      parent bob.
+      ancestor X :- parent X.
+      ancestor X :- parent Y, ancestor Y.
+    """
+
+  // Example query:
+  //
+  // ancestor alice.
+  //
+
+  def query : Goal =
+    parse goal "ancestor alice."
+
+  def result : Goal =
+    Solve.forward(exampleProgram, query)
 }
