@@ -59,13 +59,14 @@ object PhiParser extends RegexParsers:
   def PARSE = "parse"
   def STRATEGY = "strategy"
   def THEOREM = "theorem"
+  def LAW = "law"
   def ATTR = "attr"
   def INHERITED = "inherited"
   def SYNTHESIZED = "synthesized"
   
   val keywords = Set("language", "sort", "constructor", "xform", "change", "rule", "def", 
                      "repeat", "id", "where", "and", "token", "syntax", "grammar", "parse", "strategy", "theorem",
-                     "attr", "inherited", "synthesized")
+                     "law", "attr", "inherited", "synthesized")
   
   def ARROW: Parser[String] = "→" | "->"
   def BIARROW: Parser[String] = "⇄" | "<->"
@@ -76,6 +77,8 @@ object PhiParser extends RegexParsers:
   def TIMES: Parser[String] = "×" | "*"
   def NEQ: Parser[String] = "≠" | "!="
   def CONS: Parser[String] = "::" | "|"  // | is safe inside [...] brackets
+  def EQUIV: Parser[String] = "≡" | "=="  // For law equations
+  def COMPOSE: Parser[String] = "∘" | "."  // Function/xform composition
   def EXTENDS = "extends"
   
   // =========================================================================
@@ -96,6 +99,7 @@ object PhiParser extends RegexParsers:
           flat.collect { case d: Def => d },
           flat.collect { case (n: String, s: RewriteStrategy) => (n, s) }.toMap,
           flat.collect { case t: Theorem => t },
+          flat.collect { case l: Law => l },
           flat.collect { case a: AttrSpec => a },
           flat.collect { case e: AttrEquation => e },
           parent  // Store the parent language name
@@ -110,6 +114,7 @@ object PhiParser extends RegexParsers:
     xformDecl ^^ (List(_)) | 
     changeDecl ^^ (List(_)) | 
     ruleDecl ^^ (List(_)) | 
+    lawDecl ^^ (List(_)) |         // Law declarations: law Name { ... }
     theoremDecl ^^ (List(_)) |     // Theorem declarations
     strategyDecl ^^ (List(_)) |  // Before defDecl - both start with ident
     defDecl ^^ (List(_)) | 
@@ -243,8 +248,12 @@ object PhiParser extends RegexParsers:
     }
   
   def changeDecl: Parser[ChangeSpec] =
-    CHANGE ~> ident ~ (":" ~> ident <~ BIARROW <~ ident) ^^ {
-      case name ~ sort => ChangeSpec(name, sort)
+    CHANGE ~> ident ~ opt("[" ~> rep1sep(ident, ",") <~ "]") ~ (":" ~> typeExpr <~ BIARROW) ~ typeExpr ^^ {
+      case name ~ typeParams ~ src ~ tgt => 
+        val fullName = typeParams match
+          case Some(ps) => s"$name[${ps.mkString(",")}]"
+          case None => name
+        ChangeSpec(fullName, typeToString(src))
     }
   
   // Theorem declaration: theorem Name : Type
@@ -252,6 +261,31 @@ object PhiParser extends RegexParsers:
   def theoremDecl: Parser[Theorem] =
     THEOREM ~> ident ~ (":" ~> typeExpr) ^^ {
       case name ~ sig => Theorem(name, sig, None)
+    }
+  
+  // Law declaration: law Name { lhs ≡ rhs; ... }
+  // A named set of equations that must hold
+  def lawDecl: Parser[Law] =
+    LAW ~> ident ~ ("{" ~> rep1(equation) <~ "}") ^^ {
+      case name ~ eqs => Law(name, eqs)
+    }
+  
+  // Equation: equationTerm ≡ equationTerm
+  // Uses equationTerm (not full pattern) to avoid greedy matching across lines
+  def equation: Parser[Equation] =
+    equationTerm ~ (EQUIV ~> equationTerm) ^^ {
+      case lhs ~ rhs => Equation(lhs, rhs)
+    }
+  
+  // Equation term: constructor with args Con(a,b,c), or plain variable
+  // Does NOT allow bare juxtaposition (application) to avoid greedy parsing
+  def equationTerm: Parser[MetaPattern] =
+    constructorPat |   // Con(a, b, c)
+    qualifiedPat |     // Xform.forward(a, b)
+    nonKeywordIdent ^^ { name =>
+      if knownCons(name) || (name.length > 1 && name.headOption.exists(_.isUpper) && !isIndexedVar(name)) 
+      then MetaPattern.PCon(name, Nil)
+      else MetaPattern.PVar(name)
     }
   
   // Rules can have qualified names: rule Subst.forward { ... }
@@ -410,9 +444,16 @@ object PhiParser extends RegexParsers:
     }
   
   def termSubst: Parser[MetaPattern] =
-    termApp ~ opt("[" ~> ident ~ (ASSIGN ~> termPattern) <~ "]") ^^ {
+    termCompose ~ opt("[" ~> ident ~ (ASSIGN ~> termPattern) <~ "]") ^^ {
       case body ~ Some(v ~ repl) => MetaPattern.PSubst(body, v, repl)
       case body ~ None => body
+    }
+  
+  // Composition in term position: f ∘ g (right-associative)
+  def termCompose: Parser[MetaPattern] =
+    termApp ~ rep(COMPOSE ~> termApp) ^^ {
+      case first ~ Nil => first
+      case first ~ rest => (first :: rest).reduceRight((a, b) => MetaPattern.PCon("Compose", List(a, b)))
     }
   
   def termApp: Parser[MetaPattern] =
@@ -478,9 +519,16 @@ object PhiParser extends RegexParsers:
     }
   
   def substitutionPat: Parser[MetaPattern] =
-    applicationPat ~ opt("[" ~> ident ~ (ASSIGN ~> pattern) <~ "]") ^^ {
+    composePat ~ opt("[" ~> ident ~ (ASSIGN ~> pattern) <~ "]") ^^ {
       case body ~ Some(v ~ repl) => MetaPattern.PSubst(body, v, repl)
       case body ~ None => body
+    }
+  
+  // Composition: f ∘ g (right-associative, like function composition)
+  def composePat: Parser[MetaPattern] =
+    applicationPat ~ rep(COMPOSE ~> applicationPat) ^^ {
+      case first ~ Nil => first
+      case first ~ rest => (first :: rest).reduceRight((a, b) => MetaPattern.PCon("Compose", List(a, b)))
     }
   
   // Application is left-associative: f a b = (f a) b

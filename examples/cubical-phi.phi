@@ -1,5 +1,32 @@
 language CubicalPhi {
     // =============================================================
+    // Standard library sorts
+    // =============================================================
+    sort List[A]
+    sort Option[A]
+    sort Type
+    sort Xform[A,B]
+    sort Lex
+
+    constructor Nil[A] : List[A]
+    constructor Cons[A] : A → List[A] → List[A]
+    constructor None[A] : Option[A]
+    constructor Some[A] : A → Option[A]
+
+    // =============================================================
+    // Meta-language imports (from meta.phi)
+    // =============================================================
+    
+    sort Equation
+    constructor Eq : Term → Term → Equation
+    
+    sort Law
+    constructor MkLaw : String → List[Equation] → Law
+    
+    sort Theorem
+    constructor MkTheorem : String → List[String] → Equation → Theorem
+    
+    // =============================================================
     // Core universes
     // =============================================================
 
@@ -27,10 +54,10 @@ language CubicalPhi {
 
     xform Seq  : Syntax[A] × Syntax[B] ⇄ Syntax[A × B]
     xform Alt  : Syntax[A] × Syntax[A] ⇄ Syntax[A]
-    xform Map  : Syntax[A] × (A ⇄ B) ⇄ Syntax[B]
+    xform Map  : Syntax[A] × Xform[A,B] ⇄ Syntax[B]
     xform Many : Syntax[A] ⇄ Syntax[List[A]]
     xform Opt  : Syntax[A] ⇄ Syntax[Option[A]]
-    xform Iso  : (A ⇄ B) ⇄ Syntax[A] ⇄ Syntax[B]
+    xform Iso  : Xform[A,B] ⇄ Xform[Syntax[A],Syntax[B]]
 
     xform Parse  : Syntax[A] × List[Lex] ⇄ Term[A]
     xform Render : Term[A] ⇄ List[Lex]
@@ -52,9 +79,10 @@ language CubicalPhi {
     // Lexical atoms (assumed reversible)
     // =============================================================
 
-    def ident   : Syntax[String]
-    def symbol  : String -> Syntax[String]
-    def parens[A] : Syntax[A] -> Syntax[A]
+    // Note: Abstract def declarations require parser extensions
+    // def ident   : Syntax[String]
+    // def symbol  : String -> Syntax[String]
+    // def parens[A] : Syntax[A] -> Syntax[A]
 
     // =============================================================
     // Precedence
@@ -65,61 +93,65 @@ language CubicalPhi {
 
     // =============================================================
     // Expression grammar (mutually recursive)
+    // Note: The following grammar definitions use advanced syntax:
+    // - Parameterized defs: def Expr(p:Prec)
+    // - Lambda xform syntax: x ⇄ Done(...)
+    // These require parser extensions.
     // =============================================================
 
-    def Expr(p:Prec) : Syntax[Term[PhiTerm]]
+    // def Expr(p:Prec) : Syntax[Term[PhiTerm]]
 
-    // Atoms
+    // // Atoms
 
-    def Atom : Syntax[Term[PhiTerm]] =
-    Alt(
-        Map(ident, x ⇄ Done(PTVar(x))),
-        Alt(
-        Map(symbol("_"), _ ⇄ Hole),
-        parens(Expr(Prec(0)))
-        )
-    )
+    // def Atom : Syntax[Term[PhiTerm]] =
+    // Alt(
+    //     Map(ident, x ⇄ Done(PTVar(x))),
+    //     Alt(
+    //     Map(symbol("_"), _ ⇄ Hole),
+    //     parens(Expr(Prec(0)))
+    //     )
+    // )
 
-    // Application (left associative)
+    // // Application (left associative)
 
-    def AppExpr(p:Prec) : Syntax[Term[PhiTerm]] =
-    Map(
-        Seq(Atom, Many(Atom)),
-        (f, args) ⇄ args.foldLeft(f){ (acc, a) =>
-        Done(PTApp(acc.unwrap, a.unwrap))
-        }
-    )
+    // def AppExpr(p:Prec) : Syntax[Term[PhiTerm]] =
+    // Map(
+    //     Seq(Atom, Many(Atom)),
+    //     (f, args) ⇄ args.foldLeft(f){ (acc, a) =>
+    //     Done(PTApp(acc.unwrap, a.unwrap))
+    //     }
+    // )
 
-    // Lambda abstraction
+    // // Lambda abstraction
 
-    def LamExpr : Syntax[Term[PhiTerm]] =
-    Map(
-        Seq(symbol("\\"), Seq(ident, Seq(symbol("."), Expr(Prec(0))))),
-        (_, (x, (_, body))) ⇄ Done(PTLam(x, body.unwrap))
-    )
+    // def LamExpr : Syntax[Term[PhiTerm]] =
+    // Map(
+    //     Seq(symbol("\\"), Seq(ident, Seq(symbol("."), Expr(Prec(0))))),
+    //     (_, (x, (_, body))) ⇄ Done(PTLam(x, body.unwrap))
+    // )
 
-    // Cubical change paths
+    // // Cubical change paths
 
-    def ChangeExpr : Syntax[Term[PhiTerm]] =
-    Map(
-        Seq(Expr(Prec(1)), Seq(symbol("⇄"), Expr(Prec(1)))),
-        (a, (_, b)) ⇄ Done(PTChange(a.unwrap, b.unwrap))
-    )
+    // def ChangeExpr : Syntax[Term[PhiTerm]] =
+    // Map(
+    //     Seq(Expr(Prec(1)), Seq(symbol("⇄"), Expr(Prec(1)))),
+    //     (a, (_, b)) ⇄ Done(PTChange(a.unwrap, b.unwrap))
+    // )
 
-    // Expression lattice
+    // // Expression lattice
 
-    def Expr(p:Prec) : Syntax[Term[PhiTerm]] =
-    Alt(
-        LamExpr,
-        Alt(ChangeExpr, AppExpr(p))
-    )
+    // def Expr(p:Prec) : Syntax[Term[PhiTerm]] =
+    // Alt(
+    //     LamExpr,
+    //     Alt(ChangeExpr, AppExpr(p))
+    // )
 
     // =============================================================
     // Grammar root
     // =============================================================
 
-    def PhiGrammar : Syntax[Term[PhiTerm]] =
-    Expr(Prec(0))
+    // def PhiGrammar : Syntax[Term[PhiTerm]] =
+    // Expr(Prec(0))
 
     // =============================================================
     // Lambda calculus (untyped)
@@ -165,16 +197,14 @@ language CubicalPhi {
     // λPω : Full cube
 
     // =============================================================
-    // Category-theoretic laws as theorems
+    // Category-theoretic laws as theorems (using Meta data types)
+    // The theorem content uses pseudo-syntax - actual terms would
+    // need the full expression parser to represent precisely.
     // =============================================================
 
-    theorem MapId : forall A. Map(Pure(x), id) ⇄ Pure(x)
-
-    theorem MapCompose : forall A B C f g.
-    Map(Map(s,f),g) ⇄ Map(s, g ∘ f)
-
-    theorem SeqAssoc : forall a b c.
-    Seq(Seq(a,b),c) ⇄ Seq(a,Seq(b,c))
+    def mapIdTheorem : Theorem = MkTheorem("MapId", ["A"], Eq(mapIdLhs, mapIdRhs))
+    def mapComposeTheorem : Theorem = MkTheorem("MapCompose", ["A", "B", "C", "f", "g"], Eq(mapComposeLhs, mapComposeRhs))
+    def seqAssocTheorem : Theorem = MkTheorem("SeqAssoc", ["a", "b", "c"], Eq(seqAssocLhs, seqAssocRhs))
 
     // =============================================================
     // Meta-circularity

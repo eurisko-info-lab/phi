@@ -1,0 +1,220 @@
+// =============================================================
+// Meta-Phi: Phi's own meta-language constructs as data
+// =============================================================
+//
+// This defines the data types for constructs that appear as
+// syntax sugar in .phi files. The `syntax` mechanism (when added)
+// will desugar surface syntax to these constructors.
+//
+// =============================================================
+
+language Meta {
+
+  // =============================================================
+  // Builtins (assumed primitive)
+  // =============================================================
+  
+  sort String
+  sort Term
+  sort List[A]
+  
+  // =============================================================
+  // Core: Names, Types, Terms
+  // =============================================================
+  
+  sort Name
+  constructor MkName : String → Name
+  
+  sort Type
+  constructor TyVar  : Name → Type
+  constructor TyApp  : Name → List[Type] → Type
+  constructor TyArr  : Type → Type → Type
+  constructor TyProd : Type → Type → Type
+  constructor TyList : Type → Type
+  
+  // =============================================================
+  // Equations and Laws
+  // =============================================================
+  //
+  // law Category {
+  //   Comp(Id, f) ≡ f
+  //   Comp(f, Id) ≡ f
+  // }
+  //
+  // desugars to:
+  //
+  // def Category : Law = MkLaw("Category", [
+  //   Eq(Comp(Id, f), f),
+  //   Eq(Comp(f, Id), f)
+  // ])
+  
+  sort Equation
+  constructor Eq : Term → Term → Equation
+  
+  sort Law
+  constructor MkLaw : Name → List[Equation] → Law
+  
+  // =============================================================
+  // Type Aliases
+  // =============================================================
+  //
+  // alias Path[A] := I → Term[A]
+  //
+  // desugars to:
+  //
+  // def Path : Alias = MkAlias("Path", ["A"], TyArr(TyVar("I"), TyApp("Term", [TyVar("A")])))
+  
+  sort Alias
+  constructor MkAlias : Name → List[Name] → Type → Alias
+  
+  // =============================================================
+  // Theorems with Quantifiers
+  // =============================================================
+  //
+  // theorem MapId : forall A. Map(Pure(x), id) ≡ Pure(x)
+  //
+  // desugars to:
+  //
+  // def MapId : Theorem = MkTheorem("MapId", ["A"], Eq(Map(Pure(x), id), Pure(x)))
+  
+  sort Theorem
+  constructor MkTheorem : Name → List[Name] → Equation → Theorem
+  
+  // Can also have theorem as implication
+  sort Prop
+  constructor PropEq   : Equation → Prop
+  constructor PropAll  : Name → Prop → Prop
+  constructor PropImpl : Prop → Prop → Prop
+  constructor PropAnd  : Prop → Prop → Prop
+  
+  constructor MkTheorem2 : Name → Prop → Theorem
+  
+  // =============================================================
+  // Axes (Lambda Cube)
+  // =============================================================
+  //
+  // axis → : Term → Type
+  //
+  // desugars to:
+  //
+  // def arrow : Axis = MkAxis("→", TyVar("Term"), TyVar("Type"))
+  
+  sort Axis
+  constructor MkAxis : Name → Type → Type → Axis
+  
+  // The lambda cube corners are combinations of axes
+  sort Corner
+  constructor MkCorner : List[Axis] → Corner
+  
+  // =============================================================
+  // Syntax Declarations (Meta-circular!)
+  // =============================================================
+  //
+  // syntax law name "{" equations "}" := MkLaw(name, equations)
+  //
+  // A syntax declaration IS an xform from surface syntax to data.
+  // The pattern is a sequence of literal strings and metavariables.
+  // The RHS is a constructor application.
+  
+  sort Pattern
+  constructor PLit  : String → Pattern
+  constructor PVar  : Name → Pattern
+  constructor PSeq  : List[Pattern] → Pattern
+  constructor PRep  : Pattern → Pattern           // Repetition (like *)
+  constructor PSep  : Pattern → String → Pattern  // Separated list
+  
+  sort SyntaxDecl
+  constructor MkSyntax : Pattern → Term → SyntaxDecl
+  
+  // Example: syntax for law
+  // syntax law name "{" equations "}" := MkLaw(name, equations)
+  //
+  // Pattern: PSeq([PLit("law"), PVar("name"), PLit("{"), 
+  //               PSep(PVar("equation"), newline), PLit("}")])
+  // RHS: MkLaw(name, equations)
+  
+  def lawSyntax : SyntaxDecl = MkSyntax(
+    PSeq([PLit("law"), PVar("name"), PLit("{"), 
+          PSep(PVar("eq"), "\n"), PLit("}")]),
+    MkLaw(Var("name"), Var("eq"))
+  )
+  
+  def eqSyntax : SyntaxDecl = MkSyntax(
+    PSeq([PVar("lhs"), PLit("≡"), PVar("rhs")]),
+    Eq(Var("lhs"), Var("rhs"))
+  )
+  
+  def aliasSyntax : SyntaxDecl = MkSyntax(
+    PSeq([PLit("alias"), PVar("name"), PLit(":="), PVar("type")]),
+    MkAlias(Var("name"), [], Var("type"))
+  )
+  
+  // =============================================================
+  // Parsing as Xform
+  // =============================================================
+  //
+  // A SyntaxDecl defines a bidirectional transformation:
+  // - forward: parse surface syntax → data
+  // - backward: data → pretty print surface syntax
+  
+  xform ParseSyntax : String × SyntaxDecl ⇄ Term
+  
+  // The syntax declarations form a grammar
+  sort Grammar
+  constructor MkGrammar : List[SyntaxDecl] → Grammar
+  
+  xform ParseGrammar : String × Grammar ⇄ Term
+  
+  // =============================================================
+  // Examples: Using the data types directly
+  // =============================================================
+  
+  // This is what "law Category { ... }" desugars to:
+  def categoryLaw : Law = MkLaw(
+    MkName("Category"),
+    [Eq(Var("Comp(Id, f)"), Var("f")),
+     Eq(Var("Comp(f, Id)"), Var("f")),
+     Eq(Var("Comp(Comp(f,g), h)"), Var("Comp(f, Comp(g,h))"))]
+  )
+  
+  // This is what "alias Path[A] := I → Term[A]" desugars to:
+  def pathAlias : Alias = MkAlias(
+    MkName("Path"),
+    [MkName("A")],
+    TyArr(TyVar(MkName("I")), TyApp(MkName("Term"), [TyVar(MkName("A"))]))
+  )
+  
+  // This is what "axis → : Term → Type" desugars to:
+  def arrowAxis : Axis = MkAxis(
+    MkName("→"),
+    TyVar(MkName("Term")),
+    TyVar(MkName("Type"))
+  )
+  
+  // =============================================================
+  // Meta-circularity: Phi syntax as Grammar
+  // =============================================================
+  //
+  // The core Phi syntax (sort, constructor, xform, rule, def, etc.)
+  // can itself be expressed as a Grammar of SyntaxDecls.
+  // This allows extending Phi's syntax within Phi itself!
+  
+  def sortSyntax : SyntaxDecl = MkSyntax(
+    PSeq([PLit("sort"), PVar("name")]),
+    Var("SortDecl(name)")
+  )
+  
+  def constructorSyntax : SyntaxDecl = MkSyntax(
+    PSeq([PLit("constructor"), PVar("name"), PLit(":"), PVar("type")]),
+    Var("ConstructorDecl(name, type)")
+  )
+  
+  def phiGrammar : Grammar = MkGrammar([
+    sortSyntax,
+    constructorSyntax,
+    lawSyntax,
+    eqSyntax,
+    aliasSyntax
+  ])
+
+}

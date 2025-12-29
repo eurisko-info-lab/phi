@@ -113,9 +113,21 @@ object LangValidator:
     val bracketIdx = s.indexOf('[')
     if bracketIdx > 0 then s.substring(0, bracketIdx) else s
   
+  // Extract type parameters from a parameterized name like "Foo[A,B,C]" -> List("A", "B", "C")
+  private def extractTypeParams(s: String): List[String] =
+    val bracketIdx = s.indexOf('[')
+    if bracketIdx > 0 && s.endsWith("]") then
+      s.substring(bracketIdx + 1, s.length - 1).split(",").map(_.trim).toList
+    else Nil
+  
   // Collect all type parameter names defined in the spec
+  // From sorts, constructors, xforms, and changes (all can have [A,B,...] params)
   private def collectTypeParams(spec: LangSpec): Set[String] =
-    spec.sorts.flatMap(_.typeParams).toSet
+    val fromSorts = spec.sorts.flatMap(_.typeParams)
+    val fromConstructors = spec.constructors.flatMap(c => extractTypeParams(c.name))
+    val fromXforms = spec.xforms.flatMap(x => extractTypeParams(x.name))
+    val fromChanges = spec.changes.flatMap(c => extractTypeParams(c.name))
+    (fromSorts ++ fromConstructors ++ fromXforms ++ fromChanges).toSet
   
   private def checkUndefinedSortRefs(spec: LangSpec): ValidationResult =
     val definedSorts = spec.sorts.map(_.name).toSet ++ builtinSorts
@@ -138,9 +150,9 @@ object LangValidator:
       parseTypeString(x.target).foreach(s => sortRefs += ((s, s"xform ${x.name}")))
     }
     
-    // From changes
+    // From changes - parse type expression (change sort can be product types, etc.)
     spec.changes.foreach { c =>
-      sortRefs += ((c.sort, s"change ${c.name}"))
+      parseTypeString(c.sort).foreach(s => sortRefs += ((s, s"change ${c.name}")))
     }
     
     // From defs (if sort annotation present)
@@ -150,10 +162,13 @@ object LangValidator:
     
     // Filter: only report undefined if:
     // 1. Base sort name is not defined
-    // 2. AND it's not a type parameter
+    // 2. AND it's not a type parameter (explicit or single uppercase letter convention)
+    def isTypeParam(s: String): Boolean =
+      typeParams.contains(s) || (s.length == 1 && s.head.isUpper)
+    
     val undefined = sortRefs.toList.filter { case (s, _) => 
       val base = baseSortName(s)
-      !definedSorts.contains(base) && !typeParams.contains(s)
+      !definedSorts.contains(base) && !isTypeParam(s)
     }
     val issues = undefined.map { case (s, loc) =>
       ValidationIssue(ValidationSeverity.Error, "undefined-sort", s"Undefined sort: $s", Some(loc))

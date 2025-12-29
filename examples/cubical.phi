@@ -20,9 +20,50 @@
 // Category theory does not appear as theory.
 // It appears as invariants enforced by construction.
 //
+// Laws, aliases, and theorems use the Meta data types
+// from meta.phi (see that file for the pattern/syntax mechanism).
+//
 // =======================================================
 
 language Phi {
+
+  // =============================================================
+  // Standard library sorts
+  // =============================================================
+  sort List[A]
+  sort Option[A]
+  sort Type
+  sort Xform[A,B]
+  sort Context
+  sort Path[A,B]
+  sort Net
+  sort Lex
+  sort Change[A]
+  sort Hole[A]
+
+  constructor Nil[A] : List[A]
+  constructor Cons[A] : A → List[A] → List[A]
+  constructor None[A] : Option[A]
+  constructor Some[A] : A → Option[A]
+
+  // =============================================================
+  // Meta-language imports (from meta.phi)
+  // =============================================================
+  
+  sort Equation
+  constructor Eq : Term → Term → Equation
+  
+  sort Law
+  constructor MkLaw : String → List[Equation] → Law
+  
+  sort Alias
+  constructor MkAlias : String → List[String] → Type → Alias
+  
+  sort Theorem
+  constructor MkTheorem : String → List[String] → Equation → Theorem
+  
+  sort Axis
+  constructor MkAxis : String → Type → Type → Axis
 
   // =====================================================
   // 0. Categorical substrate
@@ -40,6 +81,7 @@ language Phi {
   // Composition
   xform Comp : Hom[A,B] × Hom[B,C] ⇄ Hom[A,C]
 
+  // Category laws
   law Category {
     Comp(Id, f) ≡ f
     Comp(f, Id) ≡ f
@@ -60,7 +102,7 @@ language Phi {
   constructor Hole[A] : Term[A]
 
   // Terms form a groupoid under Change
-  alias Obj := Term[_]
+  def objAlias : Alias = MkAlias("Obj", [], Term)
 
   // =====================================================
   // 2. Changes as cubical paths
@@ -78,6 +120,7 @@ language Phi {
   // Inverse path
   xform Sym[A] : Change[A] ⇄ Change[A]
 
+  // Path groupoid laws
   law PathGroupoid {
     Then(Refl, c) ≡ c
     Then(c, Refl) ≡ c
@@ -87,7 +130,7 @@ language Phi {
   }
 
   // Higher paths
-  alias Path2[A] := Change[Change[A]]
+  def path2Alias : Alias = MkAlias("Path2", ["A"], Change(Change(A)))
 
   // =====================================================
   // 3. Structured editing
@@ -97,8 +140,9 @@ language Phi {
   change Replace[A]  : Term[A] ⇄ Term[A]
   change Delete[A]   : Term[A] ⇄ Hole[A]
 
-  change Many[A]     : Change[A]*
-  change Choice[A]  : Change[A] | Change[A]
+  // List of changes and choice between changes
+  change Many[A]   : List[Change[A]] ⇄ Change[A]
+  change Choice[A] : Change[A] × Change[A] ⇄ Change[A]
 
   // Editing respects holes (Kan filling)
   xform Fill : Hole[A] × Context ⇄ Term[A]
@@ -112,22 +156,21 @@ language Phi {
   xform Up   : Zipper[A] ⇄ Term[A]
 
   law ZipperAdjunction {
-    Up ∘ Down ≡ Id
+    Comp(Up, Down) ≡ Id
   }
 
   // =====================================================
   // 5. Syntax and parsing (isomorphisms)
   // =====================================================
 
-  sort Lex
   sort Syntax[A]
 
   xform Parse  : Syntax[A] × Lex* ⇄ Term[A]
   xform Render : Term[A] ⇄ Lex*
 
   law RoundTrip {
-    Render ∘ Parse ≡ Id
-    Parse ∘ Render ≡ Id   // modulo holes
+    Comp(Render, Parse) ≡ Id
+    Comp(Parse, Render) ≡ Id
   }
 
   // =====================================================
@@ -137,8 +180,7 @@ language Phi {
   sort Hash
   sort Patch[A]
 
-  constructor Patch :
-    Change[A] × Hash × Hash → Patch[A]
+  constructor Patch : Change[A] × Hash × Hash → Patch[A]
 
   sort Repo[A]
 
@@ -146,7 +188,7 @@ language Phi {
   xform InvertPatch : Patch[A] ⇄ Patch[A]
 
   law PatchGroupoid {
-    ApplyPatch(r, p ⋆ p⁻¹) ≡ r
+    ApplyPatch(r, Comp(p, InvertPatch(p))) ≡ r
   }
 
   // =====================================================
@@ -156,7 +198,7 @@ language Phi {
   xform HashOf : Term[A] ⇄ Hash
 
   law HashExtensionality {
-    HashOf(t1) = HashOf(t2) ⇒ t1 ≡ t2
+    Eq(HashOf(t1), HashOf(t2)) ≡ Eq(t1, t2)
   }
 
   // =====================================================
@@ -169,7 +211,7 @@ language Phi {
   constructor Lam : String → LC → LC
   constructor App : LC → LC → LC
 
-  alias Term[LC]
+  def lcTermAlias : Alias = MkAlias("LCTerm", [], Term(LC))
 
   change Beta : LC ⇄ LC
   rule Beta {
@@ -180,8 +222,7 @@ language Phi {
   // 9. Interaction Calculus
   // =====================================================
 
-  sort Net
-  constructor Node : String → Net*
+  constructor Node : String → List[Net]
   constructor Wire : Net × Net → Net
 
   change Interact : Net ⇄ Net
@@ -194,26 +235,23 @@ language Phi {
   xform ICtoLC : Term[Net] ⇄ Term[LC]
 
   law Simulation {
-    LCtoIC ∘ ICtoLC ≡ Id
-    ICtoLC ∘ LCtoIC ≡ Id   // modulo sharing
+    Comp(LCtoIC, ICtoLC) ≡ Id
+    Comp(ICtoLC, LCtoIC) ≡ Id
   }
 
   // =====================================================
   // 11. Lambda Cube axes as extensions
   // =====================================================
 
-  sort Type
-
   constructor TyVar   : String → Type
   constructor TyArr   : Type → Type → Type
-  constructor TyPi    : Type → (Term → Type) → Type
   constructor TyUniv  : Nat → Type
 
-  // Axes
-  axis →  : Term → Type
-  axis P  : Type → Type
-  axis ω  : Type → Term
-  axis 2  : Type → Type
+  // Lambda cube axes (as data)
+  def arrowAxis : Axis = MkAxis("→", Term, Type)
+  def polyAxis  : Axis = MkAxis("P", Type, Type)
+  def omegaAxis : Axis = MkAxis("ω", Type, Term)
+  def twoAxis   : Axis = MkAxis("2", Type, Type)
 
   // Corners are combinations of axes
   // Each axis is a functor
@@ -226,15 +264,14 @@ language Phi {
   xform TypeCheck : Term × Context ⇄ Type
 
   law Functoriality {
-    TypeCheck(Then(c1,c2), Γ)
-      ≡ Then(TypeCheck(c1,Γ), TypeCheck(c2,Γ))
+    TypeCheck(Then(c1,c2), G) ≡ Then(TypeCheck(c1,G), TypeCheck(c2,G))
   }
 
   // =====================================================
   // 13. Dependent types as second-order holes
   // =====================================================
 
-  alias DepHole[A] := Hole[Term[A]]
+  def depHoleAlias : Alias = MkAlias("DepHole", ["A"], Hole(Term(A)))
 
   // =====================================================
   // 14. Dependent pattern matching → IC nets
@@ -251,38 +288,29 @@ language Phi {
   constructor I0 : I
   constructor I1 : I
 
-  alias Path[A] := I → Term[A]
+  // Path as function from interval
+  def pathAlias : Alias = MkAlias("Path", ["A"], Arr(I, Term(A)))
 
   xform PathAsChange : Path[A] ⇄ Change[A]
 
   law Cubical {
-    PathAsChange(p)(I0) = source
-    PathAsChange(p)(I1) = target
+    App(PathAsChange(p), I0) ≡ source
+    App(PathAsChange(p), I1) ≡ target
   }
 
   // =====================================================
   // 16. Phi defined in Phi (meta-circular)
   // =====================================================
 
-  def PhiGrammar : Syntax[Term] = ...
-
-  def PhiRepo : Repo[Term] =
-    ApplyPatch(
-      emptyRepo,
-      Patch(
-        Insert(PhiGrammar),
-        genesis,
-        HashOf(PhiGrammar)
-      )
-    )
+  // PhiGrammar would be defined using Meta's SyntaxDecl
+  // PhiRepo would be a Repo[Term] with the initial patch
 
   // =====================================================
   // 17. Everything commutes
   // =====================================================
 
-  theorem Coherence {
-    Parse ∘ Edit ∘ TypeCheck ∘ Compile ∘ Render
-      ≡ Id
-  }
+  def coherenceTheorem : Theorem = MkTheorem("Coherence", [],
+    Eq(Comp(Parse, Comp(Edit, Comp(TypeCheck, Comp(Compile, Render)))), Id)
+  )
 
 }

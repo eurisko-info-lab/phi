@@ -36,9 +36,9 @@ language AbellaCat {
   xform Subst : (String × Term) × Term ⇄ Term
   rule Subst.forward {
     ((x,v), Var(x))       ↦ v
-    ((x,v), Var(y))       ↦ Var(y)           where x ≠ y
-    ((x,v), Const(c))     ↦ Const(c)
-    ((x,v), Lam(y, t))    ↦ Lam(y, t)        where x = y
+    ((_,_), Var(y))       ↦ Var(y)
+    ((_,_), Const(c))     ↦ Const(c)
+    ((x,_), Lam(x, t))    ↦ Lam(x, t)
     ((x,v), Lam(y, t))    ↦ Lam(y, Subst.forward((x,v), t)) where x ≠ y
     ((x,v), App(f, a))    ↦ App(Subst.forward((x,v), f),
                                 Subst.forward((x,v), a))
@@ -98,7 +98,7 @@ language AbellaCat {
   // =====================================================
   xform Solve : Program × Goal ⇄ Goal
   rule Solve.forward {
-    (P, True) ↦ True
+    (_, True) ↦ True
     (P, And(g1,g2)) ↦ And(Solve.forward(P,g1), Solve.forward(P,g2))
     (Program(cs), Call(t)) ↦ SolveClauses.forward(cs,t)
   }
@@ -134,7 +134,7 @@ language AbellaCat {
 
   xform substGoal : String × Term × Goal ⇄ Goal
   rule substGoal.forward {
-    (x,t,True) ↦ True
+    (_,_,True) ↦ True
     (x,t,And(g1,g2)) ↦ And(substGoal.forward(x,t,g1), substGoal.forward(x,t,g2))
     (x,t,Call(tm)) ↦ Call(Subst.forward((x,t), tm))
   }
@@ -142,6 +142,6 @@ language AbellaCat {
   // =====================================================
   // Example: proof term using categorical theorems
   // =====================================================
-  def proofFunctoriality : Goal =
-    Call(App(F.forward, App(Var("f"), Var("g"))))  // Apply functor to composition
+  def example_proofFunctoriality : Goal =
+    Call(F.forward(App(Var("f"), Var("g"))))  // Apply functor to composition
 }

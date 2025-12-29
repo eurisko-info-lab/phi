@@ -22,6 +22,7 @@ case class LangSpec(
   defs: List[Def],
   strategies: Map[String, RewriteStrategy],
   theorems: List[Theorem] = Nil,
+  laws: List[Law] = Nil,         // Law declarations
   attributes: List[AttrSpec] = Nil,  // Attribute declarations
   attrEquations: List[AttrEquation] = Nil,  // Attribute computation rules
   parent: Option[String] = None  // For "extends" - parent language name
@@ -115,6 +116,12 @@ case class Theorem(
   signature: LangType,    // The proposition type
   proof: Option[MetaPattern] = None  // Optional proof term
 )
+
+/** Equation: lhs ≡ rhs */
+case class Equation(lhs: MetaPattern, rhs: MetaPattern)
+
+/** Law declaration: a named set of equations */
+case class Law(name: String, equations: List[Equation])
 
 /** Rewriting strategies */
 enum RewriteStrategy:
