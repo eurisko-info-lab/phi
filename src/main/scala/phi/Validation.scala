@@ -181,11 +181,24 @@ object LangValidator:
     
     ValidationResult(issues)
   
-  private def collectPatternConstructors(pat: MetaPattern): List[String] = pat match
-    case MetaPattern.PVar(_) => Nil
-    case MetaPattern.PCon(name, args) => name :: args.flatMap(collectPatternConstructors)
-    case MetaPattern.PApp(f, a) => collectPatternConstructors(f) ++ collectPatternConstructors(a)
-    case MetaPattern.PSubst(body, _, repl) => collectPatternConstructors(body) ++ collectPatternConstructors(repl)
+  // Generic pattern folder - extracts values from MetaPattern tree
+  private def foldPattern[A](pat: MetaPattern)(
+    onVar: String => List[A],
+    onCon: (String, List[MetaPattern]) => List[A]
+  ): List[A] = pat match
+    case MetaPattern.PVar(name) => onVar(name)
+    case MetaPattern.PCon(name, args) => 
+      onCon(name, args) ++ args.flatMap(foldPattern(_)(onVar, onCon))
+    case MetaPattern.PApp(f, a) => 
+      foldPattern(f)(onVar, onCon) ++ foldPattern(a)(onVar, onCon)
+    case MetaPattern.PSubst(body, _, repl) => 
+      foldPattern(body)(onVar, onCon) ++ foldPattern(repl)(onVar, onCon)
+  
+  private def collectPatternConstructors(pat: MetaPattern): List[String] =
+    foldPattern(pat)(
+      onVar = _ => Nil,
+      onCon = (name, _) => List(name)
+    )
   
   private def checkUndefinedXformRefs(spec: LangSpec): ValidationResult =
     val definedXforms = spec.xforms.map(_.name).toSet
@@ -218,17 +231,16 @@ object LangValidator:
     
     ValidationResult(issues)
   
-  private def collectXformCalls(pat: MetaPattern): List[String] = pat match
-    case MetaPattern.PVar(_) => Nil
-    case MetaPattern.PCon(name, args) =>
-      // Xform calls look like "Xform.forward(...)" or "Xform.backward(...)"
-      val xformName = 
-        if name.endsWith(".forward") || name.endsWith(".backward") then
-          Some(name.dropRight(if name.endsWith(".forward") then 8 else 9))
-        else None
-      xformName.toList ++ args.flatMap(collectXformCalls)
-    case MetaPattern.PApp(f, a) => collectXformCalls(f) ++ collectXformCalls(a)
-    case MetaPattern.PSubst(body, _, repl) => collectXformCalls(body) ++ collectXformCalls(repl)
+  private def collectXformCalls(pat: MetaPattern): List[String] =
+    foldPattern(pat)(
+      onVar = _ => Nil,
+      onCon = (name, _) => {
+        // Xform calls look like "Xform.forward(...)" or "Xform.backward(...)"
+        if name.endsWith(".forward") then List(name.dropRight(8))
+        else if name.endsWith(".backward") then List(name.dropRight(9))
+        else Nil
+      }
+    )
   
   private def checkUndefinedRuleRefs(spec: LangSpec): ValidationResult =
     val definedRules = spec.rules.map(_.name).toSet
@@ -270,11 +282,11 @@ object LangValidator:
     // This should be a warning, not an error
     ValidationResult.empty // Skip for now - pattern vars make this complex
   
-  private def collectDefRefs(pat: MetaPattern): List[String] = pat match
-    case MetaPattern.PVar(name) => List(name)
-    case MetaPattern.PCon(_, args) => args.flatMap(collectDefRefs)
-    case MetaPattern.PApp(f, a) => collectDefRefs(f) ++ collectDefRefs(a)
-    case MetaPattern.PSubst(body, _, repl) => collectDefRefs(body) ++ collectDefRefs(repl)
+  private def collectDefRefs(pat: MetaPattern): List[String] =
+    foldPattern(pat)(
+      onVar = name => List(name),
+      onCon = (_, _) => Nil
+    )
   
   // ===========================================================================
   // Unused Item Checks (Warnings)
@@ -427,12 +439,11 @@ object LangValidator:
     
     ValidationResult(issues.toList)
   
-  private def collectPatternVars(pat: MetaPattern): Set[String] = pat match
-    case MetaPattern.PVar(name) => Set(name)
-    case MetaPattern.PCon(_, args) => args.flatMap(collectPatternVars).toSet
-    case MetaPattern.PApp(f, a) => collectPatternVars(f) ++ collectPatternVars(a)
-    case MetaPattern.PSubst(body, varName, repl) => 
-      collectPatternVars(body) ++ collectPatternVars(repl) - varName
+  private def collectPatternVars(pat: MetaPattern): Set[String] = 
+    foldPattern(pat)(
+      onVar = name => List(name),
+      onCon = (_, _) => Nil
+    ).toSet
   
   // ===========================================================================
   // Constructor Arity Checks
