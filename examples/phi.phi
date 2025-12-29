@@ -32,6 +32,41 @@ language Phi {
   attr freeVars : String* synthesized // Free variables (flows up)
 
   // =====================================================
+  // Attribute Equations
+  // =====================================================
+  //
+  // Define how attributes are computed for each constructor.
+  // Synthesized: attr name(Pattern) = computation
+  // Inherited (to child): attr name(Pattern) for child = computation
+
+  // Type of variable: look up in environment
+  attr type(PVar(x)) = lookup(x, env)
+
+  // Type of constructor: result type of constructor signature
+  attr type(PCon(name, args)) = resultType(lookupCon(name))
+
+  // Type of application: extract return type from function type
+  attr type(PApp(f, a)) = resultType(type(f))
+
+  // Type of lambda: arrow from param type to body type
+  attr type(PLam(x, body)) = TArrow(typeOf(x, env), type(body))
+
+  // Free variables of a variable: just that variable
+  attr freeVars(PVar(x)) = cons(x, nil)
+
+  // Free variables of constructor: union of children's free vars
+  attr freeVars(PCon(name, args)) = unionAll(map(freeVars, args))
+
+  // Free variables of application: union of f and a's free vars
+  attr freeVars(PApp(f, a)) = union(freeVars(f), freeVars(a))
+
+  // Free variables of lambda: remove bound var from body's free vars
+  attr freeVars(PLam(x, body)) = remove(x, freeVars(body))
+
+  // Pass extended environment to lambda body
+  attr env(PLam(x, body)) for body = extend(env, x, freshType)
+
+  // =====================================================
   // Language specification
   // =====================================================
 

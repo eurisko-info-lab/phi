@@ -104,6 +104,13 @@ def mergeSpecs(parent: LangSpec, child: LangSpec): LangSpec =
   val childConstructorNames = child.constructors.map(_.name).toSet
   val childSortNames = child.sorts.map(_.name).toSet
   val childAttrNames = child.attributes.map(_.name).toSet
+  // For attr equations, we key by (attrName, patternCon, forChild)
+  def eqKey(e: AttrEquation): (String, String, Option[String]) =
+    val patCon = e.pattern match
+      case MetaPattern.PCon(name, _) => name
+      case _ => ""
+    (e.attrName, patCon, e.forChild)
+  val childEqKeys = child.attrEquations.map(eqKey).toSet
   
   LangSpec(
     name = child.name,
@@ -116,5 +123,6 @@ def mergeSpecs(parent: LangSpec, child: LangSpec): LangSpec =
     strategies = parent.strategies ++ child.strategies,  // Child strategies override
     theorems = parent.theorems ++ child.theorems,
     attributes = parent.attributes.filterNot(a => childAttrNames.contains(a.name)) ++ child.attributes,
+    attrEquations = parent.attrEquations.filterNot(e => childEqKeys.contains(eqKey(e))) ++ child.attrEquations,
     parent = child.parent  // Keep the original parent reference
   )

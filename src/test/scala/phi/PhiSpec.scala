@@ -544,6 +544,73 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
         fail(s"Parse failed: $err")
   }
 
+  test("Parser should parse attribute equations") {
+    val input = """language Test {
+      sort Env
+      sort Type
+      sort Term
+      constructor Var : String -> Term
+      constructor Lam : String -> Term -> Term
+      attr env : Env inherited
+      attr type : Type synthesized
+      
+      // Synthesized equation
+      attr type(Var(x)) = lookup(x, env)
+      
+      // Inherited equation with for-clause
+      attr env(Lam(x, body)) for body = extend(env, x, freshType)
+    }"""
+    PhiParser.parse(input) match
+      case Right(spec) =>
+        spec.attrEquations.size shouldBe 2
+        
+        // Check synthesized equation
+        val typeEq = spec.attrEquations.find(_.attrName == "type").get
+        typeEq.forChild shouldBe None
+        typeEq.pattern match
+          case MetaPattern.PCon("Var", List(MetaPattern.PVar("x"))) => ()
+          case other => fail(s"Unexpected pattern: $other")
+        
+        // Check inherited equation
+        val envEq = spec.attrEquations.find(_.attrName == "env").get
+        envEq.forChild shouldBe Some("body")
+        envEq.pattern match
+          case MetaPattern.PCon("Lam", List(MetaPattern.PVar("x"), MetaPattern.PVar("body"))) => ()
+          case other => fail(s"Unexpected pattern: $other")
+      case Left(err) =>
+        fail(s"Parse failed: $err")
+  }
+
+  test("Attribute evaluator should compute synthesized attributes") {
+    val input = """language Test {
+      sort Type
+      sort Term
+      constructor Lit : Nat -> Term
+      constructor Add : Term -> Term -> Term
+      attr type : Type synthesized
+      
+      // Literals have type Int
+      attr type(Lit(n)) = TInt
+      // Add has type Int if both args have type Int
+      attr type(Add(a, b)) = TInt
+    }"""
+    
+    PhiParser.parse(input) match
+      case Right(spec) =>
+        val interp = LangInterpreter(spec)
+        
+        // Build term: Add(Lit(1), Lit(2))
+        val term = Val.VCon("Add", List(
+          Val.VCon("Lit", List(Val.VCon("succ", List(Val.VCon("zero", Nil))))),
+          Val.VCon("Lit", List(Val.VCon("succ", List(Val.VCon("succ", List(Val.VCon("zero", Nil)))))))
+        ))
+        
+        val result = interp.evalAttributes(term)
+        result.synthesized.get("type") shouldBe Some(Val.VCon("TInt", Nil))
+      case Left(err) =>
+        fail(s"Parse failed: $err")
+  }
+
   // ===========================================================================
   // 17. Grammar Parser Tests
   // ===========================================================================

@@ -97,6 +97,7 @@ object PhiParser extends RegexParsers:
           flat.collect { case (n: String, s: RewriteStrategy) => (n, s) }.toMap,
           flat.collect { case t: Theorem => t },
           flat.collect { case a: AttrSpec => a },
+          flat.collect { case e: AttrEquation => e },
           parent  // Store the parent language name
         )
     }
@@ -104,6 +105,7 @@ object PhiParser extends RegexParsers:
   def declaration: Parser[List[Any]] =
     sortDecl ^^ (List(_)) | 
     constructorBlock | 
+    attrEquation ^^ (List(_)) |    // Attribute equations (before attrDecl - both start with ATTR)
     attrDecl ^^ (List(_)) |        // Attribute declarations
     xformDecl ^^ (List(_)) | 
     changeDecl ^^ (List(_)) | 
@@ -125,7 +127,41 @@ object PhiParser extends RegexParsers:
   
   def attrFlow: Parser[AttrFlow] =
     INHERITED ^^^ AttrFlow.Inherited | SYNTHESIZED ^^^ AttrFlow.Synthesized
-  
+
+  // Attribute equation: attr name(Pattern) [for child] = computation
+  // Synthesized: attr type(Var(x)) = lookup(x, env)
+  // Inherited:   attr env(Lam(x, body)) for body = extend(env, x, freshType)
+  def attrEquation: Parser[AttrEquation] =
+    ATTR ~> ident ~ ("(" ~> pattern <~ ")") ~ opt("for" ~> ident) ~ (EQUALS ~> attrComputation) ^^ {
+      case name ~ pat ~ forChild ~ comp => AttrEquation(name, pat, forChild, comp)
+    }
+
+  // Computation expression for attribute equations
+  // Allows: lookup(x, env), extend(env, x, t), type(f), etc.
+  def attrComputation: Parser[MetaPattern] =
+    attrComputationApp
+
+  def attrComputationApp: Parser[MetaPattern] =
+    attrComputationAtom ~ opt("(" ~> rep1sep(attrComputation, ",") <~ ")") ^^ {
+      case func ~ Some(args) => func match
+        case MetaPattern.PVar(name) => MetaPattern.PCon(name, args)
+        case MetaPattern.PCon(name, Nil) => MetaPattern.PCon(name, args)
+        case _ => args.foldLeft(func)((f, a) => MetaPattern.PCon("app", List(f, a)))
+      case atom ~ None => atom
+    }
+
+  def attrComputationAtom: Parser[MetaPattern] =
+    "(" ~> attrComputation <~ ")" |
+    number ^^ numeral |
+    nonKeywordIdent ^^ { name => 
+      // Uppercase identifiers > 1 char are constructors (like TInt, True)
+      // Single uppercase letters and lowercase are variables (x, A, env)
+      if name.length > 1 && name.headOption.exists(_.isUpper) && !isIndexedVar(name) then
+        MetaPattern.PCon(name, Nil)
+      else
+        MetaPattern.PVar(name)
+    }
+
   // Constructor declaration: either single line or block
   // Single: constructor Foo : A -> B
   // Block: constructor

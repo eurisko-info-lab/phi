@@ -23,6 +23,7 @@ case class LangSpec(
   strategies: Map[String, RewriteStrategy],
   theorems: List[Theorem] = Nil,
   attributes: List[AttrSpec] = Nil,  // Attribute declarations
+  attrEquations: List[AttrEquation] = Nil,  // Attribute computation rules
   parent: Option[String] = None  // For "extends" - parent language name
 )
 
@@ -55,6 +56,22 @@ case class AttrSpec(
 enum AttrFlow:
   case Inherited   // Flows from parent to children (down)
   case Synthesized // Flows from children to parent (up)
+
+/** 
+ * Attribute equation - defines how to compute an attribute.
+ * 
+ * Synthesized: attr type(Var(x)) = lookup(x, env)
+ *   - Computes attribute for matching pattern
+ * 
+ * Inherited (for child): attr env(Lam(x, body)) for body = extend(env, x, freshType)
+ *   - Computes inherited attribute passed to specific child
+ */
+case class AttrEquation(
+  attrName: String,           // e.g., "type", "env"
+  pattern: MetaPattern,       // e.g., Var(x), App(f, a)
+  forChild: Option[String],   // For inherited: which child gets this value (e.g., "body")
+  computation: MetaPattern    // e.g., lookup(x, env), extend(env, x, t)
+)
 
 case class Rule(
   name: String,
@@ -481,16 +498,178 @@ class LangInterpreter(spec: LangSpec):
     val clauses = ruleNames.flatMap(rules.get).flatten
     solve(goal, clauses).take(maxSolutions).toList
 
+  // ===========================================================================
+  // Attribute Evaluation
+  // ===========================================================================
+  
+  /** Index attribute equations by (attrName, constructorName) for fast lookup */
+  private val attrEqIndex: Map[(String, String), List[AttrEquation]] =
+    spec.attrEquations.groupBy { eq =>
+      val conName = eq.pattern match
+        case PCon(name, _) => name
+        case _ => ""
+      (eq.attrName, conName)
+    }
+  
+  /** Index attribute declarations by name */
+  private val attrDefs: Map[String, AttrSpec] =
+    spec.attributes.map(a => a.name -> a).toMap
+  
+  /** 
+   * Attributed value - a Val with computed attributes.
+   * inherited: attributes passed down from parent
+   * synthesized: attributes computed from children
+   */
+  case class AttrVal(
+    value: Val,
+    inherited: Map[String, Val] = Map.empty,
+    synthesized: Map[String, Val] = Map.empty
+  ):
+    def attr(name: String): Option[Val] =
+      synthesized.get(name).orElse(inherited.get(name))
+  
+  /**
+   * Evaluate all attributes on a term tree.
+   * 
+   * @param value The term to evaluate attributes on
+   * @param inherited Initial inherited attributes (from parent)
+   * @return The attributed term with all attributes computed
+   */
+  def evalAttributes(value: Val, inherited: Map[String, Val] = Map.empty): AttrVal =
+    value match
+      case VCon(name, args) =>
+        // 1. Find applicable equations for synthesized attributes
+        val synthEqs = spec.attributes.filter(_.flow == AttrFlow.Synthesized).flatMap { attrSpec =>
+          attrEqIndex.get((attrSpec.name, name))
+        }.flatten
+        
+        // 2. Find applicable equations for inherited attributes to pass to children
+        val inhEqs = spec.attributes.filter(_.flow == AttrFlow.Inherited).flatMap { attrSpec =>
+          attrEqIndex.get((attrSpec.name, name))
+        }.flatten
+        
+        // 3. Try to match the value against equations and extract bindings
+        def findBindings(eq: AttrEquation): Option[Map[String, Val]] =
+          matchPat(value, eq.pattern)
+        
+        // 4. Compute inherited attributes for each child
+        def computeChildInherited(childIndex: Int, childVal: Val, childVar: Option[String]): Map[String, Val] =
+          // Start with parent's inherited attributes
+          var childInh = inherited
+          
+          // Add any equations that target this specific child (via "for childVar")
+          for
+            eq <- inhEqs
+            forVar <- eq.forChild
+            if childVar.contains(forVar) || (childVar.isEmpty && args.length == 1)
+            bindings <- findBindings(eq)
+          do
+            // Also make inherited attrs available in bindings
+            val fullBindings = bindings ++ inherited.map { case (k, v) => k -> v }
+            val computed = instantiate(eq.computation, fullBindings)
+            childInh = childInh.updated(eq.attrName, computed)
+          
+          childInh
+        
+        // 5. Recursively evaluate children with their inherited attributes
+        // Extract child variable names from matching equation pattern
+        val childVars: List[Option[String]] = synthEqs.headOption.orElse(inhEqs.headOption).map { eq =>
+          eq.pattern match
+            case PCon(_, patArgs) => patArgs.map {
+              case PVar(v) => Some(v)
+              case _ => None
+            }
+            case _ => args.map(_ => None)
+        }.getOrElse(args.map(_ => None))
+        
+        val evaluatedChildren = args.zipWithIndex.map { case (child, idx) =>
+          val childVar = childVars.lift(idx).flatten
+          val childInh = computeChildInherited(idx, child, childVar)
+          evalAttributes(child, childInh)
+        }
+        
+        // 6. Compute synthesized attributes
+        var synth = Map.empty[String, Val]
+        for
+          eq <- synthEqs
+          bindings <- findBindings(eq)
+        do
+          // Build environment with:
+          // - Pattern bindings
+          // - Inherited attributes
+          // - Child synthesized attributes (via attr(child) references)
+          var env = bindings ++ inherited.map { case (k, v) => k -> v }
+          
+          // Add child attributes to environment
+          // For each binding that's a child, add its synthesized attrs as attrName_childVar
+          childVars.zip(evaluatedChildren).foreach { case (varOpt, childAttrVal) =>
+            varOpt.foreach { v =>
+              childAttrVal.synthesized.foreach { case (attrName, attrVal) =>
+                // Make child's synthesized attrs available as attrName(childVar) calls
+                // We'll handle this in instantiate via special "attr call" form
+                env = env.updated(s"${attrName}_$v", attrVal)
+              }
+            }
+          }
+          
+          val computed = instantiateWithAttrs(eq.computation, env, evaluatedChildren, childVars)
+          synth = synth.updated(eq.attrName, computed)
+        
+        AttrVal(VCon(name, evaluatedChildren.map(_.value)), inherited, synth)
+  
+  /**
+   * Instantiate a computation pattern, handling attribute references.
+   * 
+   * Attribute references like type(f) are resolved by looking up the
+   * synthesized attribute "type" on the child bound to "f".
+   */
+  private def instantiateWithAttrs(
+    p: MetaPattern,
+    env: Map[String, Val],
+    children: List[AttrVal],
+    childVars: List[Option[String]]
+  ): Val = p match
+    case PVar(name) =>
+      env.getOrElse(name, defs.get(name).map(instantiate(_, env)).getOrElse(
+        throw RuntimeException(s"Unbound: $name")))
+    
+    // Attribute call: attrName(childVar) -> lookup childVar's synthesized attr
+    case PCon(attrName, List(PVar(childVar))) if attrDefs.contains(attrName) =>
+      // Find the child bound to childVar and get its attribute
+      childVars.zip(children).find(_._1.contains(childVar)) match
+        case Some((_, childAttrVal)) =>
+          childAttrVal.synthesized.getOrElse(attrName,
+            throw RuntimeException(s"Attribute $attrName not found on $childVar"))
+        case None =>
+          // Not a child reference - try as regular constructor
+          env.get(s"${attrName}_$childVar").getOrElse(
+            VCon(attrName, List(instantiateWithAttrs(PVar(childVar), env, children, childVars)))
+          )
+    
+    case PCon(name, args) =>
+      VCon(name, args.map(instantiateWithAttrs(_, env, children, childVars)))
+    
+    case PApp(func, arg) =>
+      VCon("app", List(
+        instantiateWithAttrs(func, env, children, childVars),
+        instantiateWithAttrs(arg, env, children, childVars)
+      ))
+    
+    case PSubst(body, varName, replacement) =>
+      val bodyVal = instantiateWithAttrs(body, env, children, childVars)
+      val replVal = instantiateWithAttrs(replacement, env, children, childVars)
+      substitute(bodyVal, varName, replVal)
+
   
   /** Apply parsing rules exhaustively until no more match */
-  def applyParseRules(tokens: Val, rules: List[Rule]): Val =
+  def applyParseRules(tokens: Val, parseRules: List[Rule]): Val =
     var current = tokens
     var changed = true
     var steps = 0
     val maxSteps = 10000
     
     // Collect all rule cases
-    val allCases = rules.flatMap(_.cases)
+    val allCases = parseRules.flatMap(_.cases)
     
     while changed && steps < maxSteps do
       changed = false
@@ -500,8 +679,6 @@ class LangInterpreter(spec: LangSpec):
           changed = true
           steps += 1
         case None => ()
-    
-    current
     
     current
 
