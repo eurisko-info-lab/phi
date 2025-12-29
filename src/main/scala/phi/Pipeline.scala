@@ -1,5 +1,7 @@
 package phi
 
+import scala.annotation.tailrec
+
 /**
  * INTERTWINING RULES - End-to-end pipeline demonstration
  * 
@@ -47,41 +49,37 @@ object Pipeline:
     // Expression = Or
     def parseExpr(): Either[String, Term[LC]] =
       skipWs()
-      if atEnd then return Left("Unexpected end of input")
-      parseOr()
+      if atEnd then Left("Unexpected end of input")
+      else parseOr()
     
     // Or = And ('|' And)*
     private def parseOr(): Either[String, Term[LC]] =
       parseAnd().flatMap { left =>
-        var result = left
-        var continue = true
-        while continue do
+        @tailrec def loop(result: Term[LC]): Either[String, Term[LC]] =
           skipWs()
           if !atEnd && peek == '|' then
             advance()
             parseAnd() match
               case Right(right) =>
-                result = Term.Done(LC.Prim("|", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
-              case Left(e) => return Left(e)
-          else continue = false
-        Right(result)
+                loop(Term.Done(LC.Prim("|", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?"))))))
+              case Left(e) => Left(e)
+          else Right(result)
+        loop(left)
       }
     
     // And = Comparison ('&' Comparison)*
     private def parseAnd(): Either[String, Term[LC]] =
       parseComparison().flatMap { left =>
-        var result = left
-        var continue = true
-        while continue do
+        @tailrec def loop(result: Term[LC]): Either[String, Term[LC]] =
           skipWs()
           if !atEnd && peek == '&' then
             advance()
             parseComparison() match
               case Right(right) =>
-                result = Term.Done(LC.Prim("&", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
-              case Left(e) => return Left(e)
-          else continue = false
-        Right(result)
+                loop(Term.Done(LC.Prim("&", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?"))))))
+              case Left(e) => Left(e)
+          else Right(result)
+        loop(left)
       }
     
     // Comparison = Additive (('=' | '!=' | '<' | '>' | '<=' | '>=') Additive)?
@@ -107,35 +105,31 @@ object Pipeline:
     // Additive = Multiplicative (('+' | '-') Multiplicative)*
     private def parseAdditive(): Either[String, Term[LC]] =
       parseMultiplicative().flatMap { left =>
-        var result = left
-        var continue = true
-        while continue do
+        @tailrec def loop(result: Term[LC]): Either[String, Term[LC]] =
           skipWs()
           if !atEnd && (peek == '+' || peek == '-') then
             val op = advance().toString
             parseMultiplicative() match
               case Right(right) =>
-                result = Term.Done(LC.Prim(op, List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
-              case Left(e) => return Left(e)
-          else continue = false
-        Right(result)
+                loop(Term.Done(LC.Prim(op, List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?"))))))
+              case Left(e) => Left(e)
+          else Right(result)
+        loop(left)
       }
     
     // Multiplicative = Application (('*' | '/') Application)*
     private def parseMultiplicative(): Either[String, Term[LC]] =
       parseApplication().flatMap { left =>
-        var result = left
-        var continue = true
-        while continue do
+        @tailrec def loop(result: Term[LC]): Either[String, Term[LC]] =
           skipWs()
           if !atEnd && (peek == '*' || peek == '/') then
             val op = advance().toString
             parseApplication() match
               case Right(right) =>
-                result = Term.Done(LC.Prim(op, List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
-              case Left(e) => return Left(e)
-          else continue = false
-        Right(result)
+                loop(Term.Done(LC.Prim(op, List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?"))))))
+              case Left(e) => Left(e)
+          else Right(result)
+        loop(left)
       }
     
     // Application = Atom+
@@ -175,36 +169,32 @@ object Pipeline:
     
     private def parseIfOr(): Either[String, Term[LC]] =
       parseIfAnd().flatMap { left =>
-        var result = left
-        var continue = true
-        while continue do
+        @tailrec def loop(result: Term[LC]): Either[String, Term[LC]] =
           skipWs()
-          if atEnd || lookingAtKeyword() then continue = false
+          if atEnd || lookingAtKeyword() then Right(result)
           else if peek == '|' then
             advance()
             parseIfAnd() match
               case Right(right) =>
-                result = Term.Done(LC.Prim("|", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
-              case Left(e) => return Left(e)
-          else continue = false
-        Right(result)
+                loop(Term.Done(LC.Prim("|", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?"))))))
+              case Left(e) => Left(e)
+          else Right(result)
+        loop(left)
       }
     
     private def parseIfAnd(): Either[String, Term[LC]] =
       parseIfComparison().flatMap { left =>
-        var result = left
-        var continue = true
-        while continue do
+        @tailrec def loop(result: Term[LC]): Either[String, Term[LC]] =
           skipWs()
-          if atEnd || lookingAtKeyword() then continue = false
+          if atEnd || lookingAtKeyword() then Right(result)
           else if peek == '&' then
             advance()
             parseIfComparison() match
               case Right(right) =>
-                result = Term.Done(LC.Prim("&", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
-              case Left(e) => return Left(e)
-          else continue = false
-        Right(result)
+                loop(Term.Done(LC.Prim("&", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?"))))))
+              case Left(e) => Left(e)
+          else Right(result)
+        loop(left)
       }
     
     private def parseIfComparison(): Either[String, Term[LC]] =
@@ -230,36 +220,32 @@ object Pipeline:
     
     private def parseIfAdditive(): Either[String, Term[LC]] =
       parseIfMultiplicative().flatMap { left =>
-        var result = left
-        var continue = true
-        while continue do
+        @tailrec def loop(result: Term[LC]): Either[String, Term[LC]] =
           skipWs()
-          if atEnd || lookingAtKeyword() then continue = false
+          if atEnd || lookingAtKeyword() then Right(result)
           else if peek == '+' || peek == '-' then
             val op = advance().toString
             parseIfMultiplicative() match
               case Right(right) =>
-                result = Term.Done(LC.Prim(op, List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
-              case Left(e) => return Left(e)
-          else continue = false
-        Right(result)
+                loop(Term.Done(LC.Prim(op, List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?"))))))
+              case Left(e) => Left(e)
+          else Right(result)
+        loop(left)
       }
     
     private def parseIfMultiplicative(): Either[String, Term[LC]] =
       parseIfApplication().flatMap { left =>
-        var result = left
-        var continue = true
-        while continue do
+        @tailrec def loop(result: Term[LC]): Either[String, Term[LC]] =
           skipWs()
-          if atEnd || lookingAtKeyword() then continue = false
+          if atEnd || lookingAtKeyword() then Right(result)
           else if peek == '*' || peek == '/' then
             val op = advance().toString
             parseIfApplication() match
               case Right(right) =>
-                result = Term.Done(LC.Prim(op, List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
-              case Left(e) => return Left(e)
-          else continue = false
-        Right(result)
+                loop(Term.Done(LC.Prim(op, List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?"))))))
+              case Left(e) => Left(e)
+          else Right(result)
+        loop(left)
       }
     
     private def parseIfApplication(): Either[String, Term[LC]] =
@@ -279,8 +265,8 @@ object Pipeline:
     
     private def parseIfAtom(): Either[String, Term[LC]] =
       skipWs()
-      if atEnd then return Left("Unexpected end of input in if")
-      peek match
+      if atEnd then Left("Unexpected end of input in if")
+      else peek match
         case '(' =>
           advance()
           val result = parseExpr()
@@ -306,48 +292,44 @@ object Pipeline:
     
     private def parseLetAdditive(): Either[String, Term[LC]] =
       parseLetMultiplicative().flatMap { left =>
-        var result = left
-        var continue = true
-        while continue do
+        @tailrec def loop(result: Term[LC]): Either[String, Term[LC]] =
           skipWs()
-          if atEnd then continue = false
+          if atEnd then Right(result)
           else if peek == '+' then
             advance()
             parseLetMultiplicative() match
               case Right(right) =>
-                result = Term.Done(LC.Prim("+", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
-              case Left(err) => return Left(err)
+                loop(Term.Done(LC.Prim("+", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?"))))))
+              case Left(err) => Left(err)
           else if peek == '-' then
             advance()
             parseLetMultiplicative() match
               case Right(right) =>
-                result = Term.Done(LC.Prim("-", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
-              case Left(err) => return Left(err)
-          else continue = false
-        Right(result)
+                loop(Term.Done(LC.Prim("-", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?"))))))
+              case Left(err) => Left(err)
+          else Right(result)
+        loop(left)
       }
     
     private def parseLetMultiplicative(): Either[String, Term[LC]] =
       parseLetApplication().flatMap { left =>
-        var result = left
-        var continue = true
-        while continue do
+        @tailrec def loop(result: Term[LC]): Either[String, Term[LC]] =
           skipWs()
-          if atEnd then continue = false
+          if atEnd then Right(result)
           else if peek == '*' then
             advance()
             parseLetApplication() match
               case Right(right) =>
-                result = Term.Done(LC.Prim("*", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
-              case Left(err) => return Left(err)
+                loop(Term.Done(LC.Prim("*", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?"))))))
+              case Left(err) => Left(err)
           else if peek == '/' then
             advance()
             parseLetApplication() match
               case Right(right) =>
-                result = Term.Done(LC.Prim("/", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
-              case Left(err) => return Left(err)
-          else continue = false
-        Right(result)
+                loop(Term.Done(LC.Prim("/", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?"))))))
+              case Left(err) => Left(err)
+          else Right(result)
+        loop(left)
       }
     
     private def parseLetApplication(): Either[String, Term[LC]] =
@@ -378,9 +360,8 @@ object Pipeline:
     
     private def parseLetAtom(): Either[String, Term[LC]] =
       skipWs()
-      if atEnd then return Left("Unexpected end of input")
-      
-      peek match
+      if atEnd then Left("Unexpected end of input")
+      else peek match
         case 'λ' | '\\' =>
           advance()
           skipWs()
@@ -427,9 +408,8 @@ object Pipeline:
     // Atom = Var | Lit | '(' Expr ')' | Lambda | Let | If | Hole
     private def parseAtom(): Either[String, Term[LC]] =
       skipWs()
-      if atEnd then return Left("Unexpected end of input")
-      
-      peek match
+      if atEnd then Left("Unexpected end of input")
+      else peek match
         // Lambda: λx.body or \x.body
         case 'λ' | '\\' =>
           advance()
