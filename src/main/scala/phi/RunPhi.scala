@@ -5,9 +5,12 @@ import java.nio.file.{Files, Paths, Path}
 /**
  * CLI for running Phi language specifications.
  * 
- * Usage: sbt "runMain phi.RunPhi examples/stlc-nat.phi fib5"
+ * Usage: 
+ *   sbt "runMain phi.RunPhi examples/stlc-nat.phi fib5"  -- run definition
+ *   sbt "runMain phi.RunPhi examples/scala.phi -"        -- validate only
  */
 @main def RunPhi(specFile: String, defName: String): Unit =
+  val validateOnly = defName == "-" || defName == ""
   println(s"=== Phi Language Runner ===")
   println(s"Loading: $specFile")
   
@@ -35,6 +38,11 @@ import java.nio.file.{Files, Paths, Path}
       println(s"  Strategies: ${spec.strategies.keys.mkString(", ")}")
       println()
       
+      // If no defName, just validate
+      if validateOnly then
+        println("✓ Validation successful")
+        return
+      
       // Run
       val interp = LangInterpreter(spec)
       
@@ -57,9 +65,9 @@ import java.nio.file.{Files, Paths, Path}
           println(s"Error: ${e.getMessage}")
           e.printStackTrace()
 
-/** Parse a spec file and resolve inheritance */
+/** Parse a spec file and resolve inheritance and imports */
 def parseSpecWithInheritance(specFile: String): Either[String, LangSpec] =
-  val basePath = Paths.get(specFile).getParent
+  val basePath = Option(Paths.get(specFile).getParent).getOrElse(Paths.get("."))
   
   def parseFile(file: String): Either[String, LangSpec] =
     val source = try
@@ -69,6 +77,24 @@ def parseSpecWithInheritance(specFile: String): Either[String, LangSpec] =
         return Left(s"Error reading $file: ${e.getMessage}")
     
     PhiParser.parse(source)
+  
+  def resolveImports(spec: LangSpec, visited: Set[String]): Either[String, LangSpec] =
+    if spec.imports.isEmpty then
+      Right(spec)
+    else
+      spec.imports.foldLeft(Right(spec): Either[String, LangSpec]) { (acc, imp) =>
+        acc.flatMap { currentSpec =>
+          val importPath = basePath.resolve(imp.path).toString
+          if visited.contains(importPath) then
+            Left(s"Circular import: ${visited.mkString(" -> ")} -> ${imp.path}")
+          else
+            for
+              importedSpec <- parseFile(importPath)
+              resolvedImport <- resolveImports(importedSpec, visited + importPath)
+              merged = mergeImport(currentSpec, resolvedImport, imp)
+            yield merged
+        }
+      }
   
   def resolveParent(spec: LangSpec, visited: Set[String]): Either[String, LangSpec] =
     spec.parent match
@@ -93,8 +119,43 @@ def parseSpecWithInheritance(specFile: String): Either[String, LangSpec] =
   
   for
     spec <- parseFile(specFile)
-    resolved <- resolveParent(spec, Set.empty)
+    withImports <- resolveImports(spec, Set(specFile))
+    resolved <- resolveParent(withImports, Set.empty)
   yield resolved
+
+/** Merge imported spec into current spec based on import selectors */
+def mergeImport(current: LangSpec, imported: LangSpec, imp: ImportDecl): LangSpec =
+  val prefix = imp.alias.map(_ + ".").getOrElse("")
+  
+  // Filter imported items by selectors (empty = import all)
+  def shouldImport(name: String): Boolean =
+    imp.selectors.isEmpty || imp.selectors.contains(name)
+  
+  // Add prefix if alias is specified
+  def prefixName(name: String): String = prefix + name
+  
+  val importedSorts = imported.sorts.filter(s => shouldImport(s.name))
+    .map(s => if imp.alias.isDefined then s.copy(name = prefixName(s.name)) else s)
+  val importedCtors = imported.constructors.filter(c => shouldImport(c.name))
+    .map(c => if imp.alias.isDefined then c.copy(name = prefixName(c.name)) else c)
+  val importedXforms = imported.xforms.filter(x => shouldImport(x.name))
+    .map(x => if imp.alias.isDefined then x.copy(name = prefixName(x.name)) else x)
+  val importedChanges = imported.changes.filter(c => shouldImport(c.name))
+    .map(c => if imp.alias.isDefined then c.copy(name = prefixName(c.name)) else c)
+  val importedRules = imported.rules.filter(r => shouldImport(r.name.split("\\.").head))
+    .map(r => if imp.alias.isDefined then r.copy(name = prefixName(r.name)) else r)
+  val importedDefs = imported.defs.filter(d => shouldImport(d.name))
+    .map(d => if imp.alias.isDefined then d.copy(name = prefixName(d.name)) else d)
+  
+  current.copy(
+    sorts = current.sorts ++ importedSorts,
+    constructors = current.constructors ++ importedCtors,
+    xforms = current.xforms ++ importedXforms,
+    changes = current.changes ++ importedChanges,
+    rules = current.rules ++ importedRules,
+    defs = current.defs ++ importedDefs,
+    strategies = current.strategies ++ imported.strategies.view.filterKeys(shouldImport).toMap
+  )
 
 /** Merge parent spec into child (child overrides parent) */
 def mergeSpecs(parent: LangSpec, child: LangSpec): LangSpec =

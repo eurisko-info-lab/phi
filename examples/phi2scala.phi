@@ -1,0 +1,46 @@
+// =============================================================
+// Phi2Scala: Transform Phi specs to Scala code
+// =============================================================
+//
+// Demonstrates the import mechanism
+
+language Phi2Scala {
+
+  import "scala.phi" { Defn, Expr, TypeRef, CaseClass, SealedTrait }
+
+  // =============================================================
+  // Phi AST sorts (subset of phi.phi)
+  // =============================================================
+  
+  sort PhiSpec
+  sort PhiSort
+  sort PhiConstructor
+  sort PhiType
+
+  constructor MkSpec : String → PhiSort* → PhiConstructor* → PhiSpec
+  constructor MkSort : String → String* → PhiSort
+  constructor MkCtor : String → PhiType* → String → PhiConstructor
+  
+  // Phi types
+  constructor PSortRef : String → PhiType
+  constructor PArrow : PhiType → PhiType → PhiType
+  constructor PProduct : PhiType → PhiType → PhiType
+  constructor PListOf : PhiType → PhiType
+  constructor PTypeVar : String → PhiType
+
+  // =============================================================
+  // Transformations
+  // =============================================================
+  
+  xform Sort2Scala : PhiSort ⇄ Defn
+  xform Ctor2Scala : PhiConstructor ⇄ Defn  
+  xform Type2Scala : PhiType ⇄ TypeRef
+  xform Spec2Scala : PhiSpec ⇄ Defn*
+
+  // =============================================================
+  // Example: Create a case class using imported constructor
+  // =============================================================
+  
+  def example : Defn = CaseClass("Person", [], [])
+
+}

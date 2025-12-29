@@ -63,10 +63,12 @@ object PhiParser extends RegexParsers:
   def ATTR = "attr"
   def INHERITED = "inherited"
   def SYNTHESIZED = "synthesized"
+  def IMPORT = "import"
+  def AS = "as"
   
   val keywords = Set("language", "sort", "constructor", "xform", "change", "rule", "def", 
                      "repeat", "id", "where", "and", "token", "syntax", "grammar", "parse", "strategy", "theorem",
-                     "law", "attr", "inherited", "synthesized")
+                     "law", "attr", "inherited", "synthesized", "import")  // "as" not keyword - used as variable
   
   def ARROW: Parser[String] = "→" | "->"
   def BIARROW: Parser[String] = "⇄" | "<->"
@@ -102,11 +104,13 @@ object PhiParser extends RegexParsers:
           flat.collect { case l: Law => l },
           flat.collect { case a: AttrSpec => a },
           flat.collect { case e: AttrEquation => e },
-          parent  // Store the parent language name
+          parent,  // Store the parent language name
+          flat.collect { case i: ImportDecl => i }  // Imports
         )
     }
   
   def declaration: Parser[List[Any]] =
+    importDecl ^^ (List(_)) |      // Import declarations
     sortDecl ^^ (List(_)) | 
     constructorBlock | 
     attrEquation ^^ (List(_)) |    // Attribute equations (before attrDecl - both start with ATTR)
@@ -121,6 +125,15 @@ object PhiParser extends RegexParsers:
     tokenBlock ^^ (_ => Nil) |     // Parse but ignore token blocks for now
     syntaxDecl ^^ (_ => Nil) |     // Parse but ignore syntax decls
     grammarBlock ^^ (_ => Nil)     // Parse but ignore grammar blocks
+  
+  // Import declaration:
+  //   import "path/to/file.phi"
+  //   import "file.phi" { Sort1, Constructor1 }
+  //   import "file.phi" as Alias
+  def importDecl: Parser[ImportDecl] =
+    IMPORT ~> stringLit ~ opt("{" ~> rep1sep(ident, ",") <~ "}") ~ opt(AS ~> ident) ^^ {
+      case path ~ selectors ~ alias => ImportDecl(path, selectors.getOrElse(Nil), alias)
+    }
   
   def sortDecl: Parser[Sort] = 
     SORT ~> ident ~ opt("[" ~> rep1sep(ident, ",") <~ "]") ^^ {

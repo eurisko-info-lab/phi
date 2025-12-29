@@ -1522,6 +1522,167 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
   }
 
   // ===========================================================================
+  // 20.5. Scala.phi Tests
+  // ===========================================================================
+
+  test("scala.phi should parse successfully") {
+    import java.io.File
+    val source = scala.io.Source.fromFile(new File("examples/scala.phi")).mkString
+    val result = PhiParser.parseAll(PhiParser.spec, source)
+    result.successful shouldBe true
+  }
+
+  test("scala.phi should define expected sorts") {
+    import java.io.File
+    val source = scala.io.Source.fromFile(new File("examples/scala.phi")).mkString
+    val spec = PhiParser.parseAll(PhiParser.spec, source).get
+    
+    val sortNames = spec.sorts.map(_.name).toSet
+    sortNames should contain("Name")
+    sortNames should contain("TypeRef")
+    sortNames should contain("Expr")
+    sortNames should contain("Pattern")
+    sortNames should contain("Defn")
+    sortNames should contain("SourceFile")
+  }
+
+  test("scala.phi should define case class constructors") {
+    import java.io.File
+    val source = scala.io.Source.fromFile(new File("examples/scala.phi")).mkString
+    val spec = PhiParser.parseAll(PhiParser.spec, source).get
+    
+    val ctorNames = spec.constructors.map(_.name).toSet
+    ctorNames should contain("CaseClass")
+    ctorNames should contain("CaseClassExtends")
+    ctorNames should contain("SealedTrait")
+    ctorNames should contain("Enum")
+    ctorNames should contain("Object")
+  }
+
+  test("scala.phi should define expression constructors") {
+    import java.io.File
+    val source = scala.io.Source.fromFile(new File("examples/scala.phi")).mkString
+    val spec = PhiParser.parseAll(PhiParser.spec, source).get
+    
+    val ctorNames = spec.constructors.map(_.name).toSet
+    ctorNames should contain("EVar")
+    ctorNames should contain("ELit")
+    ctorNames should contain("EApp")
+    ctorNames should contain("EMatch")
+    ctorNames should contain("ELambda")
+    ctorNames should contain("EIf")
+  }
+
+  test("scala.phi should validate without errors") {
+    import java.io.File
+    val source = scala.io.Source.fromFile(new File("examples/scala.phi")).mkString
+    val spec = PhiParser.parseAll(PhiParser.spec, source).get
+    val result = LangValidator.validate(spec)
+    
+    result.errors shouldBe empty
+    // Warnings are expected (unused constructors for scaffold)
+  }
+
+  test("scala.phi CaseClass constructor should have correct signature") {
+    import java.io.File
+    val source = scala.io.Source.fromFile(new File("examples/scala.phi")).mkString
+    val spec = PhiParser.parseAll(PhiParser.spec, source).get
+    
+    val caseClass = spec.constructors.find(_.name == "CaseClass")
+    caseClass shouldBe defined
+    caseClass.get.returnSort shouldBe "Defn"
+    // CaseClass : String → TypeParam* → Param* → Defn
+    caseClass.get.params.size shouldBe 3
+  }
+
+  // ===========================================================================
+  // 20.6. Import Declaration Tests
+  // ===========================================================================
+
+  test("Parser should parse simple import") {
+    val source = """
+      |language Test {
+      |  import "base.phi"
+      |}
+    """.stripMargin
+    val result = PhiParser.parseAll(PhiParser.spec, source)
+    result.successful shouldBe true
+    result.get.imports.size shouldBe 1
+    result.get.imports.head.path shouldBe "base.phi"
+    result.get.imports.head.selectors shouldBe empty
+    result.get.imports.head.alias shouldBe None
+  }
+
+  test("Parser should parse import with selectors") {
+    val source = """
+      |language Test {
+      |  import "base.phi" { Sort1, Constructor1, Xform1 }
+      |}
+    """.stripMargin
+    val result = PhiParser.parseAll(PhiParser.spec, source)
+    result.successful shouldBe true
+    result.get.imports.head.selectors shouldBe List("Sort1", "Constructor1", "Xform1")
+  }
+
+  test("Parser should parse import with alias") {
+    val source = """
+      |language Test {
+      |  import "scala.phi" as S
+      |}
+    """.stripMargin
+    val result = PhiParser.parseAll(PhiParser.spec, source)
+    result.successful shouldBe true
+    result.get.imports.head.alias shouldBe Some("S")
+  }
+
+  test("Parser should parse multiple imports") {
+    val source = """
+      |language Test {
+      |  import "base.phi"
+      |  import "utils.phi" { Helper }
+      |  import "scala.phi" as S
+      |  
+      |  sort MySort
+      |}
+    """.stripMargin
+    val result = PhiParser.parseAll(PhiParser.spec, source)
+    result.successful shouldBe true
+    result.get.imports.size shouldBe 3
+    result.get.sorts.exists(_.name == "MySort") shouldBe true
+  }
+
+  // ===========================================================================
+  // 20b. Import Resolution Tests (file-based)
+  // ===========================================================================
+
+  test("Import resolution should merge sorts and constructors from imported file") {
+    // phi2scala.phi imports from scala.phi - test that imports are resolved
+    val result = parseSpecWithInheritance("examples/phi2scala.phi")
+    result.isRight shouldBe true
+    val spec = result.toOption.get
+    
+    // Should have local sorts
+    spec.sorts.exists(_.name == "PhiSpec") shouldBe true
+    spec.sorts.exists(_.name == "PhiType") shouldBe true
+    
+    // Should have imported sorts from scala.phi
+    spec.sorts.exists(_.name == "Defn") shouldBe true
+    spec.sorts.exists(_.name == "TypeRef") shouldBe true
+    
+    // Should have local constructors
+    spec.constructors.exists(_.name == "MkSpec") shouldBe true
+    spec.constructors.exists(_.name == "PSortRef") shouldBe true
+    
+    // Should have imported constructors from scala.phi (with selectors)
+    spec.constructors.exists(_.name == "CaseClass") shouldBe true
+    spec.constructors.exists(_.name == "SealedTrait") shouldBe true
+    
+    // Should NOT have non-selected constructors
+    spec.constructors.exists(_.name == "SimpleName") shouldBe false
+    spec.constructors.exists(_.name == "QualName") shouldBe false
+  }
+
+  // ===========================================================================
   // 21. Validation Tests
   // ===========================================================================
 

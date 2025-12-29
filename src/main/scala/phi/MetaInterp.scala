@@ -25,7 +25,15 @@ case class LangSpec(
   laws: List[Law] = Nil,         // Law declarations
   attributes: List[AttrSpec] = Nil,  // Attribute declarations
   attrEquations: List[AttrEquation] = Nil,  // Attribute computation rules
-  parent: Option[String] = None  // For "extends" - parent language name
+  parent: Option[String] = None,  // For "extends" - parent language name
+  imports: List[ImportDecl] = Nil // Import declarations
+)
+
+/** Import declaration */
+case class ImportDecl(
+  path: String,              // File path or module name
+  selectors: List[String],   // Specific items to import (empty = import all)
+  alias: Option[String]      // Optional alias for the import
 )
 
 case class Sort(name: String, typeParams: List[String] = Nil)
