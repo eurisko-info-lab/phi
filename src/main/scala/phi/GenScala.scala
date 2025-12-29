@@ -1,6 +1,6 @@
 package phi
 
-import java.nio.file.{Files, Paths}
+import java.nio.file.{Files, Paths, Path}
 import Val.*
 
 /**
@@ -9,6 +9,7 @@ import Val.*
  * Usage: sbt "runMain phi.GenScala examples/stlc-nat.phi"
  * 
  * Builds Scala AST (as Val), then pretty-prints using bidirectional syntax.
+ * Output goes to ./tmp/<language>.scala
  */
 @main def GenScala(specFile: String): Unit =
   parseSpecWithInheritance(specFile) match
@@ -19,12 +20,20 @@ import Val.*
       // Build Scala AST
       val scalaDefns = buildScalaAST(spec)
       
-      // Pretty-print each definition
-      println(s"// Generated from $specFile")
-      println(s"package ${spec.name.toLowerCase}")
-      println()
+      // Build output
+      val sb = new StringBuilder
+      sb.append(s"// Generated from $specFile\n")
+      sb.append(s"package ${spec.name.toLowerCase}\n\n")
       for defn <- scalaDefns do
-        println(showScalaDefn(defn))
+        sb.append(showScalaDefn(defn))
+        sb.append("\n")
+      
+      // Write to ./tmp
+      val outDir = Paths.get("tmp")
+      Files.createDirectories(outDir)
+      val outFile = outDir.resolve(s"${spec.name}.scala")
+      Files.writeString(outFile, sb.toString)
+      println(s"Generated: $outFile")
 
 /** Build Scala AST from Phi spec */
 def buildScalaAST(spec: LangSpec): List[Val] =

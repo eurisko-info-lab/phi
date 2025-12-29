@@ -188,6 +188,88 @@ language Phi {
   constructor TokEOF : Token                // end of input
 
   // =====================================================
+  // Syntax (bidirectional grammar)
+  // =====================================================
+  //
+  // Syntax declarations define bidirectional transformations
+  // between surface syntax and AST. The same rules are used
+  // for both parsing and pretty-printing.
+  //
+  // Format: constructor <-> "surface syntax pattern"
+  //
+  // Syntax elements:
+  //   "keyword"     - literal keyword or symbol
+  //   name          - bind/print a subterm
+  //   name*         - zero or more (list)
+  //   name?         - optional
+  //   a ~ b         - sequence
+  //   a | b         - choice
+  //   (a)           - grouping
+
+  // ----- Language Spec -----
+  // LangSpec(name, decls) <-> "language" name "{" decls* "}"
+  
+  // ----- Declarations -----
+  // DSort(name)                      <-> "sort" name
+  // DCon(name, ty)                   <-> "constructor" name ":" ty  
+  // DXform(name, src, tgt)           <-> "xform" name ":" src "⇄" tgt
+  // DChange(name, sort)              <-> "change" name ":" sort "⇄" sort
+  // DRule(name, dir, cases)          <-> "rule" name "{" cases* "}"
+  // DDef(name, body)                 <-> "def" name "=" body
+  // DStrat(name, strat)              <-> "strategy" name ":=" strat
+  // DAttr(name, ty, flow)            <-> "attr" name ":" ty flow
+  // DAttrEq(eq)                      <-> "attr" eq
+  
+  // ----- Types -----
+  // TName(n)                         <-> n
+  // TArrow(a, b)                     <-> a "→" b
+  // TProd(a, b)                      <-> a "×" b
+  // TList(a)                         <-> a "*"
+  
+  // ----- Patterns -----
+  // PVar(x)                          <-> x (lowercase)
+  // PCon(name, [])                   <-> name (uppercase, nullary)
+  // PCon(name, args)                 <-> name "(" args ")"
+  // PApp(f, a)                       <-> f a (juxtaposition)
+  // PSubst(body, x, repl)            <-> body "[" x ":=" repl "]"
+  // PLam(x, body)                    <-> "λ" x "." body
+  // PNum(n)                          <-> n (numeral sugar)
+  // cons(h, t)                       <-> "[" h "|" t "]"
+  // nil                              <-> "[]"
+  // pair(a, b)                       <-> "(" a "," b ")"
+  
+  // ----- Strategies -----
+  // SId                              <-> "id"
+  // SFail                            <-> "fail"
+  // SApply(name)                     <-> name
+  // SSeq(a, b)                       <-> a ";" b
+  // SChoice(a, b)                    <-> a "|" b
+  // SRepeat(s)                       <-> "repeat" s
+  // SAll(s)                          <-> "all" s
+  
+  // ----- Rule Cases -----
+  // RuleCase(lhs, rhs, [])           <-> lhs "↦" rhs
+  // RuleCase(lhs, rhs, guards)       <-> lhs "↦" rhs "where" guards
+  
+  // ----- Guards -----
+  // Guard("eq", a, b)                <-> a "=" b
+  // Guard("neq", a, b)               <-> a "≠" b
+  
+  // ----- Attribute Flow -----
+  // Inherited                        <-> "inherited"
+  // Synthesized                      <-> "synthesized"
+  
+  // ----- Attribute Equations -----
+  // AttrEq(name, pat, "", comp)      <-> name "(" pat ")" "=" comp
+  // AttrEq(name, pat, child, comp)   <-> name "(" pat ")" "for" child "=" comp
+  
+  // ----- Import -----
+  // DImport(path, [], None)          <-> "import" path
+  // DImport(path, sels, None)        <-> "import" path "{" sels "}"
+  // DImport(path, [], Some(alias))   <-> "import" path "as" alias
+  // DImport(path, sels, Some(alias)) <-> "import" path "{" sels "}" "as" alias
+
+  // =====================================================
   // Parsing as rewriting
   // =====================================================
   //
