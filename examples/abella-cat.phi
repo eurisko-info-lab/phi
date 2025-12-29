@@ -1,0 +1,147 @@
+// =======================================================
+// Abella-in-Phi: Categorical Proofs
+// =======================================================
+
+language AbellaCat {
+
+  // =====================================================
+  // Core sorts
+  // =====================================================
+  sort Term
+  sort Goal
+  sort Clause
+  sort Program
+
+  // =====================================================
+  // Lambda terms (λProlog foundation)
+  // =====================================================
+  constructor Var   : String → Term
+  constructor Const : String → Term
+  constructor Lam   : String → Term → Term
+  constructor App   : Term → Term → Term
+
+  // =====================================================
+  // Goals and clauses
+  // =====================================================
+  constructor True  : Goal
+  constructor And   : Goal → Goal → Goal
+  constructor Call  : Term → Goal
+
+  constructor Clause : Term → Goal → Clause
+  constructor Program : Clause* → Program
+
+  // =====================================================
+  // Substitution
+  // =====================================================
+  xform Subst : (String × Term) × Term ⇄ Term
+  rule Subst.forward {
+    ((x,v), Var(x))       ↦ v
+    ((x,v), Var(y))       ↦ Var(y)           where x ≠ y
+    ((x,v), Const(c))     ↦ Const(c)
+    ((x,v), Lam(y, t))    ↦ Lam(y, t)        where x = y
+    ((x,v), Lam(y, t))    ↦ Lam(y, Subst.forward((x,v), t)) where x ≠ y
+    ((x,v), App(f, a))    ↦ App(Subst.forward((x,v), f),
+                                Subst.forward((x,v), a))
+  }
+
+  // =====================================================
+  // Functoriality (categorical theorem)
+  // =====================================================
+  xform F : Term ⇄ Term
+  rule F.forward {
+    F.forward(Var(x))   ↦ Var(x)
+    F.forward(Const(c)) ↦ Const(c)
+    F.forward(Lam(x,t)) ↦ Lam(x, F.forward(t))
+    F.forward(App(f,a)) ↦ App(F.forward(f), F.forward(a))
+  }
+
+  /*
+  <lean>
+  theorem F_compose : ∀ f g, F(App(f,g)) = App(F(f), F(g))
+  </lean>
+  */
+
+  // =====================================================
+  // Natural Transformation
+  // =====================================================
+  xform Eta : Term ⇄ Term
+  rule Eta.forward {
+    Eta.forward(Var(x))   ↦ Var(x)
+    Eta.forward(Const(c)) ↦ Const(c)
+    Eta.forward(Lam(x,t)) ↦ Lam(x, Eta.forward(t))
+    Eta.forward(App(f,a)) ↦ App(Eta.forward(f), Eta.forward(a))
+  }
+
+  /*
+  <lean>
+  theorem naturality : ∀ f, App(Eta(f), Eta(a)) = Eta(App(f,a))
+  </lean>
+  */
+
+  // =====================================================
+  // Composition (associativity)
+  // =====================================================
+  xform Compose : Term × Term ⇄ Term
+  rule Compose.forward {
+    Compose.forward(App(f,g), h) ↦ App(f, App(g,h))
+    Compose.forward(f, App(g,h)) ↦ App(App(f,g), h)
+  }
+
+  /*
+  <lean>
+  theorem assoc : ∀ f g h, Compose(f, Compose(g,h)) = Compose(Compose(f,g), h)
+  </lean>
+  */
+
+  // =====================================================
+  // Clause solving (λProlog foundation)
+  // =====================================================
+  xform Solve : Program × Goal ⇄ Goal
+  rule Solve.forward {
+    (P, True) ↦ True
+    (P, And(g1,g2)) ↦ And(Solve.forward(P,g1), Solve.forward(P,g2))
+    (Program(cs), Call(t)) ↦ SolveClauses.forward(cs,t)
+  }
+
+  xform SolveClauses : Clause* × Term ⇄ Goal
+  rule SolveClauses.forward {
+    (cons(Clause(h,b),rest), t) ↦ Solve.forward(Program(cons(Clause(h,b),rest)),
+                                                 applySubsts.forward(Unify.forward(h,t), b))
+    (cons(_,rest), t) ↦ SolveClauses.forward(rest,t)
+  }
+
+  // =====================================================
+  // Unification (higher-order patterns)
+  // =====================================================
+  xform Unify : Term × Term ⇄ (String × Term)*
+  rule Unify.forward {
+    (Var(x), t) ↦ cons((x,t), nil)
+    (t, Var(x)) ↦ cons((x,t), nil)
+    (Const(c1), Const(c2)) ↦ nil where c1 = c2
+    (App(f1,a1), App(f2,a2)) ↦ s1 ++ s2
+      where s1 = Unify.forward(f1,f2)
+        and s2 = Unify.forward(a1,a2)
+  }
+
+  // =====================================================
+  // Apply substitutions
+  // =====================================================
+  xform applySubsts : (String × Term)* × Goal ⇄ Goal
+  rule applySubsts.forward {
+    (nil,g) ↦ g
+    (cons((x,t),xs), g) ↦ applySubsts.forward(xs, substGoal.forward(x,t,g))
+  }
+
+  xform substGoal : String × Term × Goal ⇄ Goal
+  rule substGoal.forward {
+    (x,t,True) ↦ True
+    (x,t,And(g1,g2)) ↦ And(substGoal.forward(x,t,g1), substGoal.forward(x,t,g2))
+    (x,t,Call(tm)) ↦ Call(Subst.forward((x,t), tm))
+  }
+
+  // =====================================================
+  // Example: proof term using categorical theorems
+  // =====================================================
+  def proofFunctoriality : Goal =
+    Call(App(F.forward, App(Var("f"), Var("g"))))  // Apply functor to composition
+}

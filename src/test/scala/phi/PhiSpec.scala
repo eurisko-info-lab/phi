@@ -711,3 +711,50 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
     val spec = PhiParser.parseAll(PhiParser.spec, source).get
     spec.constructors.find(_.name == "F").get.params.length shouldBe 2
   }
+  
+  test("Phi unification should work with constructor terms") {
+    val source = """
+      language Logic {
+        sort Term
+        constructor Foo : Term → Term
+        constructor Bar : Term
+      }
+    """
+    val spec = PhiParser.parseAll(PhiParser.spec, source).get
+    val interp = LangInterpreter(spec)
+    
+    // Unify Foo(x) with Foo(Bar) should give x = Bar
+    val t1 = Val.VCon("Foo", List(Val.VCon("x", Nil)))
+    val t2 = Val.VCon("Foo", List(Val.VCon("Bar", Nil)))
+    
+    val result = interp.unify(t1, t2)
+    result shouldBe Some(Map("x" -> Val.VCon("Bar", Nil)))
+  }
+  
+  test("Phi goal solving should find solutions with backtracking") {
+    val source = """
+      language Logic {
+        sort Term
+        constructor Foo : Term → Term
+        constructor True : Term
+        
+        // Facts as rules: parent(a, b) ↦ True means "parent(a,b) is true"
+        rule Fact1 {
+          parent(alice, bob) ↦ True
+        }
+        rule Fact2 {
+          parent(bob, charlie) ↦ True
+        }
+      }
+    """
+    val spec = PhiParser.parseAll(PhiParser.spec, source).get
+    val interp = LangInterpreter(spec)
+    
+    // Query: parent(alice, x) should find x = bob
+    val goal = Val.VCon("parent", List(Val.VCon("alice", Nil), Val.VCon("x", Nil)))
+    val solutions = interp.query(goal)
+    
+    // Should find at least one solution
+    solutions should not be empty
+    solutions.head.get("x") shouldBe Some(Val.VCon("bob", Nil))
+  }

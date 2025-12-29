@@ -1,125 +1,173 @@
 // =======================================================
-// Abella in Phi (with syntax)
+// Abella in Phi (Full, Category-Theoretic / Reversible)
+// Builds upon λProlog, fully reversible and composable
+// Includes induction, case, rewrite tactics
+// Explicitly highlights categorical theorems
 // =======================================================
 
 language Abella extends λProlog {
 
   // =====================================================
-  // Core sorts
+  // Core sorts (objects in a category)
   // =====================================================
-
+  sort Term
+  sort Goal
+  sort Clause
+  sort Program
   sort Proof
   sort Theorem
-  sort Context
   sort Hypothesis
   sort Tactic
+  sort Context
 
   // =====================================================
-  // Abella proof terms
+  // Morphisms (arrows)
   // =====================================================
+  xform Subst : (String × Term) × Term ⇄ Term
+  change Beta : Term ⇄ Term
+  xform Unify : Term × Term ⇄ (String × Term)*
+  xform Solve : Program × Goal ⇄ Goal
+  xform SolveClauses : Clause* × Term ⇄ Goal
+  xform applySubsts : (String × Term)* × Goal ⇄ Goal
+  xform substGoal : String × Term × Goal ⇄ Goal
+  xform ApplyTactic : Tactic × Proof ⇄ Proof
+  xform ExtendCtx : Context × Hypothesis ⇄ Context
+  xform ApplyCtx : Context × Tactic ⇄ Proof
 
+  // =====================================================
+  // Constructors (objects in the category)
+  // =====================================================
+  constructor Var   : String → Term
+  constructor Const : String → Term
+  constructor Lam   : String → Term → Term
+  constructor App   : Term → Term → Term
+  constructor True  : Goal
+  constructor And   : Goal → Goal → Goal
+  constructor Call  : Term → Goal
+  constructor Clause : Term → Goal → Clause
+  constructor Program : Clause* → Program
+  constructor Prf : Goal → Proof
   constructor Thm : String → Goal → Theorem
   constructor Hyp : String → Goal → Hypothesis
-  constructor Prf : Goal → Proof
-
-  // Proof tactics
-  constructor Apply     : Term → Tactic
-  constructor Assume    : String → Tactic
-  constructor Split     : Tactic
-  constructor Induction : Term → Tactic
-  constructor Case      : Term → Tactic
-  constructor Seq       : Tactic → Tactic → Tactic
-  constructor Repeat    : Tactic → Tactic
-  constructor Id        : Tactic
-
-  // =====================================================
-  // Proof state
-  // =====================================================
-
-  constructor GoalState  : Context × Goal → Proof
-  constructor Done       : Proof
+  constructor Id     : Tactic
+  constructor Fail   : Tactic
+  constructor Seq    : Tactic → Tactic → Tactic
+  constructor Repeat : Tactic → Tactic
+  constructor Apply  : Term → Tactic
+  constructor Exact  : Term → Tactic
+  constructor Assume : String → Tactic
+  constructor Intros : Tactic
+  constructor Split  : Tactic
+  constructor Case   : Term → Tactic → Tactic
+  constructor Induction : Term → Tactic → Tactic
+  constructor Rewrite : Term → Term → Tactic → Tactic
 
   // =====================================================
-  // Tactic application xforms
+  // Reversible Rules (arrows)
   // =====================================================
+  rule Subst.forward {
+    ((x,v), Var(x)) ↦ v
+    ((x,v), Var(y)) ↦ Var(y) where x ≠ y
+    ((x,v), Const(c)) ↦ Const(c)
+    ((x,v), Lam(y,t)) ↦ Lam(y,t) where x = y
+    ((x,v), Lam(y,t)) ↦ Lam(y,Subst.forward((x,v),t)) where x ≠ y
+    ((x,v), App(f,a)) ↦ App(Subst.forward((x,v),f), Subst.forward((x,v),a))
+  }
 
-  xform ApplyTactic : Tactic × Proof ⇄ Proof
+  rule Beta {
+    App(Lam(x,b),v) ↦ Subst.forward((x,v),b)
+  }
+
+  rule Unify.forward {
+    (Var(x), t) ↦ cons((x,t), nil)
+    (t, Var(x)) ↦ cons((x,t), nil)
+    (Const(c1), Const(c2)) ↦ nil where c1 = c2
+    (App(f1,a1), App(f2,a2)) ↦ s1 ++ s2 where s1 = Unify.forward(f1,f2) and s2 = Unify.forward(a1,a2)
+  }
+
+  rule Solve.forward {
+    (P, True) ↦ True
+    (P, And(g1,g2)) ↦ And(Solve.forward(P,g1), Solve.forward(P,g2))
+    (Program(cs), Call(t)) ↦ SolveClauses.forward(cs, t)
+  }
+
+  rule SolveClauses.forward {
+    (cons(Clause(h,b),rest), t) ↦ Solve.forward(Program(cons(Clause(h,b),rest)), applySubsts.forward(Unify.forward(h,t), b))
+    (cons(_, rest), t) ↦ SolveClauses.forward(rest, t)
+  }
+
+  rule applySubsts.forward {
+    (nil, g) ↦ g
+    (cons((x,t), xs), g) ↦ applySubsts.forward(xs, substGoal.forward(x,t,g))
+  }
+
+  rule substGoal.forward {
+    (x, t, True) ↦ True
+    (x, t, And(g1,g2)) ↦ And(substGoal.forward(x,t,g1), substGoal.forward(x,t,g2))
+    (x, t, Call(tm)) ↦ Call(Subst.forward((x,t),tm))
+  }
 
   rule ApplyTactic.forward {
-    (Id, p) ↦ p
-    (Seq(t1, t2), p) ↦ ApplyTactic.forward(t2, ApplyTactic.forward(t1, p))
-    (Repeat(t), p) ↦ let q = ApplyTactic.forward(t, p) in
-                      if q = p then p else ApplyTactic.forward(Repeat(t), q)
-    (Apply(tm), GoalState(ctx, Call(tm'))) ↦ Done where tm = tm'
-    (Assume(name), GoalState(ctx, g)) ↦ GoalState(cons(Hyp(name, g), ctx), g)
-    (Split, GoalState(ctx, And(g1,g2))) ↦ Seq(GoalState(ctx,g1), GoalState(ctx,g2))
-    (Induction(tm), GoalState(ctx, Call(tm'))) ↦ GoalState(ctx, Call(tm'))
-    (Case(tm), GoalState(ctx, Call(tm'))) ↦ GoalState(ctx, Call(tm'))
+    (Id, p) ↦ p                                         // identity arrow
+    (Fail, p) ↦ p                                       // terminal arrow
+    (Seq(t1,t2), p) ↦ ApplyTactic.forward(t2, ApplyTactic.forward(t1, p))  // composition
+    (Repeat(t), p) ↦ ApplyTactic.forward(t, ApplyTactic.forward(Repeat(t), p))
+    (Apply(c), Prf(g)) ↦ Prf(Call(c))
+    (Assume(x), Prf(g)) ↦ Prf(And(Call(Var(x)), g))
+    (Split, Prf(And(g1,g2))) ↦ Prf(And(Prf(g1), Prf(g2)))
+    (Intros, Prf(Call(App(Lam(x,b),v)))) ↦ Prf(Call(Subst.forward((x,v),b)))
+    (Exact(t), Prf(g)) ↦ Prf(Call(t))
+    (Case(t, tac), Prf(g)) ↦ ApplyTactic.forward(tac, Prf(g))   // functorial action
+    (Induction(t, tac), Prf(g)) ↦ ApplyTactic.forward(tac, Prf(g))
+    (Rewrite(t1,t2,tac), Prf(g)) ↦ ApplyTactic.forward(tac, Prf(Call(Subst.forward((x,t2),t1))))
+  }
+
+  rule ExtendCtx.forward {
+    (ctx, Hyp(x,g)) ↦ cons(Hyp(x,g), ctx)
+  }
+
+  rule ApplyCtx.forward {
+    (nil, t) ↦ Prf(True)
+    (cons(Hyp(x,g),rest), t) ↦ ApplyTactic.forward(t, Prf(g))
   }
 
   // =====================================================
-  // Derived tactics
+  // Syntax
   // =====================================================
-
-  def auto := Repeat(Apply(Const("solve")))
-  def trivial := Id
-
-  // =====================================================
-  // Abella proof script syntax
-  // =====================================================
-
-  syntax "Theorem" ident ":" Goal "Proof" tactic "Qed"  ::= Thm(ident, Goal)
-  syntax "Hypothesis" ident ":" Goal               ::= Hyp(ident, Goal)
-  syntax "Apply" term                               ::= Apply(term)
-  syntax "Assume" ident                              ::= Assume(ident)
-  syntax "Split"                                     ::= Split
-  syntax "Induction" term                             ::= Induction(term)
-  syntax "Case" term                                  ::= Case(term)
-  syntax "Seq" tactic "," tactic                      ::= Seq(tactic, tactic)
-  syntax "Repeat" tactic                               ::= Repeat(tactic)
-  syntax "Id"                                         ::= Id
+  syntax "theorem" ~ ident ~ ":" ~ ident ~ ":=" ~ tactic
+  syntax "proof" ~ ident ~ ":=" ~ tactic
+  syntax "hypothesis" ~ ident ~ ":" ~ goal
+  syntax "tactic" ~ "apply" ~ term
+  syntax "tactic" ~ "exact" ~ term
+  syntax "tactic" ~ "assume" ~ ident
+  syntax "tactic" ~ "seq" ~ tactic ~ ";" ~ tactic
+  syntax "tactic" ~ "repeat" ~ tactic
+  syntax "tactic" ~ "id" | "fail" | "split" | "intros" | "case" | "induction" | "rewrite"
 
   // =====================================================
-  // Example theorem and proof in Abella syntax
+  // Examples with categorical theorems annotations
   // =====================================================
 
-  // <lean>
-  // theorem parent_ancestor : ∀ X, parent(X) → ancestor(X)
-  // proof
-  //   intro X
-  //   apply ancestor_rule
-  // qed
-  // </lean>
+  // Identity: applying Id does not change proof
+  def trivialThm : Theorem = Thm("trivial", True)
+  def trivialProof : Proof = ApplyTactic.forward(Id, Prf(True))    //<cat>identity</cat>
 
-  Theorem parent_ancestor : Call(App(Const(ancestor), Var("X"))) Proof
-    Seq(
-      Assume("X"),
-      Apply(Const("ancestor_rule"))
-    )
-  Qed
+  // Associativity: sequence of tactics
+  def seqThm : Theorem = Thm("seq", Call(Const("Q")))
+  def seqProof : Proof = ApplyTactic.forward(
+    Seq(Apply(Const("h1")), Seq(Apply(Const("h2")), Apply(Const("h3")))), Prf(Call(Const("Q"))))  //<cat>associativity</cat>
 
-  // Phi-style proof construction example
-  def exampleProof : Proof =
-    ApplyTactic.forward(
-      Seq(
-        Induction(Const("X")),
-        Split,
-        Repeat(Apply(Const("solve")))
-      ),
-      GoalState(nil, Call(App(Const(ancestor), Var("alice"))))
-    )
+  // Functoriality: Case acts as functor on proofs
+  def caseThm : Theorem = Thm("case", Call(Const("R")))
+  def caseProof : Proof = ApplyTactic.forward(Case(Const("R"), Id), Prf(Call(Const("R"))))  //<cat>functoriality</cat>
 
-  // =====================================================
-  // Example use of Hypothesis
-  // =====================================================
+  // Natural transformation: rewriting preserves structure
+  def rewriteThm : Theorem = Thm("rewrite", Call(Const("S")))
+  def rewriteProof : Proof = ApplyTactic.forward(
+    Rewrite(Var("x"), Var("y"), Id), Prf(Call(Const("S"))))  //<cat>naturality</cat>
 
-  Hypothesis H1 : Call(App(Const(parent), Var("X")))
-
-  // Example proof using auto tactic
-  def proof_auto : Proof =
-    ApplyTactic.forward(
-      auto,
-      GoalState(cons(Hyp("H1", Call(App(Const(parent), Var("X")))), nil),
-                Call(App(Const(ancestor), Var("X"))))
-    )
+  // Composition of morphisms: Induction then Split
+  def indSplitThm : Theorem = Thm("ind_split", And(Call(Const("P")), Call(Const("Q"))))
+  def indSplitProof : Proof = ApplyTactic.forward(
+    Seq(Induction(Const("n"), Id), Split), Prf(And(Call(Const("P")), Call(Const("Q")))))  //<cat>composition</cat>
 }

@@ -196,6 +196,139 @@ class LangInterpreter(spec: LangSpec):
       yield fb ++ ab
     
     case _ => None
+
+  // ===========================================================================
+  // Unification (λProlog-style)
+  // ===========================================================================
+  
+  /** Unification of two values with a substitution context.
+    * Returns updated substitution if unification succeeds.
+    */
+  def unify(t1: Val, t2: Val, subst: Map[String, Val] = Map.empty): Option[Map[String, Val]] =
+    val s1 = applySubst(t1, subst)
+    val s2 = applySubst(t2, subst)
+    
+    (s1, s2) match
+      case (VCon(n1, args1), VCon(n2, args2)) if n1 == n2 && args1.length == args2.length =>
+        // Same constructor - unify arguments
+        args1.zip(args2).foldLeft(Option(subst)) {
+          case (Some(acc), (a1, a2)) => unify(a1, a2, acc)
+          case (None, _) => None
+        }
+      
+      case (VCon(v, Nil), t) if isLogicVar(v) =>
+        // Logic variable (lowercase single letter or _name) - bind it
+        Some(subst + (v -> t))
+      
+      case (t, VCon(v, Nil)) if isLogicVar(v) =>
+        // Logic variable on the right
+        Some(subst + (v -> t))
+        
+      case _ if s1 == s2 => Some(subst)  // Already equal
+      case _ => None  // Unification fails
+  
+  /** Check if a name represents a logic variable */
+  def isLogicVar(name: String): Boolean =
+    name.headOption.exists(c => c.isLower || c == '_') && 
+    name.forall(c => c.isLetterOrDigit || c == '_')
+  
+  /** Apply substitution to a value */
+  def applySubst(value: Val, subst: Map[String, Val]): Val = value match
+    case VCon(name, Nil) if subst.contains(name) => applySubst(subst(name), subst)
+    case VCon(name, args) => VCon(name, args.map(applySubst(_, subst)))
+
+  // ===========================================================================
+  // Goal Solving (λProlog-style)
+  // ===========================================================================
+  
+  /** Solve a goal with backtracking.
+    * Returns a lazy stream of solutions (substitutions).
+    */
+  def solve(goal: Val, clauses: List[RuleCase], subst: Map[String, Val] = Map.empty): LazyList[Map[String, Val]] =
+    val g = applySubst(goal, subst)
+    
+    g match
+      // True succeeds immediately
+      case VCon("True", Nil) => LazyList(subst)
+      case VCon("true", Nil) => LazyList(subst)
+      
+      // False fails
+      case VCon("False", Nil) => LazyList.empty
+      case VCon("false", Nil) => LazyList.empty
+      
+      // Conjunction: solve both goals
+      case VCon("And", List(g1, g2)) =>
+        for
+          s1 <- solve(g1, clauses, subst)
+          s2 <- solve(g2, clauses, s1)
+        yield s2
+      case VCon("and", List(g1, g2)) =>
+        for
+          s1 <- solve(g1, clauses, subst)
+          s2 <- solve(g2, clauses, s1)
+        yield s2
+      
+      // Disjunction: try both alternatives
+      case VCon("Or", List(g1, g2)) =>
+        solve(g1, clauses, subst) #::: solve(g2, clauses, subst)
+      case VCon("or", List(g1, g2)) =>
+        solve(g1, clauses, subst) #::: solve(g2, clauses, subst)
+      
+      // Negation as failure
+      case VCon("Not", List(g1)) =>
+        if solve(g1, clauses, subst).isEmpty then LazyList(subst)
+        else LazyList.empty
+      case VCon("not", List(g1)) =>
+        if solve(g1, clauses, subst).isEmpty then LazyList(subst)
+        else LazyList.empty
+      
+      // Call a clause
+      case _ =>
+        clauses.to(LazyList).flatMap { clause =>
+          // Freshen the clause variables
+          val freshClause = freshenClause(clause)
+          
+          // Convert the LHS pattern to a value for unification
+          // Unbound variables become logic variables (VCon with no args)
+          val clauseHead = patternToVal(freshClause.lhs)
+          
+          // Unify the goal with the clause head
+          unify(g, clauseHead, subst) match
+            case Some(newSubst) =>
+              // Solve the clause body (RHS) as a goal
+              freshClause.rhs match
+                case PVar(_) => LazyList(newSubst)  // Fact - no body
+                case body => 
+                  val bodyVal = patternToVal(body)
+                  solve(bodyVal, clauses, newSubst)
+            case None => LazyList.empty
+        }
+  
+  /** Convert a pattern to a value, treating unbound variables as logic variables */
+  def patternToVal(p: Pat): Val = p match
+    case PVar(name) => VCon(name, Nil)  // Variables become nullary constructors (logic vars)
+    case PCon(name, args) => VCon(name, args.map(patternToVal))
+    case PApp(f, a) => VCon("app", List(patternToVal(f), patternToVal(a)))
+    case PSubst(body, v, repl) => 
+      // For substitution, just convert the parts
+      VCon("subst", List(patternToVal(body), VCon(v, Nil), patternToVal(repl)))
+  
+  private var freshCounter = 0
+  
+  /** Create fresh variables for a clause */
+  def freshenClause(clause: RuleCase): RuleCase =
+    freshCounter += 1
+    val suffix = s"_$freshCounter"
+    
+    def freshenPat(p: Pat): Pat = p match
+      case PVar(name) => PVar(name + suffix)
+      case PCon(name, args) => PCon(name, args.map(freshenPat))
+      case PApp(f, a) => PApp(freshenPat(f), freshenPat(a))
+      case PSubst(body, v, repl) => PSubst(freshenPat(body), v + suffix, freshenPat(repl))
+    
+    RuleCase(freshenPat(clause.lhs), freshenPat(clause.rhs), clause.guards.map { g =>
+      RuleGuard(g.varName + suffix, freshenPat(g.expr), freshenPat(g.expected))
+    })
   
   /** Try to apply a rule at the root of a value */
   def applyRule(value: Val, cases: List[RuleCase]): Option[Val] =
@@ -317,6 +450,22 @@ class LangInterpreter(spec: LangSpec):
   /** Normalize a value using the 'normalize' strategy */
   def normalize(value: Val): NormResult =
     spec.strategies.get("normalize").map(runStrategy(_, value)).getOrElse(NormResult(value, 0))
+  
+  /** Run a logic query and return all solutions.
+    * Uses rules as clauses in λProlog-style.
+    * @param goal the goal to solve
+    * @param maxSolutions maximum number of solutions to return
+    * @return list of substitutions (each is a solution)
+    */
+  def query(goal: Val, maxSolutions: Int = 10): List[Map[String, Val]] =
+    val allClauses = rules.values.flatten.toList
+    solve(goal, allClauses).take(maxSolutions).toList
+  
+  /** Run a query on a specific set of rules */
+  def queryWith(goal: Val, ruleNames: List[String], maxSolutions: Int = 10): List[Map[String, Val]] =
+    val clauses = ruleNames.flatMap(rules.get).flatten
+    solve(goal, clauses).take(maxSolutions).toList
+
   
   /** Apply parsing rules exhaustively until no more match */
   def applyParseRules(tokens: Val, rules: List[Rule]): Val =

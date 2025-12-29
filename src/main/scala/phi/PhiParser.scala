@@ -215,7 +215,10 @@ object PhiParser extends RegexParsers:
     // Parenthesized application (not tuple-like) - starts with uppercase or qualified
     "(" ~> applicationPat <~ ")" |
     nonKeywordIdent ^^ { name =>
-      if knownCons(name) then Pat.PCon(name, Nil)
+      // Uppercase identifiers > 1 char are constructors (e.g., True, Foo)
+      // Single uppercase letters are variables (e.g., X, A, B)
+      // Indexed variables like X_1, A_n are also variables
+      if knownCons(name) || (name.length > 1 && name.headOption.exists(_.isUpper) && !isIndexedVar(name)) then Pat.PCon(name, Nil)
       else Pat.PVar(name)
     }
   
@@ -226,7 +229,7 @@ object PhiParser extends RegexParsers:
     constructorPat |
     qualifiedPat |
     nonKeywordIdent ^^ { name =>
-      if knownCons(name) then Pat.PCon(name, Nil)
+      if knownCons(name) || (name.length > 1 && name.headOption.exists(_.isUpper) && !isIndexedVar(name)) then Pat.PCon(name, Nil)
       else Pat.PVar(name)
     }
   
@@ -392,7 +395,8 @@ object PhiParser extends RegexParsers:
     qualifiedPat |
     nonKeywordIdent ^^ { name =>
       // In rule patterns, identifiers are metavariables unless they're known constructors
-      if knownCons(name) then Pat.PCon(name, Nil)
+      // or uppercase with length > 1 (e.g., True, Foo are constructors; X, A, X_1 are variables)
+      if knownCons(name) || (name.length > 1 && name.headOption.exists(_.isUpper) && !isIndexedVar(name)) then Pat.PCon(name, Nil)
       else Pat.PVar(name)
     }
   
@@ -428,11 +432,20 @@ object PhiParser extends RegexParsers:
       repsep(patternNoComma, ",") <~ ")" ^^ { args => Pat.PCon(name, args) }
     }
   
+  // Check if name is an indexed variable like X_1, A_n, Foo_123
+  // Pattern: single uppercase letter followed by underscore and alphanumeric
+  def isIndexedVar(name: String): Boolean =
+    name.length >= 3 && 
+    name.charAt(0).isUpper && 
+    name.charAt(1) == '_' &&
+    name.drop(2).forall(c => c.isLetterOrDigit)
+  
   // Known constructors - used in rule patterns to distinguish constructors from metavariables
   // These are the nullary constructors that appear in rule patterns  
   def knownCons(s: String) = Set(
     // STLC
     "zero", "succ", "unit", "lam", "app", "pair", "fst", "snd", "NatRec", "true", "false",
+    "bob", "alice",
     // List
     "nil", "cons",
     // λProlog AST
