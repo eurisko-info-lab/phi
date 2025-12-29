@@ -18,6 +18,9 @@ language Meta {
   sort Term
   sort List[A]
   
+  // Variable reference in terms
+  constructor Var : String → Term
+  
   // =============================================================
   // Core: Names, Types, Terms
   // =============================================================

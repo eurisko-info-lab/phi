@@ -404,17 +404,17 @@ language PhiMega extends Phi {
 
   xform ApplyAxis : TermLC × LC_Axis ⇄ TermLC
   rule ApplyAxis.forward {
-    ApplyAxis(t, TermArr)   ↦ TypeArrow.forward(t)
-    ApplyAxis(t, TermType)  ↦ TypeAbstraction.forward(t)
-    ApplyAxis(t, TermPi)    ↦ PiAbstraction.forward(t)
-    ApplyAxis(t, TermOmega) ↦ OmegaAbstraction.forward(t)
+    (t, TermArr)   ↦ TypeArrow.forward(t)
+    (t, TermType)  ↦ TypeAbstraction.forward(t)
+    (t, TermPi)    ↦ PiAbstraction.forward(t)
+    (t, TermOmega) ↦ OmegaAbstraction.forward(t)
   }
 
   rule ApplyAxis.backward {
-    ApplyAxis(t, TermArr)   ↦ TypeArrow.backward(t)
-    ApplyAxis(t, TermType)  ↦ TypeAbstraction.backward(t)
-    ApplyAxis(t, TermPi)    ↦ PiAbstraction.backward(t)
-    ApplyAxis(t, TermOmega) ↦ OmegaAbstraction.backward(t)
+    (t, TermArr)   ↦ TypeArrow.backward(t)
+    (t, TermType)  ↦ TypeAbstraction.backward(t)
+    (t, TermPi)    ↦ PiAbstraction.backward(t)
+    (t, TermOmega) ↦ OmegaAbstraction.backward(t)
   }
 
   // =====================================================
@@ -422,10 +422,10 @@ language PhiMega extends Phi {
   // =====================================================
   xform ComposeCorner : LC_Corner × LC_Corner ⇄ LC_Corner
   rule ComposeCorner.forward {
-    ComposeCorner(c1,c2) ↦ CornerCompose.forward(c1,c2)
+    (c1, c2) ↦ CornerCompose.forward(c1, c2)
   }
   rule ComposeCorner.backward {
-    ComposeCorner(c1,c2) ↦ CornerCompose.backward(c1,c2)
+    (c1, c2) ↦ CornerCompose.backward(c1, c2)
   }
 
   // =====================================================
