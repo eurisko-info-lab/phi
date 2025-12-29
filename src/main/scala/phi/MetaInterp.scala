@@ -26,8 +26,30 @@ case class LangSpec(
   attributes: List[AttrSpec] = Nil,  // Attribute declarations
   attrEquations: List[AttrEquation] = Nil,  // Attribute computation rules
   parent: Option[String] = None,  // For "extends" - parent language name
-  imports: List[ImportDecl] = Nil // Import declarations
+  imports: List[ImportDecl] = Nil, // Import declarations
+  grammars: Map[String, List[SyntaxRule]] = Map.empty  // Bidirectional grammar rules
 )
+
+/** Grammar rule for bidirectional parsing/printing (simple representation) */
+case class SyntaxRule(
+  tokens: List[SyntaxToken],  // LHS: sequence of tokens to match
+  constructor: String,         // RHS: constructor to build
+  args: List[SyntaxArg]       // Arguments to constructor (order matters)
+)
+
+/** Token in a syntax rule */
+enum SyntaxToken:
+  case Literal(s: String)      // "keyword" - literal text
+  case NonTerm(name: String, modifier: Option[String]) // name, name*, name+
+
+/** Argument in syntax rule RHS */
+enum SyntaxArg:
+  case Hole                              // _ placeholder
+  case Ref(name: String)                 // Reference to bound name
+  case Lit(value: String)                // Literal: "nil" for [], "none" for None
+  case StrLit(value: String)             // String literal: "eq" -> StrLit("eq")
+  case Wrap(wrapper: String, arg: SyntaxArg) // Wrapper: Some(x) -> Wrap("some", x)
+  case Con(name: String, args: List[SyntaxArg]) // Constructor: Foo(a, b)
 
 /** Import declaration */
 case class ImportDecl(

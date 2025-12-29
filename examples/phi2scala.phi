@@ -4,46 +4,38 @@
 //
 // Transforms Phi language specs to Scala 3 code.
 // Uses scala.phi for the target AST - pretty-printing is automatic.
+//
+// This file defines the xform rules that GenScala.scala interprets.
 
 language Phi2Scala {
 
+  import "phi.phi"
   import "scala.phi"
 
   // =============================================================
-  // Phi AST (from phi.phi)
+  // Transform: Phi Spec → Scala Source
   // =============================================================
   
-  sort Decl       // Phi declaration
-  sort Type       // Phi type expression
-  sort Pat        // Phi pattern
-  sort RuleDir    // Rule direction
-  sort RuleCase   // Rule case
+  xform Spec2Scala : Spec ⇄ SourceFile
   
-  // Declarations
-  constructor DSort : String → Decl
-  constructor DCon : String → Type → Decl
-  constructor DRule : String → RuleDir → RuleCase* → Decl
-  constructor DDef : String → Pat → Decl
-  constructor DXform : String → String → String → Decl
+  rule Spec2Scala.spec {
+    LangSpec(name, decls) ↦ 
+      SourceFile(name, [], Decls2Scala.forward(decls))
+  }
+
+  // =============================================================
+  // Transform: Phi Decl* → Scala Defn*
+  // =============================================================
   
-  // Rule directions
-  constructor Forward : RuleDir
-  constructor Backward : RuleDir
-  constructor Both : RuleDir
+  xform Decls2Scala : Decl* ⇄ Defn*
   
-  // Rule cases
-  constructor RuleCase : Pat → Pat → Guard* → RuleCase
+  rule Decls2Scala.nil {
+    [] ↦ []
+  }
   
-  // Types
-  constructor TName : String → Type
-  constructor TArrow : Type → Type → Type
-  constructor TProd : Type → Type → Type
-  constructor TList : Type → Type
-  
-  // Patterns
-  constructor PVar : String → Pat
-  constructor PCon : String → Pat* → Pat
-  constructor PApp : Pat → Pat → Pat
+  rule Decls2Scala.cons {
+    [d | ds] ↦ [Decl2Scala.forward(d) | Decls2Scala.forward(ds)]
+  }
 
   // =============================================================
   // Transform: Phi Decl → Scala Defn
@@ -51,18 +43,55 @@ language Phi2Scala {
   
   xform Decl2Scala : Decl ⇄ Defn
   
+  // Sort → sealed trait
   rule Decl2Scala.sort {
     DSort(name) ↦ SealedTrait(name, [])
   }
   
+  // Constructor with no args → case object
   rule Decl2Scala.con0 {
     DCon(name, TName(ret)) ↦ 
-      CaseClassExtends(name, [], [], TyName(SimpleName(ret)))
+      CaseObject(name, TyName(SimpleName(ret)))
   }
   
+  // Constructor with arrow type → case class
   rule Decl2Scala.conArrow {
     DCon(name, TArrow(arg, TName(ret))) ↦
       CaseClassExtends(name, [], [Param("arg0", Type2Scala.forward(arg))], TyName(SimpleName(ret)))
+  }
+  
+  // Constructor with nested arrows → case class with multiple params  
+  rule Decl2Scala.conArrow2 {
+    DCon(name, TArrow(a, TArrow(b, TName(ret)))) ↦
+      CaseClassExtends(name, [], 
+        [Param("arg0", Type2Scala.forward(a)), Param("arg1", Type2Scala.forward(b))], 
+        TyName(SimpleName(ret)))
+  }
+  
+  rule Decl2Scala.conArrow3 {
+    DCon(name, TArrow(a, TArrow(b, TArrow(c, TName(ret))))) ↦
+      CaseClassExtends(name, [], 
+        [Param("arg0", Type2Scala.forward(a)), 
+         Param("arg1", Type2Scala.forward(b)), 
+         Param("arg2", Type2Scala.forward(c))], 
+        TyName(SimpleName(ret)))
+  }
+  
+  rule Decl2Scala.conArrow4 {
+    DCon(name, TArrow(a, TArrow(b, TArrow(c, TArrow(d, TName(ret)))))) ↦
+      CaseClassExtends(name, [], 
+        [Param("arg0", Type2Scala.forward(a)), 
+         Param("arg1", Type2Scala.forward(b)), 
+         Param("arg2", Type2Scala.forward(c)),
+         Param("arg3", Type2Scala.forward(d))], 
+        TyName(SimpleName(ret)))
+  }
+  
+  // Xform declaration → method def (placeholder, actual rules needed separately)
+  rule Decl2Scala.xform {
+    DXform(name, src, tgt) ↦
+      MethodDef(name, [], [Param("input", TyName(SimpleName(src)))], 
+                TyName(SimpleName(tgt)), EVar("???"))
   }
 
   // =============================================================
@@ -97,18 +126,23 @@ language Phi2Scala {
     PVar(x) ↦ PVar(x)
   }
   
-  rule Pat2ScalaPat.con {
-    PCon(name, args) ↦ PCon(SimpleName(name), Pat2ScalaPatList.forward(args))
+  rule Pat2ScalaPat.con0 {
+    PCon(name, []) ↦ PVar(name)
   }
   
-  xform Pat2ScalaPatList : Pat* ⇄ Pattern*
+  rule Pat2ScalaPat.con {
+    PCon(name, args) ↦ PCon(SimpleName(name), Pats2ScalaPats.forward(args))
+      where args ≠ []
+  }
   
-  rule Pat2ScalaPatList.nil {
+  xform Pats2ScalaPats : Pat* ⇄ Pattern*
+  
+  rule Pats2ScalaPats.nil {
     [] ↦ []
   }
   
-  rule Pat2ScalaPatList.cons {
-    [p | ps] ↦ [Pat2ScalaPat.forward(p) | Pat2ScalaPatList.forward(ps)]
+  rule Pats2ScalaPats.cons {
+    [p | ps] ↦ [Pat2ScalaPat.forward(p) | Pats2ScalaPats.forward(ps)]
   }
 
   // =============================================================
@@ -121,33 +155,62 @@ language Phi2Scala {
     PVar(x) ↦ EVar(x)
   }
   
+  rule Pat2ScalaExpr.con0 {
+    PCon(name, []) ↦ EVar(name)
+  }
+  
   rule Pat2ScalaExpr.con {
-    PCon(name, args) ↦ EApp(EVar(name), Pat2ScalaExprList.forward(args))
+    PCon(name, args) ↦ EApp(EVar(name), Pats2ScalaExprs.forward(args))
+      where args ≠ []
   }
   
   rule Pat2ScalaExpr.app {
     PApp(f, a) ↦ EApp(Pat2ScalaExpr.forward(f), [Pat2ScalaExpr.forward(a)])
   }
   
-  xform Pat2ScalaExprList : Pat* ⇄ Expr*
+  xform Pats2ScalaExprs : Pat* ⇄ Expr*
   
-  rule Pat2ScalaExprList.nil {
+  rule Pats2ScalaExprs.nil {
     [] ↦ []
   }
   
-  rule Pat2ScalaExprList.cons {
-    [p | ps] ↦ [Pat2ScalaExpr.forward(p) | Pat2ScalaExprList.forward(ps)]
+  rule Pats2ScalaExprs.cons {
+    [p | ps] ↦ [Pat2ScalaExpr.forward(p) | Pats2ScalaExprs.forward(ps)]
   }
 
   // =============================================================
   // Transform: Rule Case → Scala Case
   // =============================================================
   
-  xform RuleCase2Scala : RuleCase ⇄ Case
+  xform RuleCase2ScalaCase : RuleCase ⇄ Case
   
-  rule RuleCase2Scala.simple {
+  rule RuleCase2ScalaCase.simple {
     RuleCase(lhs, rhs, []) ↦ 
       CaseSimple(Pat2ScalaPat.forward(lhs), Pat2ScalaExpr.forward(rhs))
+  }
+
+  // =============================================================
+  // Transform: Rule → Method with match
+  // =============================================================
+  
+  xform Rule2Method : DRule ⇄ MethodDef
+  
+  rule Rule2Method.forward {
+    DRule(name, Both, cases) ↦
+      MethodDef(name, [], 
+                [Param("input", TyName(SimpleName("Val")))],
+                TyName(SimpleName("Val")),
+                EMatch(EVar("input"), RuleCases2ScalaCases.forward(cases)))
+  }
+  
+  xform RuleCases2ScalaCases : RuleCase* ⇄ Case*
+  
+  rule RuleCases2ScalaCases.nil {
+    [] ↦ []
+  }
+  
+  rule RuleCases2ScalaCases.cons {
+    [rc | rcs] ↦ [RuleCase2ScalaCase.forward(rc) | RuleCases2ScalaCases.forward(rcs)]
   }
 
   // =============================================================
@@ -158,8 +221,8 @@ language Phi2Scala {
   def exSort : Decl = DSort("Term")
   def exSortScala : Defn = SealedTrait("Term", [])
   
-  // Example: DCon("Zero", TName("Term")) → case class Zero() extends Term
+  // Example: DCon("Zero", TName("Term")) → case object Zero extends Term
   def exCon : Decl = DCon("Zero", TName("Term"))
-  def exConScala : Defn = CaseClassExtends("Zero", [], [], TyName(SimpleName("Term")))
+  def exConScala : Defn = CaseObject("Zero", TyName(SimpleName("Term")))
 
 }

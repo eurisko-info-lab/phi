@@ -191,83 +191,98 @@ language Phi {
   // Syntax (bidirectional grammar)
   // =====================================================
   //
-  // Syntax declarations define bidirectional transformations
-  // between surface syntax and AST. The same rules are used
-  // for both parsing and pretty-printing.
-  //
-  // Format: constructor <-> "surface syntax pattern"
-  //
-  // Syntax elements:
-  //   "keyword"     - literal keyword or symbol
-  //   name          - bind/print a subterm
-  //   name*         - zero or more (list)
-  //   name?         - optional
-  //   a ~ b         - sequence
-  //   a | b         - choice
-  //   (a)           - grouping
+  // Grammar rules define bidirectional transformations between
+  // surface syntax and AST. The same rules are used for both
+  // parsing (text → AST) and pretty-printing (AST → text).
+
+  syntax name : String
+  syntax type : Type
+  syntax pat : Pat
+  syntax strat : Strat
+  syntax decl : Decl
+  syntax spec : Spec
 
   // ----- Language Spec -----
-  // LangSpec(name, decls) <-> "language" name "{" decls* "}"
-  
+  grammar spec {
+    "language" name "{" decl* "}"    => LangSpec
+  }
+
   // ----- Declarations -----
-  // DSort(name)                      <-> "sort" name
-  // DCon(name, ty)                   <-> "constructor" name ":" ty  
-  // DXform(name, src, tgt)           <-> "xform" name ":" src "⇄" tgt
-  // DChange(name, sort)              <-> "change" name ":" sort "⇄" sort
-  // DRule(name, dir, cases)          <-> "rule" name "{" cases* "}"
-  // DDef(name, body)                 <-> "def" name "=" body
-  // DStrat(name, strat)              <-> "strategy" name ":=" strat
-  // DAttr(name, ty, flow)            <-> "attr" name ":" ty flow
-  // DAttrEq(eq)                      <-> "attr" eq
-  
+  grammar decl {
+    "sort" name                      => DSort
+    "constructor" name ":" type      => DCon
+    "xform" name ":" name "⇄" name   => DXform
+    "change" name ":" name "⇄" name  => DChange
+    "rule" name "{" ruleCase* "}"    => DRule(_, Both, _)
+    "def" name "=" pat               => DDef
+    "strategy" name ":=" strat       => DStrat
+    "attr" name ":" type flow        => DAttr
+    "attr" attrEq                    => DAttrEq
+    "import" STRING                  => DImport(_, [], None)
+    "import" STRING "{" name* "}"    => DImport(_, _, None)
+    "import" STRING "as" name        => DImport(_, [], Some(_))
+  }
+
   // ----- Types -----
-  // TName(n)                         <-> n
-  // TArrow(a, b)                     <-> a "→" b
-  // TProd(a, b)                      <-> a "×" b
-  // TList(a)                         <-> a "*"
-  
+  grammar type {
+    name                             => TName
+    type "→" type                    => TArrow
+    type "×" type                    => TProd
+    type "*"                         => TList
+  }
+
   // ----- Patterns -----
-  // PVar(x)                          <-> x (lowercase)
-  // PCon(name, [])                   <-> name (uppercase, nullary)
-  // PCon(name, args)                 <-> name "(" args ")"
-  // PApp(f, a)                       <-> f a (juxtaposition)
-  // PSubst(body, x, repl)            <-> body "[" x ":=" repl "]"
-  // PLam(x, body)                    <-> "λ" x "." body
-  // PNum(n)                          <-> n (numeral sugar)
-  // cons(h, t)                       <-> "[" h "|" t "]"
-  // nil                              <-> "[]"
-  // pair(a, b)                       <-> "(" a "," b ")"
-  
+  grammar pat {
+    IDENT                            => PVar     // lowercase
+    CTOR                             => PCon(_, [])  // uppercase nullary
+    CTOR "(" pat* ")"                => PCon
+    pat pat                          => PApp
+    pat "[" name ":=" pat "]"        => PSubst
+    "λ" name "." pat                 => PLam
+    NAT                              => PNum
+    "[" pat "|" pat "]"              => cons
+    "[]"                             => nil
+    "(" pat "," pat ")"              => pair
+  }
+
   // ----- Strategies -----
-  // SId                              <-> "id"
-  // SFail                            <-> "fail"
-  // SApply(name)                     <-> name
-  // SSeq(a, b)                       <-> a ";" b
-  // SChoice(a, b)                    <-> a "|" b
-  // SRepeat(s)                       <-> "repeat" s
-  // SAll(s)                          <-> "all" s
-  
+  grammar strat {
+    "id"                             => SId
+    "fail"                           => SFail
+    name                             => SApply
+    strat ";" strat                  => SSeq
+    strat "|" strat                  => SChoice
+    "repeat" strat                   => SRepeat
+    "all" strat                      => SAll
+  }
+
   // ----- Rule Cases -----
-  // RuleCase(lhs, rhs, [])           <-> lhs "↦" rhs
-  // RuleCase(lhs, rhs, guards)       <-> lhs "↦" rhs "where" guards
-  
+  syntax ruleCase : RuleCase
+  grammar ruleCase {
+    pat "↦" pat                      => RuleCase(_, _, [])
+    pat "↦" pat "where" guard*       => RuleCase
+  }
+
   // ----- Guards -----
-  // Guard("eq", a, b)                <-> a "=" b
-  // Guard("neq", a, b)               <-> a "≠" b
-  
+  syntax guard : Guard
+  grammar guard {
+    pat "=" pat                      => Guard("eq", _, _)
+    pat "≠" pat                      => Guard("neq", _, _)
+  }
+
   // ----- Attribute Flow -----
-  // Inherited                        <-> "inherited"
-  // Synthesized                      <-> "synthesized"
-  
+  syntax flow : AttrFlow
+  grammar flow {
+    "inherited"                      => Inherited
+    "synthesized"                    => Synthesized
+  }
+
   // ----- Attribute Equations -----
-  // AttrEq(name, pat, "", comp)      <-> name "(" pat ")" "=" comp
-  // AttrEq(name, pat, child, comp)   <-> name "(" pat ")" "for" child "=" comp
-  
-  // ----- Import -----
-  // DImport(path, [], None)          <-> "import" path
-  // DImport(path, sels, None)        <-> "import" path "{" sels "}"
-  // DImport(path, [], Some(alias))   <-> "import" path "as" alias
-  // DImport(path, sels, Some(alias)) <-> "import" path "{" sels "}" "as" alias
+  syntax attrEq : AttrEquation
+  grammar attrEq {
+    name "(" pat ")" "=" pat                 => AttrEq(_, _, "", _)
+    name "(" pat ")" "for" name "=" pat      => AttrEq
+  }
 
   // =====================================================
   // Parsing as rewriting

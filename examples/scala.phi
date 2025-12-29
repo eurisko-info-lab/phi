@@ -176,6 +176,7 @@ language Scala {
   
   constructor CaseClass : String → TypeParam* → Param* → Defn
   constructor CaseClassExtends : String → TypeParam* → Param* → TypeRef → Defn
+  constructor CaseObject : String → TypeRef → Defn
   constructor SealedTrait : String → TypeParam* → Defn
   constructor Trait : String → TypeParam* → Defn
   constructor TraitExtends : String → TypeParam* → TypeRef* → Defn
@@ -187,49 +188,127 @@ language Scala {
   constructor ValDefInfer : String → Expr → Defn
   constructor MethodDef : String → TypeParam* → Param* → TypeRef → Expr → Defn
   constructor TypeAlias : String → TypeParam* → TypeRef → Defn
-  
-  // CaseClass(n, tps, ps)        <-> "case class " n tps "(" ps ")"
-  // CaseClassExtends(n, tps, ps, ext) <-> "case class " n tps "(" ps ") extends " ext
-  // SealedTrait(n, tps)          <-> "sealed trait " n tps
-  // Trait(n, tps)                <-> "trait " n tps
-  // TraitExtends(n, tps, exts)   <-> "trait " n tps " extends " exts
-  // Object(n, body)              <-> "object " n " {" body "}"
-  // ObjectExtends(n, exts, body) <-> "object " n " extends " exts " {" body "}"
-  // Enum(n, tps, cases)          <-> "enum " n tps " {" cases "}"
-  // Class(n, tps, ps, body)      <-> "class " n tps "(" ps ") {" body "}"
-  // ValDef(n, ty, e)             <-> "val " n ": " ty " = " e
-  // ValDefInfer(n, e)            <-> "val " n " = " e
-  // MethodDef(n, tps, ps, ret, body) <-> "def " n tps ps ": " ret " = " body
-  // TypeAlias(n, tps, ty)        <-> "type " n tps " = " ty
 
   // =============================================================
-  // Enum Cases
+  // Syntax (bidirectional grammar for Scala)
   // =============================================================
-  
-  constructor EnumVal : String → EnumCase
-  constructor EnumClass : String → Param* → EnumCase
-  
-  // EnumVal(n)       <-> "case " n
-  // EnumClass(n, ps) <-> "case " n "(" ps ")"
 
-  // =============================================================
-  // Imports
-  // =============================================================
-  
-  constructor ImportName : Name → Import
-  constructor ImportAll : Name → Import
-  constructor ImportSel : Name → String* → Import
-  
-  // ImportName(n)    <-> "import " n
-  // ImportAll(n)     <-> "import " n "._"
-  // ImportSel(n, ss) <-> "import " n ".{" ss "}"
+  syntax name : String
+  syntax typeRef : TypeRef
+  syntax typeParam : TypeParam
+  syntax param : Param
+  syntax expr : Expr
+  syntax pattern : Pattern
+  syntax literal : Literal
+  syntax scalaCase : Case
+  syntax defn : Defn
+  syntax enumCase : EnumCase
+  syntax import_ : Import
 
-  // =============================================================
-  // Source File
-  // =============================================================
-  
-  constructor SourceFile : String → Import* → Defn* → SourceFile
-  
-  // SourceFile(pkg, imps, defns) <-> "package " pkg imps defns
+  // ----- Names -----
+  grammar name {
+    IDENT                            => SimpleName
+    name "." IDENT                   => QualName
+  }
 
+  // ----- Type References -----
+  grammar typeRef {
+    "Unit"                           => TyUnit
+    name                             => TyName
+    name "[" typeRef* "]"            => TyApp
+    typeRef "=>" typeRef             => TyFunc
+    "(" typeRef* ")"                 => TyTuple
+  }
+
+  // ----- Type Parameters -----
+  grammar typeParam {
+    IDENT                            => TypeParam
+    IDENT "<:" typeRef ">:" typeRef  => TypeParamBound
+  }
+
+  // ----- Parameters -----
+  grammar param {
+    IDENT ":" typeRef                => Param
+    IDENT ":" typeRef "=" expr       => ParamDefault
+  }
+
+  // ----- Literals -----
+  grammar literal {
+    STRING                           => LitString
+    NAT                              => LitInt
+    "true"                           => LitTrue
+    "false"                          => LitFalse
+    "Nil"                            => LitNil
+  }
+
+  // ----- Patterns -----
+  grammar pattern {
+    "_"                              => PWildcard
+    IDENT                            => PVar
+    literal                          => PLit
+    name "(" pattern* ")"            => PCon
+    "(" pattern* ")"                 => PTuple
+    pattern ":" typeRef              => PTyped
+    pattern IDENT pattern            => PInfix
+  }
+
+  // ----- Expressions -----
+  grammar expr {
+    IDENT                            => EVar
+    literal                          => ELit
+    expr "(" expr* ")"               => EApp
+    expr "." IDENT                   => ESelect
+    "(" param* ")" "=>" expr         => ELambda
+    expr "match" "{" scalaCase* "}"  => EMatch
+    "if" expr "then" expr "else" expr => EIf
+    "(" expr* ")"                    => ETuple
+    "new" typeRef "(" expr* ")"      => ENew
+    "{" stmt* expr "}"               => EBlock
+    "throw" expr                     => EThrow
+    expr IDENT expr                  => EInfix
+    expr "[" typeRef* "]"            => ETypeApply
+  }
+
+  // ----- Match Cases -----
+  grammar scalaCase {
+    "case" pattern "=>" expr         => CaseSimple
+    "case" pattern "if" expr "=>" expr => CaseGuard
+  }
+
+  // ----- Top-level Definitions -----
+  grammar defn {
+    "case" "class" IDENT typeParam* "(" param* ")"              => CaseClass
+    "case" "class" IDENT typeParam* "(" param* ")" "extends" typeRef => CaseClassExtends
+    "case" "object" IDENT "extends" typeRef                     => CaseObject
+    "sealed" "trait" IDENT typeParam*                           => SealedTrait
+    "trait" IDENT typeParam*                                    => Trait
+    "trait" IDENT typeParam* "extends" typeRef*                 => TraitExtends
+    "object" IDENT "{" defn* "}"                                => Object
+    "object" IDENT "extends" typeRef* "{" defn* "}"             => ObjectExtends
+    "enum" IDENT typeParam* "{" enumCase* "}"                   => Enum
+    "class" IDENT typeParam* "(" param* ")" "{" defn* "}"       => Class
+    "val" IDENT ":" typeRef "=" expr                            => ValDef
+    "val" IDENT "=" expr                                        => ValDefInfer
+    "def" IDENT typeParam* "(" param* ")" ":" typeRef "=" expr  => MethodDef
+    "type" IDENT typeParam* "=" typeRef                         => TypeAlias
+  }
+
+  // ----- Enum Cases -----
+  grammar enumCase {
+    "case" IDENT                     => EnumVal
+    "case" IDENT "(" param* ")"      => EnumClass
+  }
+
+  // ----- Imports -----
+  grammar import_ {
+    "import" name                    => ImportName
+    "import" name "._"               => ImportAll
+    "import" name ".{" name* "}"     => ImportSel
+  }
+
+  // ----- Source File -----
+  syntax sourceFile : SourceFile
+  grammar sourceFile {
+    "package" IDENT import_* defn*   => SourceFile
+  }
 }

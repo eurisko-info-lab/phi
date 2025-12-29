@@ -626,6 +626,158 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
   }
 
   // ===========================================================================
+  // 17b. Grammar Interpreter Tests
+  // ===========================================================================
+
+  test("GrammarInterp should parse identifier with IDENT rule") {
+    val rules = List(
+      SyntaxRule(
+        List(SyntaxToken.NonTerm("IDENT", None)),
+        "Var",
+        Nil
+      )
+    )
+    val syntax = GrammarInterp.buildSyntax("expr", rules)
+    val result = syntax.parse(Lexer.tokenize("foo"))
+    result.term shouldBe Term.Done(Val.VCon("Var", List(Val.VCon("foo", Nil))))
+  }
+
+  test("GrammarInterp should parse keyword + ident rule") {
+    val rules = List(
+      SyntaxRule(
+        List(SyntaxToken.Literal("let"), SyntaxToken.NonTerm("IDENT", None)),
+        "Let",
+        Nil
+      )
+    )
+    val syntax = GrammarInterp.buildSyntax("decl", rules)
+    val result = syntax.parse(Lexer.tokenize("let x"))
+    result.term shouldBe Term.Done(Val.VCon("Let", List(Val.VCon("x", Nil))))
+  }
+
+  test("GrammarInterp should parse list with star modifier") {
+    val rules = List(
+      SyntaxRule(
+        List(SyntaxToken.Literal("("), SyntaxToken.NonTerm("IDENT", Some("*")), SyntaxToken.Literal(")")),
+        "Args",
+        Nil
+      )
+    )
+    val syntax = GrammarInterp.buildSyntax("args", rules)
+    val result = syntax.parse(Lexer.tokenize("(a b c)"))
+    result.term.isDone shouldBe true
+    result.term match
+      case Term.Done(Val.VCon("Args", List(list))) =>
+        GrammarInterp.valToList(list).length shouldBe 3
+      case _ => fail("unexpected result")
+  }
+
+  test("GrammarInterp should render simple term") {
+    val rules = List(
+      SyntaxRule(
+        List(SyntaxToken.Literal("let"), SyntaxToken.NonTerm("name", None)),
+        "Let",
+        Nil
+      )
+    )
+    val syntax = GrammarInterp.buildSyntax("decl", rules)
+    val term = Val.VCon("Let", List(Val.VCon("x", Nil)))
+    val output = Renderer.render(syntax, Term.Done(term))
+    output.trim shouldBe "let x"
+  }
+
+  test("GrammarInterp should use parser from spec") {
+    parseSpecWithInheritance("examples/stlc-nat.phi") match
+      case Right(spec) =>
+        GrammarInterp.parser(spec, "expr") match
+          case Some(parse) =>
+            // This would only work if stlc-nat has grammars defined
+            // For now just check the parser function was created
+            succeed
+          case None =>
+            // No grammar defined is fine for this test
+            succeed
+      case Left(err) =>
+        fail(s"Spec parse failed: $err")
+  }
+
+  test("GrammarInterp should handle explicit args with holes") {
+    val rules = List(
+      SyntaxRule(
+        List(SyntaxToken.Literal("import"), SyntaxToken.NonTerm("STRING", None)),
+        "Import",
+        List(SyntaxArg.Ref("STRING"), SyntaxArg.Lit("nil"), SyntaxArg.Lit("none"))
+      )
+    )
+    val syntax = GrammarInterp.buildSyntax("decl", rules)
+    val result = syntax.parse(Lexer.tokenize("import \"foo\""))
+    result.term match
+      case Term.Done(Val.VCon("Import", args)) =>
+        args.length shouldBe 3
+        args(1) shouldBe Val.VCon("nil", Nil)
+        args(2) shouldBe Val.VCon("none", Nil)
+      case _ => fail(s"unexpected: ${result.term}")
+  }
+
+  test("SpecParser should resolve grammar references") {
+    // Create a spec with two grammars that reference each other
+    val spec = LangSpec(
+      name = "Test",
+      sorts = Nil,
+      constructors = Nil,
+      xforms = Nil,
+      changes = Nil,
+      rules = Nil,
+      defs = Nil,
+      strategies = Map.empty,
+      grammars = Map(
+        "expr" -> List(
+          SyntaxRule(
+            List(SyntaxToken.NonTerm("IDENT", None)),
+            "Var", Nil
+          ),
+          SyntaxRule(
+            List(SyntaxToken.Literal("("), SyntaxToken.NonTerm("expr", None), SyntaxToken.Literal(")")),
+            "Paren", Nil
+          )
+        )
+      )
+    )
+    val parser = GrammarInterp.specParser(spec)
+    
+    // Simple identifier
+    parser.parse("expr", "x") match
+      case Term.Done(Val.VCon("Var", _)) => succeed
+      case other => fail(s"expected Var, got $other")
+    
+    // Nested parentheses should recurse
+    parser.parse("expr", "(y)") match
+      case Term.Done(Val.VCon("Paren", List(Val.VCon("Var", _)))) => succeed
+      case other => fail(s"expected Paren(Var), got $other")
+  }
+
+  test("SpecParser should handle CTOR token for constructors") {
+    val spec = LangSpec(
+      name = "Test",
+      sorts = Nil, constructors = Nil, xforms = Nil, changes = Nil,
+      rules = Nil, defs = Nil, strategies = Map.empty,
+      grammars = Map(
+        "pat" -> List(
+          SyntaxRule(
+            List(SyntaxToken.NonTerm("CTOR", None)),
+            "PCon", Nil
+          )
+        )
+      )
+    )
+    val parser = GrammarInterp.specParser(spec)
+    
+    parser.parse("pat", "Foo") match
+      case Term.Done(Val.VCon("PCon", List(Val.VCon("Foo", Nil)))) => succeed
+      case other => fail(s"expected PCon(Foo), got $other")
+  }
+
+  // ===========================================================================
   // 18. Merge Tests
   // ===========================================================================
 

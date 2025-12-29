@@ -105,7 +105,8 @@ object PhiParser extends RegexParsers:
           flat.collect { case a: AttrSpec => a },
           flat.collect { case e: AttrEquation => e },
           parent,  // Store the parent language name
-          flat.collect { case i: ImportDecl => i }  // Imports
+          flat.collect { case i: ImportDecl => i },  // Imports
+          flat.collect { case (gn: String, gr: List[SyntaxRule] @unchecked) => (gn, gr) }.toMap  // Grammars
         )
     }
   
@@ -124,7 +125,7 @@ object PhiParser extends RegexParsers:
     defDecl ^^ (List(_)) | 
     tokenBlock ^^ (_ => Nil) |     // Parse but ignore token blocks for now
     syntaxDecl ^^ (_ => Nil) |     // Parse but ignore syntax decls
-    grammarBlock ^^ (_ => Nil)     // Parse but ignore grammar blocks
+    grammarBlock ^^ (g => List(g)) // Store grammar blocks
   
   // Import declaration:
   //   import "path/to/file.phi"
@@ -424,18 +425,45 @@ object PhiParser extends RegexParsers:
     ("(" ~> syntaxPattern <~ ")") |
     ident ~ opt(":" ~> ident) ^^^ ()
   
-  // Grammar blocks
-  def grammarBlock: Parser[Unit] = 
-    GRAMMAR ~> ident ~ ("{" ~> rep(grammarRule) <~ "}") ^^^ ()
-  def grammarRule: Parser[Unit] = 
-    rep1(grammarToken) ~ ("=>" ~> grammarAction) ^^^ ()
-  def grammarToken: Parser[Unit] =
-    stringLit ^^^ () | (nonKeywordIdent ~ opt("*" | "+")) ^^^ ()
-  // Grammar action: just a constructor name, optionally with args
-  def grammarAction: Parser[Unit] =
-    ident ~ opt("(" ~> repsep(grammarArg, ",") <~ ")") ^^^ ()
-  def grammarArg: Parser[Unit] =
-    "_" ^^^ () | ident ^^^ ()
+  // Grammar blocks - now returning actual grammar rules
+  def grammarBlock: Parser[(String, List[SyntaxRule])] = 
+    GRAMMAR ~> ident ~ ("{" ~> rep(grammarRule) <~ "}") ^^ {
+      case name ~ rules => (name, rules)
+    }
+  def grammarRule: Parser[SyntaxRule] = 
+    rep1(grammarToken) ~ ("=>" ~> grammarAction) ^^ {
+      case tokens ~ (ctor, args) => SyntaxRule(tokens, ctor, args)
+    }
+  def grammarToken: Parser[SyntaxToken] =
+    stringLit ^^ (s => SyntaxToken.Literal(s)) | 
+    (nonKeywordIdent ~ opt("*" | "+")) ^^ {
+      case name ~ mod => SyntaxToken.NonTerm(name, mod)
+    }
+  // Grammar action: constructor name with optional args
+  def grammarAction: Parser[(String, List[SyntaxArg])] =
+    ident ~ opt("(" ~> repsep(grammarArg, ",") <~ ")") ^^ {
+      case name ~ Some(args) => (name, args)
+      case name ~ None => (name, Nil)
+    }
+  
+  // Grammar argument can be:
+  //   _          -> Hole
+  //   []         -> Lit(VNil)  
+  //   None       -> Lit(VNone)
+  //   "str"      -> StrLit(str)
+  //   Some(arg)  -> Wrap("Some", arg)
+  //   ident      -> Ref(ident)
+  //   Con(args)  -> Con(name, args)
+  def grammarArg: Parser[SyntaxArg] =
+    "_" ^^^ SyntaxArg.Hole |
+    "[]" ^^^ SyntaxArg.Lit("nil") |
+    "None" ^^^ SyntaxArg.Lit("none") |
+    stringLit ^^ (s => SyntaxArg.StrLit(s)) |
+    "Some" ~> "(" ~> grammarArg <~ ")" ^^ (a => SyntaxArg.Wrap("some", a)) |
+    ident ~ opt("(" ~> repsep(grammarArg, ",") <~ ")") ^^ {
+      case name ~ Some(args) => SyntaxArg.Con(name, args)
+      case name ~ None => SyntaxArg.Ref(name)
+    }
   
   // Convert type to string for compatibility
   def typeToString(t: LangType): String = t match
