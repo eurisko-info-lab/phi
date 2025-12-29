@@ -34,6 +34,8 @@ case class Constructor(
 enum LangType:
   case SortRef(name: String)
   case Arrow(from: LangType, to: LangType)
+  case Product(left: LangType, right: LangType)
+  case ListOf(elem: LangType)
 
 case class XformSpec(name: String, source: String, target: String)
 case class ChangeSpec(name: String, sort: String)

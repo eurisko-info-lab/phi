@@ -26,7 +26,7 @@ language λProlog {
 
   // =====================================================
   // Terms (λProlog core)
-// =====================================================
+  // =====================================================
 
   constructor
     Var   : String → Term
@@ -55,7 +55,7 @@ language λProlog {
 
   rule Subst.forward {
     (x,v), Var x       ↦ v
-    (x,v), Var y       ↦ Var y          where x ≠ y
+    (x,v), Var y       ↦ Var y           where x ≠ y
     (x,v), Const c     ↦ Const c
     (x,v), Lam y t     ↦ Lam y t         where x = y
     (x,v), Lam y t     ↦ Lam y (Subst.forward((x,v), t))
