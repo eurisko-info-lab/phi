@@ -116,6 +116,15 @@ def xform2Scala(xform: XformSpec, rules: List[Rule]): Option[Val] =
 def pat2ScalaPat(p: MetaPattern): Val = p match
   case MetaPattern.PVar(name) => VCon("PVar", List(VCon(name, Nil)))
   case MetaPattern.PCon(name, Nil) => VCon("PVar", List(VCon(name, Nil)))  // nullary as variable
+  // Handle cons as :: infix pattern
+  case MetaPattern.PCon("cons", List(h, t)) =>
+    VCon("PInfix", List(pat2ScalaPat(h), VCon("::", Nil), pat2ScalaPat(t)))
+  // Handle nil as Nil
+  case MetaPattern.PCon("nil", Nil) =>
+    VCon("PVar", List(VCon("Nil", Nil)))
+  // Handle pair as tuple
+  case MetaPattern.PCon("pair", List(a, b)) =>
+    VCon("PTuple", List(VCon("nil", List(pat2ScalaPat(a), pat2ScalaPat(b)))))
   case MetaPattern.PCon(name, args) => 
     VCon("PCon", List(
       VCon("SimpleName", List(VCon(name, Nil))),
@@ -132,7 +141,14 @@ def pat2ScalaPat(p: MetaPattern): Val = p match
 /** MetaPattern → Scala Expr */
 def pat2ScalaExpr(p: MetaPattern): Val = p match
   case MetaPattern.PVar(name) => VCon("EVar", List(VCon(name, Nil)))
+  case MetaPattern.PCon("nil", Nil) => VCon("EVar", List(VCon("Nil", Nil)))
   case MetaPattern.PCon(name, Nil) => VCon("EVar", List(VCon(name, Nil)))
+  // Handle cons as ::
+  case MetaPattern.PCon("cons", List(h, t)) =>
+    VCon("EInfix", List(pat2ScalaExpr(h), VCon("::", Nil), pat2ScalaExpr(t)))
+  // Handle pair as tuple
+  case MetaPattern.PCon("pair", List(a, b)) =>
+    VCon("ETuple", List(VCon("nil", List(pat2ScalaExpr(a), pat2ScalaExpr(b)))))
   case MetaPattern.PCon(name, args) =>
     VCon("EApp", List(
       VCon("EVar", List(VCon(name, Nil))),
@@ -224,6 +240,14 @@ def showTypeRef(v: Val): String = v match
 def showExpr(v: Val): String = v match
   case VCon("EVar", List(name)) => showName(name)
   case VCon("ELit", List(lit)) => showLiteral(lit)
+  // Handle cons as ::
+  case VCon("EApp", List(VCon("EVar", List(VCon("cons", Nil))), VCon("nil", List(h, t)))) =>
+    s"${showExpr(h)} :: ${showExpr(t)}"
+  // Handle nil as Nil  
+  case VCon("EVar", List(VCon("nil", Nil))) => "Nil"
+  // Handle pair as tuple
+  case VCon("EApp", List(VCon("EVar", List(VCon("pair", Nil))), VCon("nil", List(a, b)))) =>
+    s"(${showExpr(a)}, ${showExpr(b)})"
   case VCon("EApp", List(f, VCon("nil", args))) => 
     s"${showExpr(f)}(${args.map(showExpr).mkString(", ")})"
   case VCon("ESelect", List(e, VCon(field, Nil))) => s"${showExpr(e)}.$field"
@@ -234,6 +258,10 @@ def showExpr(v: Val): String = v match
     s"if ${showExpr(cond)} then ${showExpr(thn)} else ${showExpr(els)}"
   case VCon("ELambda", List(VCon("nil", ps), body)) =>
     s"(${ps.map(showParam).mkString(", ")}) => ${showExpr(body)}"
+  case VCon("EInfix", List(l, VCon(op, Nil), r)) =>
+    s"${showExpr(l)} $op ${showExpr(r)}"
+  case VCon("ETuple", List(VCon("nil", elems))) =>
+    s"(${elems.map(showExpr).mkString(", ")})"
   case other => other.show
 
 def showLiteral(v: Val): String = v match
@@ -253,7 +281,16 @@ def showPattern(v: Val): String = v match
   case VCon("PVar", List(name)) => showName(name)
   case VCon("PWildcard", Nil) => "_"
   case VCon("PLit", List(lit)) => showLiteral(lit)
+  // Handle cons/nil as :: /Nil
+  case VCon("PCon", List(VCon("SimpleName", List(VCon("cons", Nil))), VCon("nil", List(h, t)))) =>
+    s"${showPattern(h)} :: ${showPattern(t)}"
+  case VCon("PCon", List(VCon("SimpleName", List(VCon("nil", Nil))), VCon("nil", Nil))) =>
+    "Nil"
+  // Handle pair as tuple
+  case VCon("PCon", List(VCon("SimpleName", List(VCon("pair", Nil))), VCon("nil", List(a, b)))) =>
+    s"(${showPattern(a)}, ${showPattern(b)})"
   case VCon("PCon", List(name, VCon("nil", args))) => 
     s"${showName(name)}(${args.map(showPattern).mkString(", ")})"
   case VCon("PTuple", List(VCon("nil", elems))) => s"(${elems.map(showPattern).mkString(", ")})"
+  case VCon("PInfix", List(l, VCon(op, Nil), r)) => s"${showPattern(l)} $op ${showPattern(r)}"
   case other => other.show

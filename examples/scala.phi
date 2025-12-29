@@ -150,6 +150,7 @@ language Scala {
   
   constructor CaseSimple : Pattern → Expr → Case
   constructor CaseGuard : Pattern → Expr → Expr → Case
+  constructor CaseGuarded : Pattern → Expr → Expr → Case  // alias for CaseGuard
   
   // CaseSimple(pat, body)       <-> "case " pat " => " body
   // CaseGuard(pat, guard, body) <-> "case " pat " if " guard " => " body
@@ -186,6 +187,7 @@ language Scala {
   constructor Class : String → TypeParam* → Param* → Defn* → Defn
   constructor ValDef : String → TypeRef → Expr → Defn
   constructor ValDefInfer : String → Expr → Defn
+  constructor ValDefOpt : String → String → Expr → Defn  // name, optional type annotation as String, body
   constructor MethodDef : String → TypeParam* → Param* → TypeRef → Expr → Defn
   constructor TypeAlias : String → TypeParam* → TypeRef → Defn
 

@@ -85,6 +85,9 @@ language Phi {
   constructor DChange : String → String → Decl             // change Name : Sort
   constructor DAttr : String → Type → AttrFlow → Decl      // Attribute declaration
   constructor DAttrEq : AttrEquation → Decl                // Attribute equation
+  constructor DImport : String → String* → String → Decl   // Import: path, selectors, alias
+  constructor DTheorem : String → Type → Pat → Decl        // Theorem: name, signature, proof
+  constructor DLaw : String → Equation* → Decl             // Law: name, equations
 
   // =====================================================
   // Rule Direction
@@ -135,13 +138,46 @@ language Phi {
   // forChild is "" for synthesized, or child variable name for inherited
 
   // =====================================================
-  // Types
+  // Equations (for laws and theorems)
   // =====================================================
 
-  constructor TName : String → Type
-  constructor TArrow : Type → Type → Type
-  constructor TProd : Type → Type → Type
-  constructor TList : Type → Type
+  sort Equation
+  constructor Equation : Pat → Pat → Equation  // lhs ≡ rhs
+
+  // =====================================================
+  // Syntax Rules (bidirectional grammar)
+  // =====================================================
+  //
+  // SyntaxRule defines bidirectional parse/print transformations.
+  // tokens: sequence of literals and non-terminals to match
+  // constructor: name of constructor to build
+  // args: how to construct the RHS
+
+  sort SyntaxRule
+  constructor SyntaxRule : SyntaxToken* → String → SyntaxArg* → SyntaxRule
+
+  sort SyntaxToken
+  constructor SynLit : String → SyntaxToken                    // "keyword" literal
+  constructor SynNonTerm : String → String → SyntaxToken       // name, modifier ("", "*", "+")
+
+  sort SyntaxArg
+  constructor SynHole : SyntaxArg                              // _ placeholder
+  constructor SynRef : String → SyntaxArg                      // Reference to bound name
+  constructor SynLitArg : String → SyntaxArg                   // Literal value: [] -> SynLitArg("nil")
+  constructor SynStrLit : String → SyntaxArg                   // String literal: "eq" -> SynStrLit("eq")
+  constructor SynWrap : String → SyntaxArg → SyntaxArg         // Wrapper: Some(x) -> SynWrap("some", x)
+  constructor SynCon : String → SyntaxArg* → SyntaxArg         // Constructor: Foo(a, b)
+
+  // =====================================================
+  // Types (LangType in MetaInterp)
+  // =====================================================
+
+  constructor TName : String → Type           // SortRef(name)
+  constructor TArrow : Type → Type → Type     // Arrow(from, to)
+  constructor TProd : Type → Type → Type      // Product(left, right)
+  constructor TList : Type → Type             // ListOf(elem)
+  constructor TApp : String → Type* → Type    // TypeApp(base, args) - polymorphic
+  constructor TVar : String → Type            // TypeVar(name) - type variable
 
   // =====================================================
   // Patterns / Terms

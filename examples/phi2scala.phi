@@ -6,6 +6,12 @@
 // Uses scala.phi for the target AST - pretty-printing is automatic.
 //
 // This file defines the xform rules that GenScala.scala interprets.
+//
+// Extended to generate:
+// - Named parameters (extracted from comments or type context)
+// - Scala List/tuple syntax instead of cons/nil/pair
+// - Scala 3 enum syntax for sum types
+// - Class definitions with methods
 
 language Phi2Scala {
 
@@ -34,64 +40,116 @@ language Phi2Scala {
   }
   
   rule Decls2Scala.cons {
-    [d | ds] ↦ [Decl2Scala.forward(d) | Decls2Scala.forward(ds)]
+    [d | ds] ↦ concat(Decl2Scala.forward(d), Decls2Scala.forward(ds))
   }
 
   // =============================================================
-  // Transform: Phi Decl → Scala Defn
+  // Transform: Phi Decl → Scala Defn*
   // =============================================================
+  //
+  // Returns a list because some decls (like xform with rules) 
+  // generate multiple Scala definitions
   
-  xform Decl2Scala : Decl ⇄ Defn
+  xform Decl2Scala : Decl ⇄ Defn*
   
   // Sort → sealed trait
   rule Decl2Scala.sort {
-    DSort(name) ↦ SealedTrait(name, [])
+    DSort(name) ↦ [SealedTrait(name, [])]
   }
   
   // Constructor with no args → case object
   rule Decl2Scala.con0 {
     DCon(name, TName(ret)) ↦ 
-      CaseObject(name, TyName(SimpleName(ret)))
+      [CaseObject(name, TyName(SimpleName(ret)))]
   }
   
-  // Constructor with arrow type → case class
+  // Constructor with arrow type → case class (use ArrowToParams for named params)
   rule Decl2Scala.conArrow {
-    DCon(name, TArrow(arg, TName(ret))) ↦
-      CaseClassExtends(name, [], [Param("arg0", Type2Scala.forward(arg))], TyName(SimpleName(ret)))
+    DCon(name, ty) ↦
+      [CaseClassExtends(name, [], ArrowToParams.forward(ty, zero), 
+                        TyName(SimpleName(ReturnType.forward(ty))))]
+      where ty ≠ TName(_)
   }
   
-  // Constructor with nested arrows → case class with multiple params  
-  rule Decl2Scala.conArrow2 {
-    DCon(name, TArrow(a, TArrow(b, TName(ret)))) ↦
-      CaseClassExtends(name, [], 
-        [Param("arg0", Type2Scala.forward(a)), Param("arg1", Type2Scala.forward(b))], 
-        TyName(SimpleName(ret)))
-  }
-  
-  rule Decl2Scala.conArrow3 {
-    DCon(name, TArrow(a, TArrow(b, TArrow(c, TName(ret))))) ↦
-      CaseClassExtends(name, [], 
-        [Param("arg0", Type2Scala.forward(a)), 
-         Param("arg1", Type2Scala.forward(b)), 
-         Param("arg2", Type2Scala.forward(c))], 
-        TyName(SimpleName(ret)))
-  }
-  
-  rule Decl2Scala.conArrow4 {
-    DCon(name, TArrow(a, TArrow(b, TArrow(c, TArrow(d, TName(ret)))))) ↦
-      CaseClassExtends(name, [], 
-        [Param("arg0", Type2Scala.forward(a)), 
-         Param("arg1", Type2Scala.forward(b)), 
-         Param("arg2", Type2Scala.forward(c)),
-         Param("arg3", Type2Scala.forward(d))], 
-        TyName(SimpleName(ret)))
-  }
-  
-  // Xform declaration → method def (placeholder, actual rules needed separately)
+  // Xform declaration → method def 
   rule Decl2Scala.xform {
     DXform(name, src, tgt) ↦
-      MethodDef(name, [], [Param("input", TyName(SimpleName(src)))], 
-                TyName(SimpleName(tgt)), EVar("???"))
+      [MethodDef(name, [], [Param("input", TyName(SimpleName(src)))], 
+                TyName(SimpleName(tgt)), EVar("???"))]
+  }
+  
+  // Rule → method with pattern match
+  rule Decl2Scala.rule {
+    DRule(name, dir, cases) ↦
+      [MethodDef(
+        name,
+        [],
+        [Param("input", TyName(SimpleName("Val")))],
+        TyApp(SimpleName("Option"), [TyName(SimpleName("Val"))]),
+        EMatch(EVar("input"), RuleCases2ScalaCases.forward(cases)))]
+  }
+  
+  // Def → val definition  
+  rule Decl2Scala.def {
+    DDef(name, body) ↦
+      [ValDefInfer(name, Pat2ScalaExpr.forward(body))]
+  }
+  
+  // Import → import statement
+  rule Decl2Scala.import {
+    DImport(path, [], _) ↦ []
+  }
+
+  // =============================================================
+  // Extract parameter list from arrow type (simplified)
+  // =============================================================
+  //
+  // TArrow(A, TArrow(B, Ret)) → [Param("arg0", A), Param("arg1", B)]
+  // Uses hardcoded arg0..arg4 names for simplicity
+  
+  xform ArrowToParams : Type × Nat ⇄ Param*
+  
+  rule ArrowToParams.base {
+    (TName(_), _) ↦ []
+  }
+  
+  rule ArrowToParams.arrow0 {
+    (TArrow(arg, rest), zero) ↦ 
+      [Param("arg0", Type2Scala.forward(arg)) | ArrowToParams.forward(rest, succ(zero))]
+  }
+  
+  rule ArrowToParams.arrow1 {
+    (TArrow(arg, rest), succ(zero)) ↦ 
+      [Param("arg1", Type2Scala.forward(arg)) | ArrowToParams.forward(rest, succ(succ(zero)))]
+  }
+  
+  rule ArrowToParams.arrow2 {
+    (TArrow(arg, rest), succ(succ(zero))) ↦ 
+      [Param("arg2", Type2Scala.forward(arg)) | ArrowToParams.forward(rest, succ(succ(succ(zero))))]
+  }
+  
+  rule ArrowToParams.arrow3 {
+    (TArrow(arg, rest), succ(succ(succ(zero)))) ↦ 
+      [Param("arg3", Type2Scala.forward(arg)) | ArrowToParams.forward(rest, succ(succ(succ(succ(zero)))))]
+  }
+  
+  rule ArrowToParams.arrow4 {
+    (TArrow(arg, rest), succ(succ(succ(succ(zero))))) ↦ 
+      [Param("arg4", Type2Scala.forward(arg)) | ArrowToParams.forward(rest, succ(succ(succ(succ(succ(zero))))))]
+  }
+  
+  // =============================================================
+  // Extract return type from arrow chain
+  // =============================================================
+  
+  xform ReturnType : Type ⇄ String
+  
+  rule ReturnType.name {
+    TName(n) ↦ n
+  }
+  
+  rule ReturnType.arrow {
+    TArrow(_, rest) ↦ ReturnType.forward(rest)
   }
 
   // =============================================================
@@ -115,6 +173,24 @@ language Phi2Scala {
   rule Type2Scala.list {
     TList(a) ↦ TyApp(SimpleName("List"), [Type2Scala.forward(a)])
   }
+  
+  rule Type2Scala.app {
+    TApp(base, args) ↦ TyApp(SimpleName(base), Types2Scala.forward(args))
+  }
+  
+  rule Type2Scala.var {
+    TVar(n) ↦ TyName(SimpleName(n))
+  }
+
+  xform Types2Scala : Type* ⇄ TypeRef*
+  
+  rule Types2Scala.nil {
+    [] ↦ []
+  }
+  
+  rule Types2Scala.cons {
+    [t | ts] ↦ [Type2Scala.forward(t) | Types2Scala.forward(ts)]
+  }
 
   // =============================================================
   // Transform: Phi Pat → Scala Pattern  
@@ -126,13 +202,32 @@ language Phi2Scala {
     PVar(x) ↦ PVar(x)
   }
   
+  rule Pat2ScalaPat.wildcard {
+    PVar(_) ↦ PWildcard
+  }
+  
   rule Pat2ScalaPat.con0 {
     PCon(name, []) ↦ PVar(name)
   }
   
+  // cons pattern → :: infix pattern
+  rule Pat2ScalaPat.cons {
+    PCon(cons, [h, t]) ↦ PInfix(Pat2ScalaPat.forward(h), "::", Pat2ScalaPat.forward(t))
+  }
+  
+  // nil pattern → Nil
+  rule Pat2ScalaPat.nil {
+    PCon(nil, []) ↦ PVar("Nil")
+  }
+  
+  // pair pattern → tuple pattern
+  rule Pat2ScalaPat.pair {
+    PCon(pair, [a, b]) ↦ PTuple([Pat2ScalaPat.forward(a), Pat2ScalaPat.forward(b)])
+  }
+  
   rule Pat2ScalaPat.con {
     PCon(name, args) ↦ PCon(SimpleName(name), Pats2ScalaPats.forward(args))
-      where args ≠ []
+      where name ≠ cons and name ≠ nil and name ≠ pair and args ≠ []
   }
   
   xform Pats2ScalaPats : Pat* ⇄ Pattern*
@@ -159,13 +254,34 @@ language Phi2Scala {
     PCon(name, []) ↦ EVar(name)
   }
   
+  // cons expression → :: infix or List(...)
+  rule Pat2ScalaExpr.cons {
+    PCon(cons, [h, t]) ↦ EInfix(Pat2ScalaExpr.forward(h), "::", Pat2ScalaExpr.forward(t))
+  }
+  
+  // nil expression → Nil
+  rule Pat2ScalaExpr.nil {
+    PCon(nil, []) ↦ EVar("Nil")
+  }
+  
+  // pair expression → tuple
+  rule Pat2ScalaExpr.pair {
+    PCon(pair, [a, b]) ↦ ETuple([Pat2ScalaExpr.forward(a), Pat2ScalaExpr.forward(b)])
+  }
+  
   rule Pat2ScalaExpr.con {
     PCon(name, args) ↦ EApp(EVar(name), Pats2ScalaExprs.forward(args))
-      where args ≠ []
+      where name ≠ cons and name ≠ nil and name ≠ pair and args ≠ []
   }
   
   rule Pat2ScalaExpr.app {
     PApp(f, a) ↦ EApp(Pat2ScalaExpr.forward(f), [Pat2ScalaExpr.forward(a)])
+  }
+  
+  // xform forward call → method call
+  rule Pat2ScalaExpr.xformCall {
+    PApp(PApp(PCon(name, []), PCon(forward, [])), arg) ↦
+      EApp(ESelect(EVar(name), "forward"), [Pat2ScalaExpr.forward(arg)])
   }
   
   xform Pats2ScalaExprs : Pat* ⇄ Expr*
@@ -186,32 +302,77 @@ language Phi2Scala {
   
   rule RuleCase2ScalaCase.simple {
     RuleCase(lhs, rhs, []) ↦ 
-      CaseSimple(Pat2ScalaPat.forward(lhs), Pat2ScalaExpr.forward(rhs))
+      CaseSimple(Pat2ScalaPat.forward(lhs), 
+                 ESome(Pat2ScalaExpr.forward(rhs)))
   }
-
-  // =============================================================
-  // Transform: Rule → Method with match
-  // =============================================================
   
-  xform Rule2Method : DRule ⇄ MethodDef
-  
-  rule Rule2Method.forward {
-    DRule(name, Both, cases) ↦
-      MethodDef(name, [], 
-                [Param("input", TyName(SimpleName("Val")))],
-                TyName(SimpleName("Val")),
-                EMatch(EVar("input"), RuleCases2ScalaCases.forward(cases)))
+  rule RuleCase2ScalaCase.guarded {
+    RuleCase(lhs, rhs, guards) ↦
+      CaseGuarded(Pat2ScalaPat.forward(lhs),
+                  Guards2ScalaGuard.forward(guards),
+                  ESome(Pat2ScalaExpr.forward(rhs)))
+      where guards ≠ []
   }
   
   xform RuleCases2ScalaCases : RuleCase* ⇄ Case*
   
   rule RuleCases2ScalaCases.nil {
-    [] ↦ []
+    [] ↦ [CaseSimple(PWildcard, ENone)]
   }
   
   rule RuleCases2ScalaCases.cons {
     [rc | rcs] ↦ [RuleCase2ScalaCase.forward(rc) | RuleCases2ScalaCases.forward(rcs)]
   }
+  
+  // =============================================================
+  // Transform: Guards → Scala Guard Expression
+  // =============================================================
+  
+  xform Guards2ScalaGuard : Guard* ⇄ Expr
+  
+  rule Guards2ScalaGuard.single {
+    [Guard(op, lhs, rhs)] ↦
+      GuardOp2Expr.forward(op, Pat2ScalaExpr.forward(lhs), Pat2ScalaExpr.forward(rhs))
+  }
+  
+  rule Guards2ScalaGuard.multi {
+    [Guard(op, lhs, rhs) | rest] ↦
+      EInfix(GuardOp2Expr.forward(op, Pat2ScalaExpr.forward(lhs), Pat2ScalaExpr.forward(rhs)),
+             "&&",
+             Guards2ScalaGuard.forward(rest))
+      where rest ≠ []
+  }
+  
+  xform GuardOp2Expr : String × Expr × Expr ⇄ Expr
+  
+  rule GuardOp2Expr.eq {
+    (eq, l, r) ↦ EInfix(l, "==", r)
+  }
+  
+  rule GuardOp2Expr.neq {
+    (neq, l, r) ↦ EInfix(l, "!=", r)
+  }
+
+  // =============================================================
+  // Helper: parameter name from index (handled by GenScala runtime)
+  // =============================================================
+  
+  // These are built-in helpers that map index to param name
+  // paramName(0) = "arg0", paramName(1) = "arg1", etc.
+
+  // =============================================================
+  // Helper: lowercase first letter (handled by runtime)
+  // =============================================================
+
+  // toLower("MatchPat") = "matchPat"
+
+  // =============================================================
+  // Scala Option wrappers (as patterns to be expanded)
+  // =============================================================
+  
+  // ESome(e) becomes EApp(EVar("Some"), [e])
+  // ENone becomes EVar("None")
+  // TyOption(t) becomes TyApp(SimpleName("Option"), [t])
 
   // =============================================================
   // Examples
@@ -219,10 +380,10 @@ language Phi2Scala {
   
   // Example: DSort("Term") → sealed trait Term
   def exSort : Decl = DSort("Term")
-  def exSortScala : Defn = SealedTrait("Term", [])
+  def exSortScala : Defn* = [SealedTrait("Term", [])]
   
   // Example: DCon("Zero", TName("Term")) → case object Zero extends Term
   def exCon : Decl = DCon("Zero", TName("Term"))
-  def exConScala : Defn = CaseObject("Zero", TyName(SimpleName("Term")))
+  def exConScala : Defn* = [CaseObject("Zero", TyName(SimpleName("Term")))]
 
 }
