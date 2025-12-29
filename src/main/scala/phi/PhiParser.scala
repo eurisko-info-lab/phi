@@ -35,7 +35,8 @@ import scala.util.parsing.combinator.*
  */
 object PhiParser extends RegexParsers:
   
-  override val whiteSpace = """(\s|//[^\n]*)+""".r
+  // Whitespace includes line comments (//) and block comments (/* */)
+  override val whiteSpace = """(\s|//[^\n]*|/\*[\s\S]*?\*/)+""".r
   
   // Support Unicode in identifiers (λProlog, etc.)
   def ident: Parser[String] = """[\p{L}_][\p{L}\p{N}_]*""".r
@@ -57,9 +58,10 @@ object PhiParser extends RegexParsers:
   def GRAMMAR = "grammar"
   def PARSE = "parse"
   def STRATEGY = "strategy"
+  def THEOREM = "theorem"
   
   val keywords = Set("language", "sort", "constructor", "xform", "change", "rule", "def", 
-                     "repeat", "id", "where", "and", "token", "syntax", "grammar", "parse", "strategy")
+                     "repeat", "id", "where", "and", "token", "syntax", "grammar", "parse", "strategy", "theorem")
   
   def ARROW: Parser[String] = "→" | "->"
   def BIARROW: Parser[String] = "⇄" | "<->"
@@ -87,7 +89,8 @@ object PhiParser extends RegexParsers:
           flat.collect { case c: ChangeSpec => c },
           flat.collect { case r: Rule => r },
           flat.collect { case d: Def => d },
-          flat.collect { case (n: String, s: Strat) => (n, s) }.toMap
+          flat.collect { case (n: String, s: Strat) => (n, s) }.toMap,
+          flat.collect { case t: Theorem => t }
         )
     }
   
@@ -97,6 +100,7 @@ object PhiParser extends RegexParsers:
     xformDecl ^^ (List(_)) | 
     changeDecl ^^ (List(_)) | 
     ruleDecl ^^ (List(_)) | 
+    theoremDecl ^^ (List(_)) |     // Theorem declarations
     strategyDecl ^^ (List(_)) |  // Before defDecl - both start with ident
     defDecl ^^ (List(_)) | 
     tokenBlock ^^ (_ => Nil) |     // Parse but ignore token blocks for now
@@ -105,7 +109,9 @@ object PhiParser extends RegexParsers:
   
   def sortDecl: Parser[Sort] = SORT ~> ident ^^ Sort.apply
   
-  // Constructor declaration: constructor Foo : A -> B
+  // Constructor declaration: single line only
+  // constructor Foo : A -> B
+  // For multi-line in source files, just repeat the keyword on each line
   def constructorBlock: Parser[List[Constructor]] =
     CONSTRUCTOR ~> constructorLine ^^ (List(_))
   
@@ -156,6 +162,13 @@ object PhiParser extends RegexParsers:
   def changeDecl: Parser[ChangeSpec] =
     CHANGE ~> ident ~ (":" ~> ident <~ BIARROW <~ ident) ^^ {
       case name ~ sort => ChangeSpec(name, sort)
+    }
+  
+  // Theorem declaration: theorem Name : Type
+  // Like Abella, this declares a proposition to prove
+  def theoremDecl: Parser[Theorem] =
+    THEOREM ~> ident ~ (":" ~> typeExpr) ^^ {
+      case name ~ sig => Theorem(name, sig, None)
     }
   
   // Rules can have qualified names: rule Subst.forward { ... }

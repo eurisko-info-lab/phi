@@ -17,17 +17,22 @@ language PhiCategoryTheory {
   sort Diagram
   sort Proof
 
-  constructor
-    Cat    : Category
-    Obj    : Category → Object
-    Hom    : Object → Object → Morphism
-    Id     : Object → Morphism
-    Comp   : Morphism → Morphism → Morphism
+  constructor Cat    : Category
+  constructor Obj    : Category → Object
+  constructor Hom    : Object → Object → Morphism
+  constructor Id     : Object → Morphism
+  constructor Comp   : Morphism → Morphism → Morphism
 
-  rule CategoryLaws {
-    Comp (Id A) f ↦ f
-    Comp f (Id B) ↦ f
-    Comp f (Comp g h) ↦ Comp (Comp f g) h
+  rule CategoryLaws.idLeft {
+    Comp(Id(A), f) ↦ f
+  }
+  
+  rule CategoryLaws.idRight {
+    Comp(f, Id(B)) ↦ f
+  }
+  
+  rule CategoryLaws.assoc {
+    Comp(f, Comp(g, h)) ↦ Comp(Comp(f, g), h)
   }
 
   /* <lean>
@@ -46,18 +51,16 @@ language PhiCategoryTheory {
   // Functors and Natural Transformations
   // =========================================================
 
-  constructor
-    Fun      : Category → Category → Functor
-    MapObj   : Functor → Object → Object
-    MapMor   : Functor → Morphism → Morphism
+  constructor Fun      : Category → Category → Functor
+  constructor MapObj   : Functor → Object → Object
+  constructor MapMor   : Functor → Morphism → Morphism
 
-  constructor
-    Nat      : Functor → Functor → NatTrans
-    Component : NatTrans → Object → Morphism
+  constructor Nat      : Functor → Functor → NatTrans
+  constructor Component : NatTrans → Object → Morphism
 
   rule NatNaturality {
-    Comp (MapMor G f) (Component α A)
-      ↦ Comp (Component α B) (MapMor F f)
+    Comp(MapMor(G, f), Component(α, A))
+      ↦ Comp(Component(α, B), MapMor(F, f))
   }
 
   /* <lean>
@@ -73,150 +76,113 @@ language PhiCategoryTheory {
   // Yoneda Lemma
   // =========================================================
 
-  constructor
-    HomF : Object → Functor        // Hom(-, A)
+  constructor HomF : Object → Functor        // Hom(-, A)
 
   xform Yoneda : NatTrans ⇄ Object
 
   rule Yoneda.forward {
-    Nat (HomF A) F ↦ element : MapObj F A
+    Nat(HomF(A), F) ↦ MapObj(F, A)
   }
 
   rule Yoneda.backward {
-    element : MapObj F A ↦ Nat (HomF A) F
+    MapObj(F, A) ↦ Nat(HomF(A), F)
   }
 
   def YonedaExample : Proof =
-    Yoneda.forward (Nat (HomF A) F)
+    Yoneda.forward(Nat(HomF(A), F))
 
   /* <lean>
   theorem yoneda {C : Category} (A : C.Obj) (F : C ⥤ Type) :
     (NatTrans (HomF A) F) ≃ (F.obj A) := sorry
   </lean> */
 
-  // Example usage in Phi
   def UseYoneda1 : Proof =
-    Yoneda.forward (Nat (HomF Obj1) Functor1)
+    Yoneda.forward(Nat(HomF(Obj1), Functor1))
 
   // =========================================================
   // Adjunctions
   // =========================================================
 
-  constructor
-    Adj : Functor → Functor → Proof
+  constructor Adj : Functor → Functor → Proof
+  constructor UnitNat : Functor → Functor → NatTrans
+  constructor CounitNat : Functor → Functor → NatTrans
 
   rule Adjunction {
-    Adj F G ↦
-      (Nat (Comp F G) Id,
-       Nat Id (Comp G F))
+    Adj(F, G) ↦ pair(UnitNat(F, G), CounitNat(F, G))
   }
 
-  theorem GeneralAdjointFunctor :
-    Functor U →
-    Proof
+  theorem GeneralAdjointFunctor : Functor → Proof
 
   def FreeForgetfulAdjunction : Proof =
-    Adj Free Forget
+    Adj(Free, Forget)
 
   /* <lean>
   structure Adjunction (F : C ⥤ D) (G : D ⥤ C) :=
     (unit : 𝟭 C ⟶ F ⋙ G)
     (counit : G ⋙ F ⟶ 𝟭 D)
-    (triangle1' : ∀ X, (F.map (unit.app X)) ≫ counit.app (F.obj X) = 𝟙 (F.obj X))
-    (triangle2' : ∀ Y, (unit.app (G.obj Y)) ≫ G.map (counit.app Y) = 𝟙 (G.obj Y))
   </lean> */
 
   def UseAdj1 : Proof =
-    Adj Free Forget
+    Adj(Free, Forget)
 
   // =========================================================
   // Beck Monadicity
   // =========================================================
 
-  constructor
-    Monad : Functor → Proof
+  constructor Monad : Functor → Proof
 
-  theorem Beck :
-    Functor U →
-    Monad U
+  theorem Beck : Functor → Monad
 
   def SetMonadic : Proof =
-    Beck ForgetMonoid
-
-  /* <lean>
-  theorem Beck_monadicity {F : C ⥤ D} :
-    -- if F has a right adjoint and certain conditions
-    Monadic F := sorry
-  </lean> */
+    Beck(ForgetMonoid)
 
   def UseBeck1 : Proof =
-    Beck ForgetMonoid
+    Beck(ForgetMonoid)
 
   // =========================================================
   // Density Theorem
   // =========================================================
 
-  theorem Density :
-    Functor →
-    Proof
+  constructor Colim : Functor → Object
+
+  theorem Density : Functor → Proof
 
   rule DensityRule {
-    F ↦ Colim (HomF A)
+    F ↦ Colim(HomF(A))
   }
 
   def DensityExample : Proof =
-    Density Presheaf
-
-  /* <lean>
-  theorem density {F : C ⥤ D} :
-    F ≃ colimit (HomF) := sorry
-  </lean> */
+    Density(Presheaf)
 
   def UseDensity1 : Proof =
-    Density YonedaF
+    Density(YonedaF)
 
   // =========================================================
-  // Gabriel–Ulmer Duality
+  // Gabriel-Ulmer Duality
   // =========================================================
 
   sort Theory
   sort ModelCategory
 
-  constructor
-    Models : Theory → Category
+  constructor Models : Theory → Category
 
-  theorem GabrielUlmer :
-    Category ⇄ Theory
+  theorem GabrielUlmer : Category → Theory
 
   def AlgebraicExample : Proof =
-    GabrielUlmer.forward AlgebraicCategory
-
-  /* <lean>
-  theorem gabriel_ulmer {C : Category} :
-    -- C is locally presentable
-    C ≃ Models T := sorry
-  </lean> */
+    GabrielUlmer(AlgebraicCategory)
 
   // =========================================================
   // Brown Representability
   // =========================================================
 
-  theorem Brown :
-    Functor →
-    Proof
+  theorem Brown : Functor → Proof
 
   rule BrownRule {
-    F ↦ HomF X
+    F ↦ HomF(X)
   }
 
   def CohomologyRep : Proof =
-    Brown CohomologyFunctor
-
-  /* <lean>
-  theorem brown {F : Cᵒᵖ ⥤ Type} :
-    -- representable if cohomological
-    representable F := sorry
-  </lean> */
+    Brown(CohomologyFunctor)
 
   // =========================================================
   // Mitchell Embedding
@@ -225,43 +191,27 @@ language PhiCategoryTheory {
   sort Ring
   sort Module
 
-  constructor
-    Mod : Ring → Category
+  constructor Mod : Ring → Category
 
-  theorem Mitchell :
-    Category →
-    Proof
+  theorem Mitchell : Category → Proof
 
   def AbelianEmbedding : Proof =
-    Mitchell AbelianCategory
-
-  /* <lean>
-  theorem mitchell {A : AbCategory} :
-    A ↪ Module R := sorry
-  </lean> */
+    Mitchell(AbelianCategory)
 
   // =========================================================
   // Small Object Argument
   // =========================================================
 
-  constructor
-    Factor : Morphism → Morphism → Morphism
+  constructor Factor : Morphism → Morphism → Morphism
 
-  theorem SmallObject :
-    Morphism →
-    Proof
+  theorem SmallObject : Morphism → Proof
 
   rule SmallObjectRule {
-    f ↦ Factor cofibration fibration
+    f ↦ Factor(cofibration, fibration)
   }
 
   def ModelStructure : Proof =
-    SmallObject f
-
-  /* <lean>
-  theorem small_object {I : Morphism} :
-    factorization_system I := sorry
-  </lean> */
+    SmallObject(f)
 
   // =========================================================
   // Mac Lane Coherence
@@ -269,45 +219,39 @@ language PhiCategoryTheory {
 
   sort MonoidalCategory
 
-  constructor
-    Tensor : Object → Object → Object
+  constructor Tensor : Object → Object → Object
 
-  theorem Coherence :
-    MonoidalCategory →
-    Proof
+  theorem Coherence : MonoidalCategory → Proof
 
   rule CoherenceRule {
-    Tensor (Tensor A B) C ↦ Tensor A (Tensor B C)
+    Tensor(Tensor(A, B), C) ↦ Tensor(A, Tensor(B, C))
   }
 
   def Strictification : Proof =
-    Coherence MonoidalCat
-
-  /* <lean>
-  theorem coherence {M : MonoidalCategory} :
-    strictifiable M := sorry
-  </lean> */
+    Coherence(MonoidalCat)
 
   // =========================================================
   // Examples in Phi
   // =========================================================
 
   def ExampleHom : Morphism =
-    Hom (Obj CatA) (Obj CatB)
+    Hom(Obj(CatA), Obj(CatB))
 
   def ExampleCompose : Morphism =
-    Comp (Hom ObjA ObjB) (Hom ObjB ObjC)
+    Comp(Hom(ObjA, ObjB), Hom(ObjB, ObjC))
 
   def ExampleFunctor : Functor =
-    Fun CatA CatB
+    Fun(CatA, CatB)
 
   def ExampleNatTrans : NatTrans =
-    Nat Functor1 Functor2
+    Nat(Functor1, Functor2)
 
   def ExampleYonedaUse : Proof =
-    Yoneda.forward (Nat (HomF Obj1) Functor1)
+    Yoneda.forward(Nat(HomF(Obj1), Functor1))
 
   def ExampleAdjUse : Proof =
-    Adj Free Forget
+    Adj(Free, Forget)
 
+  // Main normalization strategy
+  strategy normalize := repeat (CategoryLaws.idLeft | CategoryLaws.idRight | CategoryLaws.assoc | CoherenceRule)
 }

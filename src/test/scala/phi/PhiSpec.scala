@@ -623,3 +623,91 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
     val hash = lcRepo.store(edited.current, Set(Name("doubled")))
     lcRepo.getByName(Name("doubled")) shouldBe Some(edited.current)
   }
+  
+  // ===========================================================================
+  // 21. Phi Meta-Interpreter Tests
+  // ===========================================================================
+  
+  test("Phi parser should handle block comments") {
+    val source = """
+      language Test {
+        /* This is a block comment
+           spanning multiple lines */
+        sort Foo
+        /* Another comment */ constructor Bar : Foo
+      }
+    """
+    val spec = PhiParser.parseAll(PhiParser.spec, source)
+    spec.successful shouldBe true
+    spec.get.sorts.map(_.name) should contain("Foo")
+    spec.get.constructors.map(_.name) should contain("Bar")
+  }
+  
+  test("Phi parser should handle theorem declarations") {
+    val source = """
+      language Test {
+        sort Proof
+        theorem MyTheorem : Proof
+      }
+    """
+    val spec = PhiParser.parseAll(PhiParser.spec, source)
+    spec.successful shouldBe true
+    spec.get.theorems.map(_.name) should contain("MyTheorem")
+  }
+  
+  test("Phi xform rules should match arguments as tuple") {
+    val source = """
+      language Test {
+        sort A
+        sort B
+        constructor Foo : A → B
+        xform Transform : A ⇄ B
+        rule Transform.forward {
+          x ↦ Foo(x)
+        }
+        def test = Transform.forward(Bar)
+        strategy normalize := repeat Transform.forward
+      }
+    """
+    val spec = PhiParser.parseAll(PhiParser.spec, source).get
+    val interp = LangInterpreter(spec)
+    val result = interp.normalize(interp.evalDef("test"))
+    result.value shouldBe Val.VCon("Foo", List(Val.VCon("Bar", Nil)))
+  }
+  
+  test("Phi category theory example should apply Yoneda lemma") {
+    val source = """
+      language Cat {
+        sort Functor
+        sort NatTrans
+        sort Object
+        constructor HomF : Object → Functor
+        constructor Nat : Functor → Functor → NatTrans
+        constructor MapObj : Functor → Object → Object
+        xform Yoneda : NatTrans ⇄ Object
+        rule Yoneda.forward {
+          Nat(HomF(A), F) ↦ MapObj(F, A)
+        }
+        def test = Yoneda.forward(Nat(HomF(X), G))
+        strategy normalize := repeat Yoneda.forward
+      }
+    """
+    val spec = PhiParser.parseAll(PhiParser.spec, source).get
+    val interp = LangInterpreter(spec)
+    val result = interp.normalize(interp.evalDef("test"))
+    // Yoneda.forward(Nat(HomF(X), G)) should reduce to MapObj(G, X)
+    result.value shouldBe Val.VCon("MapObj", List(Val.VCon("G", Nil), Val.VCon("X", Nil)))
+  }
+  
+  test("Phi should handle Unicode arrows in constructors") {
+    val source = """
+      language Test {
+        sort A
+        sort B
+        constructor F : A → B → A
+        def test = F(X, Y)
+      }
+    """
+    val spec = PhiParser.parseAll(PhiParser.spec, source).get
+    spec.constructors.find(_.name == "F").get.params.length shouldBe 2
+  }

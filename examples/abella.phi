@@ -1,0 +1,125 @@
+// =======================================================
+// Abella in Phi (with syntax)
+// =======================================================
+
+language Abella extends λProlog {
+
+  // =====================================================
+  // Core sorts
+  // =====================================================
+
+  sort Proof
+  sort Theorem
+  sort Context
+  sort Hypothesis
+  sort Tactic
+
+  // =====================================================
+  // Abella proof terms
+  // =====================================================
+
+  constructor Thm : String → Goal → Theorem
+  constructor Hyp : String → Goal → Hypothesis
+  constructor Prf : Goal → Proof
+
+  // Proof tactics
+  constructor Apply     : Term → Tactic
+  constructor Assume    : String → Tactic
+  constructor Split     : Tactic
+  constructor Induction : Term → Tactic
+  constructor Case      : Term → Tactic
+  constructor Seq       : Tactic → Tactic → Tactic
+  constructor Repeat    : Tactic → Tactic
+  constructor Id        : Tactic
+
+  // =====================================================
+  // Proof state
+  // =====================================================
+
+  constructor GoalState  : Context × Goal → Proof
+  constructor Done       : Proof
+
+  // =====================================================
+  // Tactic application xforms
+  // =====================================================
+
+  xform ApplyTactic : Tactic × Proof ⇄ Proof
+
+  rule ApplyTactic.forward {
+    (Id, p) ↦ p
+    (Seq(t1, t2), p) ↦ ApplyTactic.forward(t2, ApplyTactic.forward(t1, p))
+    (Repeat(t), p) ↦ let q = ApplyTactic.forward(t, p) in
+                      if q = p then p else ApplyTactic.forward(Repeat(t), q)
+    (Apply(tm), GoalState(ctx, Call(tm'))) ↦ Done where tm = tm'
+    (Assume(name), GoalState(ctx, g)) ↦ GoalState(cons(Hyp(name, g), ctx), g)
+    (Split, GoalState(ctx, And(g1,g2))) ↦ Seq(GoalState(ctx,g1), GoalState(ctx,g2))
+    (Induction(tm), GoalState(ctx, Call(tm'))) ↦ GoalState(ctx, Call(tm'))
+    (Case(tm), GoalState(ctx, Call(tm'))) ↦ GoalState(ctx, Call(tm'))
+  }
+
+  // =====================================================
+  // Derived tactics
+  // =====================================================
+
+  def auto := Repeat(Apply(Const("solve")))
+  def trivial := Id
+
+  // =====================================================
+  // Abella proof script syntax
+  // =====================================================
+
+  syntax "Theorem" ident ":" Goal "Proof" tactic "Qed"  ::= Thm(ident, Goal)
+  syntax "Hypothesis" ident ":" Goal               ::= Hyp(ident, Goal)
+  syntax "Apply" term                               ::= Apply(term)
+  syntax "Assume" ident                              ::= Assume(ident)
+  syntax "Split"                                     ::= Split
+  syntax "Induction" term                             ::= Induction(term)
+  syntax "Case" term                                  ::= Case(term)
+  syntax "Seq" tactic "," tactic                      ::= Seq(tactic, tactic)
+  syntax "Repeat" tactic                               ::= Repeat(tactic)
+  syntax "Id"                                         ::= Id
+
+  // =====================================================
+  // Example theorem and proof in Abella syntax
+  // =====================================================
+
+  // <lean>
+  // theorem parent_ancestor : ∀ X, parent(X) → ancestor(X)
+  // proof
+  //   intro X
+  //   apply ancestor_rule
+  // qed
+  // </lean>
+
+  Theorem parent_ancestor : Call(App(Const(ancestor), Var("X"))) Proof
+    Seq(
+      Assume("X"),
+      Apply(Const("ancestor_rule"))
+    )
+  Qed
+
+  // Phi-style proof construction example
+  def exampleProof : Proof =
+    ApplyTactic.forward(
+      Seq(
+        Induction(Const("X")),
+        Split,
+        Repeat(Apply(Const("solve")))
+      ),
+      GoalState(nil, Call(App(Const(ancestor), Var("alice"))))
+    )
+
+  // =====================================================
+  // Example use of Hypothesis
+  // =====================================================
+
+  Hypothesis H1 : Call(App(Const(parent), Var("X")))
+
+  // Example proof using auto tactic
+  def proof_auto : Proof =
+    ApplyTactic.forward(
+      auto,
+      GoalState(cons(Hyp("H1", Call(App(Const(parent), Var("X")))), nil),
+                Call(App(Const(ancestor), Var("X"))))
+    )
+}

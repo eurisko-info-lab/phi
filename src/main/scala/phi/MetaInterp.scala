@@ -20,7 +20,8 @@ case class LangSpec(
   changes: List[ChangeSpec],
   rules: List[Rule],
   defs: List[Def],
-  strategies: Map[String, Strat]
+  strategies: Map[String, Strat],
+  theorems: List[Theorem] = Nil
 )
 
 case class Sort(name: String)
@@ -72,6 +73,13 @@ case class Def(
   name: String,
   sort: Option[String],
   body: Pat
+)
+
+/** Theorem declaration (Abella-style) */
+case class Theorem(
+  name: String,
+  signature: LangType,    // The proposition type
+  proof: Option[Pat] = None  // Optional proof term
 )
 
 /** Rewriting strategies */
@@ -224,30 +232,30 @@ class LangInterpreter(spec: LangSpec):
   /** Apply rules anywhere in term (innermost/bottom-up) */
   def applyAnywhere(value: Val, cases: List[RuleCase]): Option[Val] = value match
     case VCon(name, args) if name.endsWith(".forward") || name.endsWith(".backward") =>
-      // Xform call - first reduce args, then try to apply xform rules
-      val reducedArgs = args.map { arg =>
-        applyAnywhere(arg, cases).getOrElse(arg)
-      }
+      // Xform call - match the args as a tuple against the xform rules
+      val argsAsTuple = args match
+        case List(a) => a
+        case List(a, b) => VCon("pair", List(a, b))
+        case List(a, b, c) => VCon("pair", List(a, VCon("pair", List(b, c))))
+        case _ => VCon("tuple", args)
       
-      // Look up rules for this xform
-      val xformCases = rules.getOrElse(name, Nil)
-      if xformCases.nonEmpty then
-        // For xform rules, match against the args as a tuple
-        val argsAsTuple = reducedArgs match
-          case List(a) => a
-          case List(a, b) => VCon("pair", List(a, b))
-          case List(a, b, c) => VCon("pair", List(a, VCon("pair", List(b, c))))
-          case _ => VCon("tuple", reducedArgs)
-        
-        applyRule(argsAsTuple, xformCases).orElse {
-          // If no rule matched but args changed, return the reduced version
-          if reducedArgs != args then Some(VCon(name, reducedArgs))
-          else None
-        }
-      else
-        // No xform rules, just return with reduced args
-        if reducedArgs != args then Some(VCon(name, reducedArgs))
-        else None
+      // Try to apply the provided cases (which should be xform rules)
+      applyRule(argsAsTuple, cases).orElse {
+        // Also try looking up rules by the xform name (for strategies that include multiple rules)
+        val xformCases = rules.getOrElse(name, Nil)
+        if xformCases.nonEmpty && xformCases != cases then
+          applyRule(argsAsTuple, xformCases)
+        else
+          // Try to reduce inside the args
+          val reduced = args.indices.foldLeft(Option.empty[Val]) { (acc, i) =>
+            acc.orElse {
+              applyAnywhere(args(i), cases).map { newArg =>
+                VCon(name, args.updated(i, newArg))
+              }
+            }
+          }
+          reduced
+      }
         
     case VCon(name, args) =>
       // Regular constructor - first try to reduce in subterms
@@ -258,8 +266,14 @@ class LangInterpreter(spec: LangSpec):
           }
         }
       }
-      // Then try at root
-      reduced.orElse(applyRule(value, cases))
+      // Then try at root, but only with rules that have a constructor pattern at root
+      // (not bare variable patterns, which would match anything - used in xform rules)
+      val constructorCases = cases.filter { rc =>
+        rc.lhs match
+          case PCon(_, _) => true
+          case _ => false
+      }
+      reduced.orElse(applyRule(value, constructorCases))
   
   /** Result of running a strategy: value + step count */
   case class NormResult(value: Val, steps: Int)
