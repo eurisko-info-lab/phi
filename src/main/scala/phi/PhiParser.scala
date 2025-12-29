@@ -383,13 +383,14 @@ object PhiParser extends RegexParsers:
       else Pat.PVar(name)
     }
   
-  // List patterns: [], [h | t], [a, b, c]
+  // List patterns: [], [h | t], [a, b, c], [a, b | t]
   def listPat: Parser[Pat] =
     // Empty list
     "[" ~ "]" ^^^ Pat.PCon("nil", Nil) |
-    // Cons pattern: [h | t]
-    "[" ~> patternNoComma ~ (CONS ~> patternNoComma) <~ "]" ^^ {
-      case head ~ tail => Pat.PCon("cons", List(head, tail))
+    // Cons pattern with explicit tail: [a, b | t] or [h | t]
+    "[" ~> rep1sep(patternNoComma, ",") ~ (CONS ~> patternNoComma) <~ "]" ^^ {
+      case elems ~ tail => 
+        elems.foldRight(tail)((e, acc) => Pat.PCon("cons", List(e, acc)))
     } |
     // List literal: [a, b, c] -> cons(a, cons(b, cons(c, nil)))
     "[" ~> rep1sep(patternNoComma, ",") <~ "]" ^^ { elems =>
@@ -425,7 +426,15 @@ object PhiParser extends RegexParsers:
     "Var", "Const", "Lam", "App", "True", "And", "Call", "Clause", "Program",
     // HKT
     "Star", "KArrow", "TVar", "TApp", "TArrow", "TForall", "TList", "TMaybe", 
-    "TEither", "TPair", "TFix", "TyLam", "TyApp"
+    "TEither", "TPair", "TFix", "TyLam", "TyApp",
+    // Phi self-hosting
+    "LangSpec", "DSort", "DCon", "DRule", "DDef", "DStrat",
+    "TName", "PVar", "PCon", "PApp", "PSubst", "PLam", "PNum",
+    "SId", "SFail", "SApply", "SSeq", "SChoice", "SRepeat",
+    // Tokens
+    "TokId", "TokNum", "TokStr", "TokSym", "TokKw", 
+    "TokLPar", "TokRPar", "TokLBra", "TokRBra", "TokLBrace", "TokRBrace",
+    "TokComma", "TokColon", "TokDot", "TokEOF"
   ).contains(s)
   
   def numeral(n: Int): Pat =

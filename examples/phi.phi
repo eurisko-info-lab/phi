@@ -1,0 +1,256 @@
+// =======================================================
+// Phi defined in Phi (self-hosting bootstrap)
+// =======================================================
+//
+// This demonstrates Phi's expressiveness by defining
+// Phi's own AST, parsing rules, and semantics within Phi.
+
+language Phi {
+
+  // =====================================================
+  // Syntactic sorts
+  // =====================================================
+
+  sort Spec       // Language specification
+  sort Decl       // Declaration
+  sort Pat        // Pattern (terms with metavariables)
+  sort Strat      // Rewriting strategy
+  sort Type       // Type expressions
+  sort Token      // Lexical tokens
+
+  // =====================================================
+  // Language specification
+  // =====================================================
+
+  constructor LangSpec : String → Decl* → Spec
+
+  // =====================================================
+  // Declarations
+  // =====================================================
+
+  constructor DSort : String → Decl
+  constructor DCon : String → Type → Decl
+  constructor DRule : String → Pat → Pat → Decl
+  constructor DDef : String → Pat → Decl
+  constructor DStrat : String → Strat → Decl
+
+  // =====================================================
+  // Types
+  // =====================================================
+
+  constructor TName : String → Type
+  constructor TArrow : Type → Type → Type
+  constructor TProd : Type → Type → Type
+  constructor TList : Type → Type
+
+  // =====================================================
+  // Patterns / Terms
+  // =====================================================
+
+  constructor PVar : String → Pat           // Metavariable: x
+  constructor PCon : String → Pat* → Pat    // Constructor: Con(a, b, c)
+  constructor PApp : Pat → Pat → Pat        // Application: f x
+  constructor PSubst : Pat → String → Pat → Pat  // Substitution: t[x := v]
+  constructor PLam : String → Pat → Pat     // Lambda: λx.t
+  constructor PNum : Nat → Pat              // Numeral
+
+  // =====================================================
+  // Strategies
+  // =====================================================
+
+  constructor SId : Strat                   // id
+  constructor SFail : Strat                 // fail
+  constructor SApply : String → Strat       // RuleName
+  constructor SSeq : Strat → Strat → Strat  // s1 ; s2
+  constructor SChoice : Strat → Strat → Strat  // s1 | s2
+  constructor SRepeat : Strat → Strat       // repeat s
+
+  // =====================================================
+  // Tokens (for parsing)
+  // =====================================================
+
+  constructor TokId : String → Token        // identifier
+  constructor TokNum : Nat → Token          // number literal
+  constructor TokStr : String → Token       // string literal
+  constructor TokSym : String → Token       // symbol: → ↦ := etc.
+  constructor TokKw : String → Token        // keyword: sort constructor rule etc.
+  constructor TokLPar : Token               // (
+  constructor TokRPar : Token               // )
+  constructor TokLBra : Token               // [
+  constructor TokRBra : Token               // ]
+  constructor TokLBrace : Token             // {
+  constructor TokRBrace : Token             // }
+  constructor TokComma : Token              // ,
+  constructor TokColon : Token              // :
+  constructor TokDot : Token                // .
+  constructor TokEOF : Token                // end of input
+
+  // =====================================================
+  // Parsing as rewriting
+  // =====================================================
+  //
+  // Grammar rules become rewrite rules on token streams.
+  // Each rule matches a sequence of tokens and produces AST.
+  // Note: Using string-like names to avoid keyword conflicts
+
+  xform Parse : Token* ⇄ Decl*
+
+  // Parse: sort Name
+  rule Parse.sortDecl {
+    [TokKw(kw_sort), TokId(name) | rest] ↦ 
+      cons(DSort(name), Parse.forward(rest))
+  }
+
+  // Parse: constructor Name : Type
+  rule Parse.constructorDecl {
+    [TokKw(kw_constructor), TokId(name), TokColon | typeAndRest] ↦
+      cons(DCon(name, ParseType.forward(typeAndRest)), 
+           Parse.forward(afterType(typeAndRest)))
+  }
+
+  // Parse: rule Name { lhs ↦ rhs }
+  rule Parse.ruleDecl {
+    [TokKw(kw_rule), TokId(name), TokLBrace | bodyAndRest] ↦
+      cons(DRule(name, ParsePat.forward(lhs(bodyAndRest)), 
+                       ParsePat.forward(rhs(bodyAndRest))),
+           Parse.forward(afterBrace(bodyAndRest)))
+  }
+
+  // Parse: def Name = Pat
+  rule Parse.defDecl {
+    [TokKw(kw_def), TokId(name), TokSym(eq) | patAndRest] ↦
+      cons(DDef(name, ParsePat.forward(patAndRest)),
+           Parse.forward(afterPat(patAndRest)))
+  }
+
+  // Parse: strategy Name := Strat
+  rule Parse.strategyDecl {
+    [TokKw(kw_strategy), TokId(name), TokSym(assign) | stratAndRest] ↦
+      cons(DStrat(name, ParseStrat.forward(stratAndRest)),
+           Parse.forward(afterStrat(stratAndRest)))
+  }
+
+  // Base case: empty token list
+  rule Parse.emptyNil {
+    [] ↦ nil
+  }
+  
+  rule Parse.emptyEOF {
+    [TokEOF | rest] ↦ nil
+  }
+
+  // =====================================================
+  // Type parsing
+  // =====================================================
+
+  xform ParseType : Token* ⇄ Type
+
+  rule ParseType.name {
+    [TokId(name) | rest] ↦ TName(name)
+  }
+
+  rule ParseType.arrow {
+    [TokId(a), TokSym(arrow), TokId(b) | rest] ↦ 
+      TArrow(TName(a), TName(b))
+  }
+
+  // =====================================================
+  // Pattern parsing  
+  // =====================================================
+
+  xform ParsePat : Token* ⇄ Pat
+
+  rule ParsePat.var {
+    [TokId(name) | rest] ↦ PVar(name)
+  }
+
+  rule ParsePat.num {
+    [TokNum(n) | rest] ↦ PNum(n)
+  }
+
+  rule ParsePat.con {
+    [TokId(name), TokLPar | argsAndRest] ↦
+      PCon(name, parseArgs(argsAndRest))
+  }
+
+  // =====================================================
+  // Strategy parsing
+  // =====================================================
+
+  xform ParseStrat : Token* ⇄ Strat
+
+  rule ParseStrat.idStrat {
+    [TokKw(kw_id) | rest] ↦ SId
+  }
+
+  rule ParseStrat.apply {
+    [TokId(name) | rest] ↦ SApply(name)
+  }
+
+  rule ParseStrat.repeatStrat {
+    [TokKw(kw_repeat) | stratRest] ↦ 
+      SRepeat(ParseStrat.forward(stratRest))
+  }
+
+  // =====================================================
+  // Substitution (meta-operation)
+  // =====================================================
+
+  xform Subst : (String × Pat) × Pat ⇄ Pat
+
+  rule Subst.var.match {
+    (x, v), PVar(x) ↦ v
+  }
+
+  rule Subst.var.other {
+    (x, v), PVar(y) ↦ PVar(y) where x ≠ y
+  }
+
+  rule Subst.con {
+    (x, v), PCon(name, args) ↦ 
+      PCon(name, map(λa. Subst.forward((x, v), a), args))
+  }
+
+  rule Subst.app {
+    (x, v), PApp(f, a) ↦ 
+      PApp(Subst.forward((x, v), f), Subst.forward((x, v), a))
+  }
+
+  rule Subst.lam.capture {
+    (x, v), PLam(x, body) ↦ PLam(x, body)  // x is bound, don't subst
+  }
+
+  rule Subst.lam.other {
+    (x, v), PLam(y, body) ↦ 
+      PLam(y, Subst.forward((x, v), body)) where x ≠ y
+  }
+
+  // =====================================================
+  // Example: A tiny Phi spec
+  // =====================================================
+
+  def exampleSpec = LangSpec(Tiny, [
+    DSort(Term),
+    DCon(Zero, TName(Term)),
+    DCon(Succ, TArrow(TName(Term), TName(Term))),
+    DRule(AddZero, 
+      PCon(add, [PVar(n), PCon(Zero, [])]),
+      PVar(n)),
+    DDef(one, PCon(Succ, [PCon(Zero, [])])),
+    DStrat(normalize, SRepeat(SApply(AddZero)))
+  ])
+
+  // =====================================================
+  // Normalization strategy
+  // =====================================================
+
+  strategy normalize := repeat (
+    Parse.sortDecl | Parse.constructorDecl | Parse.ruleDecl | Parse.defDecl | 
+    Parse.strategyDecl | Parse.empty |
+    ParseType.name | ParseType.arrow |
+    ParsePat.var | ParsePat.num | ParsePat.con |
+    ParseStrat.idStrat | ParseStrat.apply | ParseStrat.repeatStrat |
+    Subst.var.match | Subst.var.other | Subst.con | Subst.app |
+    Subst.lam.capture | Subst.lam.other
+  )
+}

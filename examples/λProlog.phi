@@ -50,14 +50,14 @@ language λProlog {
   xform Subst : (String × Term) × Term ⇄ Term
 
   rule Subst.forward {
-    (x,v), Var x       ↦ v
-    (x,v), Var y       ↦ Var y           where x ≠ y
-    (x,v), Const c     ↦ Const c
-    (x,v), Lam y t     ↦ Lam y t         where x = y
-    (x,v), Lam y t     ↦ Lam y (Subst.forward((x,v), t))
+    ((x,v), Var(x))       ↦ v
+    ((x,v), Var(y))       ↦ Var(y)           where x ≠ y
+    ((x,v), Const(c))     ↦ Const(c)
+    ((x,v), Lam(y, t))    ↦ Lam(y, t)        where x = y
+    ((x,v), Lam(y, t))    ↦ Lam(y, Subst.forward((x,v), t))
       where x ≠ y
-    (x,v), App f a     ↦ App (Subst.forward((x,v), f))
-                               (Subst.forward((x,v), a))
+    ((x,v), App(f, a))    ↦ App(Subst.forward((x,v), f),
+                                Subst.forward((x,v), a))
   }
 
   // =====================================================
@@ -67,10 +67,13 @@ language λProlog {
   change Beta : Term ⇄ Term
 
   rule Beta {
-    App (Lam x b) v ↦ Subst.forward((x,v), b)
+    App(Lam(x, b), v) ↦ Subst.forward((x,v), b)
   }
 
   strategy normalizeTerm := repeat Beta
+
+  // Main normalize strategy - apply solving rules
+  strategy normalize := repeat (Solve.forward | SolveClauses.forward | Unify.forward | applySubsts.forward | substGoal.forward | Subst.forward | Beta)
 
   // =====================================================
   // Higher-order pattern unification (fragment)
@@ -79,10 +82,10 @@ language λProlog {
   xform Unify : Term × Term ⇄ (String × Term)*
 
   rule Unify.forward {
-    (Var x, t) ↦ [(x,t)]
-    (t, Var x) ↦ [(x,t)]
-    (Const c1, Const c2) ↦ [] where c1 = c2
-    (App f1 a1, App f2 a2) ↦ s1 ++ s2
+    (Var(x), t) ↦ cons((x,t), nil)
+    (t, Var(x)) ↦ cons((x,t), nil)
+    (Const(c1), Const(c2)) ↦ nil where c1 = c2
+    (App(f1, a1), App(f2, a2)) ↦ s1 ++ s2
       where s1 = Unify.forward(f1,f2)
         and s2 = Unify.forward(a1,a2)
   }
@@ -95,20 +98,19 @@ language λProlog {
 
   rule Solve.forward {
     (P, True) ↦ True
-    (P, And g1 g2) ↦ And (Solve.forward(P,g1))
-                          (Solve.forward(P,g2))
-    (Program cs, Call t) ↦ SolveClauses(cs, t)
+    (P, And(g1, g2)) ↦ And(Solve.forward(P,g1), Solve.forward(P,g2))
+    (Program(cs), Call(t)) ↦ SolveClauses.forward(cs, t)
   }
 
   xform SolveClauses : Clause* × Term ⇄ Goal
 
   rule SolveClauses.forward {
-    ([Clause h b | rest], t) ↦
+    (cons(Clause(h, b), rest), t) ↦
       Solve.forward(
-        Program([Clause h b | rest]),
-        applySubsts(Unify.forward(h,t), b)
+        Program(cons(Clause(h, b), rest)),
+        applySubsts.forward(Unify.forward(h,t), b)
       )
-    ([ _ | rest ], t) ↦ SolveClauses.forward(rest, t)
+    (cons(_, rest), t) ↦ SolveClauses.forward(rest, t)
   }
 
   // =====================================================
@@ -118,71 +120,28 @@ language λProlog {
   xform applySubsts : (String × Term)* × Goal ⇄ Goal
 
   rule applySubsts.forward {
-    ([], g) ↦ g
-    ((x,t)::xs, g) ↦
-      applySubsts.forward(xs, substGoal(x,t,g))
+    (nil, g) ↦ g
+    (cons((x,t), xs), g) ↦ applySubsts.forward(xs, substGoal.forward(x,t,g))
   }
 
   xform substGoal : String × Term × Goal ⇄ Goal
 
   rule substGoal.forward {
-    (x,t, True) ↦ True
-    (x,t, And g1 g2) ↦ And (substGoal(x,t,g1))
-                             (substGoal(x,t,g2))
-    (x,t, Call tm) ↦ Call (Subst.forward((x,t), tm))
+    (x, t, True) ↦ True
+    (x, t, And(g1, g2)) ↦ And(substGoal.forward(x,t,g1), substGoal.forward(x,t,g2))
+    (x, t, Call(tm)) ↦ Call(Subst.forward((x,t), tm))
   }
 
   // =====================================================
-  // Lexer
+  // Parsing rules (Token* → AST)
   // =====================================================
-
-  token
-    IDENT
-    LAMBDA  "\\"
-    DOT     "."
-    COLON   ":"
-    ARROW   ":-"
-    LPAREN  "("
-    RPAREN  ")"
-    COMMA   ","
-    PERIOD  "."
-
-  // =====================================================
-  // Parser (real λProlog concrete syntax)
-  // =====================================================
-
-  syntax ident : String
-
-  syntax term : Term
-  syntax goal : Goal
-  syntax clause : Clause
-  syntax program : Program
-
-  grammar term {
-    IDENT                          => Var
-    IDENT IDENT                    => App
-    "(" term term ")"              => App
-    "\\" IDENT "." term            => Lam
-  }
-
-  grammar goal {
-    "true"                         => True
-    goal "," goal                  => And
-    term                           => Call
-  }
-
-  grammar clause {
-    term ":-" goal "."             => Clause
-    term "."                       => Clause(_, True)
-  }
-
-  grammar program {
-    clause*                        => Program
-  }
+  // For this demo, we use direct AST construction.
+  // A full implementation would have parsing rules like:
+  //   [TokId(x) | rest] ↦ Var(x)
+  // etc.
 
   // =====================================================
   // =================== EXAMPLES ========================
-  // Written in real λProlog syntax
   // =====================================================
 
   // Example program:
@@ -192,23 +151,26 @@ language λProlog {
   // ancestor X :- parent X.
   // ancestor X :- parent Y, ancestor Y.
   //
+  // Represented as AST:
 
   def exampleProgram : Program =
-    parse program """
-      parent alice.
-      parent bob.
-      ancestor X :- parent X.
-      ancestor X :- parent Y, ancestor Y.
-    """
+    Program(cons(
+      Clause(App(Const(parent), Const(alice)), True),
+      cons(
+        Clause(App(Const(parent), Const(bob)), True),
+        cons(
+          Clause(App(Const(ancestor), Var(X)), Call(App(Const(parent), Var(X)))),
+          cons(
+            Clause(App(Const(ancestor), Var(X)), 
+                   And(Call(App(Const(parent), Var(Y))),
+                       Call(App(Const(ancestor), Var(Y))))),
+            nil)))))
 
-  // Example query:
-  //
-  // ancestor alice.
-  //
+  // Example query: ancestor alice.
+  def query : Goal = Call(App(Const(ancestor), Const(alice)))
 
-  def query : Goal =
-    parse goal "ancestor alice."
-
-  def result : Goal =
-    Solve.forward(exampleProgram, query)
+  def result : Goal = Solve.forward(exampleProgram, query)
+  
+  // Test substitution: subst X with alice in Var(X)
+  def testSubst : Term = Subst.forward((X, Const(alice)), Var(X))
 }

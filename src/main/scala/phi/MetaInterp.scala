@@ -127,6 +127,26 @@ class LangInterpreter(spec: LangSpec):
       // Nullary constructor - check if it's a definition to expand
       defs.get(name).map(instantiate(_, env)).getOrElse(VCon(name, Nil))
     
+    // Special handling for parse(grammar, text) - tokenize then apply parse rules
+    case PCon("parse", List(grammarPat, textPat)) =>
+      val grammarVal = instantiate(grammarPat, env)
+      val textVal = instantiate(textPat, env)
+      // Extract grammar name and text string
+      (grammarVal, textVal) match
+        case (VCon(grammarName, Nil), VCon(text, Nil)) =>
+          val tokens = tokenize(text, grammarName)
+          // Look for Parse<Grammar>.* rules and apply them
+          val parsePrefix = s"Parse${grammarName.capitalize}"
+          val parseRules = spec.rules.filter(_.name.startsWith(parsePrefix))
+          if parseRules.nonEmpty then
+            // Apply parsing rules exhaustively
+            applyParseRules(tokens, parseRules)
+          else
+            // No parse rules found, return tokens
+            tokens
+        case _ =>
+          VCon("parse", List(grammarVal, textVal))
+    
     case PCon(name, args) =>
       VCon(name, args.map(instantiate(_, env)))
     
@@ -203,8 +223,34 @@ class LangInterpreter(spec: LangSpec):
   
   /** Apply rules anywhere in term (innermost/bottom-up) */
   def applyAnywhere(value: Val, cases: List[RuleCase]): Option[Val] = value match
+    case VCon(name, args) if name.endsWith(".forward") || name.endsWith(".backward") =>
+      // Xform call - first reduce args, then try to apply xform rules
+      val reducedArgs = args.map { arg =>
+        applyAnywhere(arg, cases).getOrElse(arg)
+      }
+      
+      // Look up rules for this xform
+      val xformCases = rules.getOrElse(name, Nil)
+      if xformCases.nonEmpty then
+        // For xform rules, match against the args as a tuple
+        val argsAsTuple = reducedArgs match
+          case List(a) => a
+          case List(a, b) => VCon("pair", List(a, b))
+          case List(a, b, c) => VCon("pair", List(a, VCon("pair", List(b, c))))
+          case _ => VCon("tuple", reducedArgs)
+        
+        applyRule(argsAsTuple, xformCases).orElse {
+          // If no rule matched but args changed, return the reduced version
+          if reducedArgs != args then Some(VCon(name, reducedArgs))
+          else None
+        }
+      else
+        // No xform rules, just return with reduced args
+        if reducedArgs != args then Some(VCon(name, reducedArgs))
+        else None
+        
     case VCon(name, args) =>
-      // First try to reduce in subterms
+      // Regular constructor - first try to reduce in subterms
       val reduced = args.indices.foldLeft(Option.empty[Val]) { (acc, i) =>
         acc.orElse {
           applyAnywhere(args(i), cases).map { newArg =>
@@ -257,6 +303,105 @@ class LangInterpreter(spec: LangSpec):
   /** Normalize a value using the 'normalize' strategy */
   def normalize(value: Val): NormResult =
     spec.strategies.get("normalize").map(runStrategy(_, value)).getOrElse(NormResult(value, 0))
+  
+  /** Apply parsing rules exhaustively until no more match */
+  def applyParseRules(tokens: Val, rules: List[Rule]): Val =
+    var current = tokens
+    var changed = true
+    var steps = 0
+    val maxSteps = 10000
+    
+    // Collect all rule cases
+    val allCases = rules.flatMap(_.cases)
+    
+    while changed && steps < maxSteps do
+      changed = false
+      applyRule(current, allCases) match
+        case Some(next) =>
+          current = next
+          changed = true
+          steps += 1
+        case None => ()
+    
+    current
+    
+    current
+
+  /** Tokenize a string into a token list for the given grammar */
+  def tokenize(text: String, grammar: String): Val =
+    import Val.*
+    
+    // Keywords by grammar
+    val keywords = grammar match
+      case "phi" | "Phi" => Set("language", "sort", "constructor", "xform", "change", 
+                                 "rule", "def", "strategy", "where", "and")
+      case "program" | "goal" => Set()  // Prolog has no keywords
+      case _ => Set.empty[String]
+    
+    // Symbols to recognize
+    val symbols = Map(
+      "→" -> "arrow", "->" -> "arrow",
+      "↦" -> "mapsto", "|->" -> "mapsto", 
+      ":=" -> "assign", "=" -> "eq",
+      "⇄" -> "biarrow", "<->" -> "biarrow",
+      ":-" -> "turnstile",
+      "×" -> "times", "*" -> "star",
+      "|" -> "bar", "::" -> "cons",
+      "≠" -> "neq", "!=" -> "neq",
+      "++" -> "concat"
+    )
+    
+    // Simple tokenizer
+    def tok(s: String): List[Val] =
+      val trimmed = s.trim
+      if trimmed.isEmpty then Nil
+      else
+        // Skip comments
+        val noComment = if trimmed.startsWith("//") then 
+          trimmed.dropWhile(_ != '\n').drop(1)
+        else trimmed
+        
+        val t = noComment.trim
+        if t.isEmpty then Nil
+        else if t.startsWith("(") then VCon("TokLPar", Nil) :: tok(t.tail)
+        else if t.startsWith(")") then VCon("TokRPar", Nil) :: tok(t.tail)
+        else if t.startsWith("{") then VCon("TokLBrace", Nil) :: tok(t.tail)
+        else if t.startsWith("}") then VCon("TokRBrace", Nil) :: tok(t.tail)
+        else if t.startsWith("[") then VCon("TokLBra", Nil) :: tok(t.tail)
+        else if t.startsWith("]") then VCon("TokRBra", Nil) :: tok(t.tail)
+        else if t.startsWith(",") then VCon("TokComma", Nil) :: tok(t.tail)
+        else if t.startsWith(":") && !t.startsWith(":-") && !t.startsWith("::") && !t.startsWith(":=") then 
+          VCon("TokColon", Nil) :: tok(t.tail)
+        else if t.startsWith(".") then VCon("TokDot", Nil) :: tok(t.tail)
+        else 
+          // Check for multi-char symbols
+          val symMatch = symbols.keys.find(t.startsWith)
+          symMatch match
+            case Some(sym) =>
+              VCon("TokSym", List(VCon(symbols(sym), Nil))) :: tok(t.drop(sym.length))
+            case None =>
+              // Identifier or number
+              if t.head.isDigit then
+                val (num, rest) = t.span(_.isDigit)
+                VCon("TokNum", List(numToVal(num.toInt))) :: tok(rest)
+              else if t.head.isLetter || t.head == '_' then
+                val (id, rest) = t.span(c => c.isLetterOrDigit || c == '_')
+                val tokType = if keywords.contains(id) then "TokKw" else "TokId"
+                VCon(tokType, List(VCon(id, Nil))) :: tok(rest)
+              else
+                // Skip unknown char
+                tok(t.tail)
+    
+    def numToVal(n: Int): Val =
+      if n == 0 then VCon("zero", Nil)
+      else VCon("succ", List(numToVal(n - 1)))
+    
+    // Build cons list from tokens
+    def toList(tokens: List[Val]): Val = tokens match
+      case Nil => VCon("nil", Nil)
+      case h :: t => VCon("cons", List(h, toList(t)))
+    
+    toList(tok(text) :+ VCon("TokEOF", Nil))
 
 // =============================================================================
 // DSL for Building Language Specs in Scala
