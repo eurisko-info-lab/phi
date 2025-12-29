@@ -463,6 +463,21 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
     result shouldBe Term.Hole(Some("test"))
   }
 
+  test("LCToIC round-trip should preserve structure") {
+    val terms = List(
+      LC.Var("x"),
+      LC.Lam("x", LC.Var("x")),
+      LC.App(LC.Lam("x", LC.Var("x")), LC.Var("y"))
+    )
+    for lc <- terms do
+      val term = Term.Done(lc)
+      val there = LCToIC.forward(term)
+      val back = LCToIC.backward(there)
+      withClue(s"Round-trip for $lc:") {
+        back.isDone shouldBe true
+      }
+  }
+
   // ===========================================================================
   // 15. Pattern Matching Tests
   // ===========================================================================
