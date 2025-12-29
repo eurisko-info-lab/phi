@@ -122,7 +122,14 @@ def buildScalaAST(spec: LangSpec): List[Val] =
       case None => false
   }.map(_.name).toSet
   
-  // Generate enums for simple sorts, sealed traits for complex ones
+  // Identify single-constructor sorts where ctor name = sort name
+  val singleCtorSorts = spec.sorts.filter { sort =>
+    ctorsBySortRaw.get(sort.name) match
+      case Some(List(ctor)) => ctor.name == sort.name
+      case _ => false
+  }.map(_.name).toSet
+  
+  // Generate enums for simple sorts, skip single-ctor sorts, sealed traits for others
   val sortDefns = spec.sorts.flatMap { sort =>
     if enumSorts.contains(sort.name) then
       val cases = ctorsBySortRaw(sort.name).map(c => VCon("EnumVal", List(VCon(c.name, Nil))))
@@ -131,12 +138,16 @@ def buildScalaAST(spec: LangSpec): List[Val] =
         VCon("nil", Nil),  // no type params for enums
         VCon("nil", cases)
       )))
+    else if singleCtorSorts.contains(sort.name) then
+      Nil  // Skip trait generation - the case class stands alone
     else
       List(sort2Scala(sort))
   }
   
-  // Only generate case classes for non-enum constructors
-  val ctorDefns = spec.constructors.filterNot(c => enumSorts.contains(c.returnSort)).map(ctor2Scala)
+  // Generate case classes, using CaseClass (no extends) for single-ctor sorts
+  val ctorDefns = spec.constructors
+    .filterNot(c => enumSorts.contains(c.returnSort))
+    .map(c => ctor2Scala(c, singleCtorSorts.contains(c.returnSort)))
   
   val xformDefns = spec.xforms.flatMap(x => xform2Scala(x, spec.rules))
   
@@ -213,7 +224,7 @@ def inferParamName(ty: LangType, index: Int, usedNames: Set[String]): String =
     s"$base$n"
 
 /** Constructor → CaseClass or CaseObject */
-def ctor2Scala(ctor: Constructor): Val =
+def ctor2Scala(ctor: Constructor, standalone: Boolean = false): Val =
   var usedNames = Set.empty[String]
   val params = ctor.params.zipWithIndex.map { case ((nameOpt, ty), i) =>
     val argName = nameOpt.getOrElse {
@@ -228,6 +239,13 @@ def ctor2Scala(ctor: Constructor): Val =
     VCon("CaseObject", List(
       VCon(ctor.name, Nil),
       VCon("TyName", List(VCon("SimpleName", List(VCon(ctor.returnSort, Nil)))))
+    ))
+  else if standalone then
+    // No extends - the case class is its own type
+    VCon("CaseClass", List(
+      VCon(ctor.name, Nil),
+      VCon("nil", Nil),  // no type params
+      VCon("nil", params)
     ))
   else
     VCon("CaseClassExtends", List(
