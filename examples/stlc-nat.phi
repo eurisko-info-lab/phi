@@ -1,0 +1,107 @@
+// =======================================================
+// STLC + Nat in Phi syntax
+// =======================================================
+
+language STLCNat {
+
+  // -----------------------
+  // Sorts
+  // -----------------------
+  sort Type
+  sort Term
+
+  // -----------------------
+  // Type constructors
+  // -----------------------
+  constructor Unit : Type
+  constructor Nat : Type
+  constructor Arr : Type -> Type -> Type
+
+  // -----------------------
+  // Term constructors  
+  // -----------------------
+  constructor unit : Term
+  constructor zero : Term
+  constructor succ : Term -> Term
+  constructor lam : (x : Term) -> Type -> Term -> Term
+  constructor app : Term -> Term -> Term
+  constructor NatRec : (n : Term) -> (base : Term) -> (step : Term) -> Term
+  constructor pair : Term -> Term -> Term
+  constructor fst : Term -> Term
+  constructor snd : Term -> Term
+
+  // -----------------------
+  // Reduction rules
+  // -----------------------
+  
+  rule BetaReduce {
+    app(lam(x, A, body), v) |-> body[x := v]
+  }
+
+  rule NatRecZero {
+    NatRec(zero, z, s) |-> z
+  }
+
+  rule NatRecSucc {
+    NatRec(succ(n), z, s) |-> app(app(s, n), NatRec(n, z, s))
+  }
+
+  rule FstPair {
+    fst(pair(a, b)) |-> a
+  }
+
+  rule SndPair {
+    snd(pair(a, b)) |-> b
+  }
+
+  // -----------------------
+  // Normalization strategy
+  // -----------------------
+  normalize := repeat (BetaReduce | NatRecZero | NatRecSucc | FstPair | SndPair)
+
+  // -----------------------
+  // Standard library
+  // -----------------------
+
+  // add m n = NatRec m n (λ_.λacc. succ acc)
+  def add = lam(m, Nat, lam(n, Nat, 
+    NatRec(m, n, lam(ii, Nat, lam(acc, Nat, succ(acc))))))
+
+  // fibStep p = pair (snd p) (add (fst p) (snd p))
+  def fibStep = lam(p, Nat, 
+    pair(snd(p), app(app(add, fst(p)), snd(p))))
+
+  // fib n = fst (NatRec n (pair 0 1) (λ_.λp. fibStep p))
+  def fib = lam(fn, Nat, 
+    fst(NatRec(fn, pair(0, 1), lam(k, Nat, lam(fp, Nat, app(fibStep, fp))))))
+
+  // mult m n = NatRec m 0 (λ_.λacc. add n acc)
+  def mult = lam(mm, Nat, lam(nn, Nat,
+    NatRec(mm, 0, lam(ii, Nat, lam(aa, Nat, app(app(add, nn), aa))))))
+
+  // fact n = NatRec n 1 (λk.λacc. mult (succ k) acc)
+  def fact = lam(fn, Nat,
+    NatRec(fn, 1, lam(fk, Nat, lam(fa, Nat, app(app(mult, succ(fk)), fa)))))
+
+  // -----------------------
+  // Numerals
+  // -----------------------
+  def one   = succ(zero)
+  def two   = succ(one)
+  def three = succ(two)
+  def four  = succ(three)
+  def five  = succ(four)
+  def six   = succ(five)
+  def seven = succ(six)
+  def eight = succ(seven)
+  def nine  = succ(eight)
+  def ten   = succ(nine)
+
+  // -----------------------
+  // Tests
+  // -----------------------
+  def test_add = app(app(add, two), three)
+  def fib5 = app(fib, five)
+  def fib7 = app(fib, seven)
+  def fact5 = app(fact, five)
+}

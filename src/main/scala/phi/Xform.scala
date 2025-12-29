@@ -100,6 +100,150 @@ object LC:
     candidate
 
 // =============================================================================
+// LC Interpreter - Beta Reduction
+// =============================================================================
+
+/**
+ * Lambda Calculus interpreter with call-by-value semantics.
+ */
+object LCInterpreter:
+  /** Result of evaluation */
+  enum Value:
+    case VInt(n: Int)
+    case VClosure(param: String, body: LC, env: Env)
+    case VPrim(op: String, args: List[Value])
+  
+  // Use lazy thunk for recursive bindings
+  class Thunk(compute: => Value):
+    lazy val value: Value = compute
+  
+  type Env = Map[String, Thunk]
+  
+  /** Evaluate LC term to a value */
+  def eval(term: LC, env: Env = Map.empty): Value = term match
+    case LC.Lit(n) => Value.VInt(n)
+    
+    case LC.Var(name) => 
+      env.get(name) match
+        case Some(thunk) => thunk.value
+        case None => throw RuntimeException(s"Unbound variable: $name")
+    
+    case LC.Lam(param, body) => 
+      Value.VClosure(param, body, env)
+    
+    case LC.App(func, arg) =>
+      val fv = eval(func, env)
+      val av = eval(arg, env)
+      fv match
+        case Value.VClosure(param, body, closureEnv) =>
+          eval(body, closureEnv + (param -> Thunk(av)))
+        case _ => throw RuntimeException(s"Cannot apply non-function: $fv")
+    
+    case LC.Let(name, value, body) =>
+      // Support recursive let with lazy thunk
+      lazy val thunk: Thunk = new Thunk(eval(value, env + (name -> thunk)))
+      eval(body, env + (name -> thunk))
+    
+    case LC.Prim("if", List(cond, thenBr, elseBr)) =>
+      val cv = eval(cond, env)
+      cv match
+        case Value.VInt(n) if n != 0 => eval(thenBr, env)
+        case Value.VInt(_) => eval(elseBr, env)
+        case _ => throw RuntimeException(s"if condition must be int, got $cv")
+    
+    case LC.Prim(op, args) =>
+      val vals = args.map(eval(_, env))
+      evalPrim(op, vals)
+  
+  /** Evaluate primitive operation */
+  def evalPrim(op: String, args: List[Value]): Value =
+    def toInt(v: Value): Int = v match
+      case Value.VInt(n) => n
+      case _ => throw RuntimeException(s"Expected int, got $v")
+    
+    (op, args.map(toInt)) match
+      case ("+", List(a, b)) => Value.VInt(a + b)
+      case ("-", List(a, b)) => Value.VInt(a - b)
+      case ("*", List(a, b)) => Value.VInt(a * b)
+      case ("/", List(a, b)) => Value.VInt(a / b)
+      case ("%", List(a, b)) => Value.VInt(a % b)
+      case ("=", List(a, b)) => Value.VInt(if a == b then 1 else 0)
+      case ("!=", List(a, b)) => Value.VInt(if a != b then 1 else 0)
+      case ("<", List(a, b)) => Value.VInt(if a < b then 1 else 0)
+      case (">", List(a, b)) => Value.VInt(if a > b then 1 else 0)
+      case ("<=", List(a, b)) => Value.VInt(if a <= b then 1 else 0)
+      case (">=", List(a, b)) => Value.VInt(if a >= b then 1 else 0)
+      case ("|", List(a, b)) => Value.VInt(if a != 0 || b != 0 then 1 else 0)
+      case ("&", List(a, b)) => Value.VInt(if a != 0 && b != 0 then 1 else 0)
+      case _ => throw RuntimeException(s"Unknown primitive: $op with ${args.size} args")
+  
+  /** Render value to string */
+  def render(v: Value): String = v match
+    case Value.VInt(n) => n.toString
+    case Value.VClosure(p, _, _) => s"<closure λ$p.…>"
+    case Value.VPrim(op, args) => s"<prim $op>"
+  
+  /** Beta-reduce LC term (normalize) with step limit */
+  def reduce(term: LC, maxSteps: Int = 1000): LC =
+    var current = term
+    var steps = 0
+    while steps < maxSteps do
+      step(current) match
+        case Some(next) =>
+          current = next
+          steps += 1
+        case None =>
+          return current
+    current // Return current state if max steps reached
+  
+  /** Single beta-reduction step (leftmost-outermost) */
+  def step(term: LC): Option[LC] = term match
+    case LC.Var(_) => None
+    case LC.Lit(_) => None
+    
+    case LC.App(LC.Lam(param, body), arg) =>
+      // Beta reduction
+      Some(LC.subst(body, param, arg))
+    
+    case LC.App(func, arg) =>
+      // Try to reduce func first
+      step(func).map(f => LC.App(f, arg))
+        .orElse(step(arg).map(a => LC.App(func, a)))
+    
+    case LC.Lam(param, body) =>
+      step(body).map(b => LC.Lam(param, b))
+    
+    case LC.Let(name, value, body) =>
+      // Desugar let
+      Some(LC.subst(body, name, value))
+    
+    case LC.Prim(op, args) =>
+      // Try to reduce all args to literals, then compute
+      val reduced = args.map(reduce(_, 100))
+      val allLits = reduced.collect { case LC.Lit(n) => n }
+      if allLits.size == reduced.size then
+        evalPrimLC(op, allLits).map(LC.Lit.apply)
+      else
+        None
+  
+  /** Evaluate primitive on ints */
+  def evalPrimLC(op: String, args: List[Int]): Option[Int] = (op, args) match
+    case ("+", List(a, b)) => Some(a + b)
+    case ("-", List(a, b)) => Some(a - b)
+    case ("*", List(a, b)) => Some(a * b)
+    case ("/", List(a, b)) if b != 0 => Some(a / b)
+    case ("%", List(a, b)) if b != 0 => Some(a % b)
+    case ("=", List(a, b)) => Some(if a == b then 1 else 0)
+    case ("!=", List(a, b)) => Some(if a != b then 1 else 0)
+    case ("<", List(a, b)) => Some(if a < b then 1 else 0)
+    case (">", List(a, b)) => Some(if a > b then 1 else 0)
+    case ("<=", List(a, b)) => Some(if a <= b then 1 else 0)
+    case (">=", List(a, b)) => Some(if a >= b then 1 else 0)
+    case ("|", List(a, b)) => Some(if a != 0 || b != 0 then 1 else 0)
+    case ("&", List(a, b)) => Some(if a != 0 && b != 0 then 1 else 0)
+    case _ => None
+
+// =============================================================================
 // Interaction Calculus (IC) - Net-based representation
 // =============================================================================
 

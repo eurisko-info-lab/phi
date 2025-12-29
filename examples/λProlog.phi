@@ -1,0 +1,218 @@
+// =======================================================
+// λProlog in Phi
+// Parser + Interpreter
+// Examples written in *actual λProlog syntax*
+// =======================================================
+
+language λProlog {
+
+  // =====================================================
+  // Core sorts
+  // =====================================================
+
+  sort Type
+  sort Term
+  sort Goal
+  sort Clause
+  sort Program
+
+  // =====================================================
+  // Types (simple types, implicit)
+  // =====================================================
+
+  constructor
+    TyConst : String → Type
+    TyArr   : Type → Type → Type
+
+  // =====================================================
+  // Terms (λProlog core)
+// =====================================================
+
+  constructor
+    Var   : String → Term
+    Const : String → Term
+    Lam   : String → Term → Term
+    App   : Term → Term → Term
+
+  // =====================================================
+  // Goals and clauses
+  // =====================================================
+
+  constructor
+    True  : Goal
+    And   : Goal → Goal → Goal
+    Call  : Term → Goal
+
+  constructor
+    Clause : Term → Goal → Clause
+    Program : Clause* → Program
+
+  // =====================================================
+  // Substitution
+  // =====================================================
+
+  xform Subst : (String × Term) × Term ⇄ Term
+
+  rule Subst.forward {
+    (x,v), Var x       ↦ v
+    (x,v), Var y       ↦ Var y          where x ≠ y
+    (x,v), Const c     ↦ Const c
+    (x,v), Lam y t     ↦ Lam y t         where x = y
+    (x,v), Lam y t     ↦ Lam y (Subst.forward((x,v), t))
+      where x ≠ y
+    (x,v), App f a     ↦ App (Subst.forward((x,v), f))
+                               (Subst.forward((x,v), a))
+  }
+
+  // =====================================================
+  // β-reduction
+  // =====================================================
+
+  change Beta : Term ⇄ Term
+
+  rule Beta {
+    App (Lam x b) v ↦ Subst.forward((x,v), b)
+  }
+
+  normalizeTerm := repeat Beta
+
+  // =====================================================
+  // Higher-order pattern unification (fragment)
+  // =====================================================
+
+  xform Unify : Term × Term ⇄ (String × Term)*
+
+  rule Unify.forward {
+    (Var x, t) ↦ [(x,t)]
+    (t, Var x) ↦ [(x,t)]
+    (Const c1, Const c2) ↦ [] where c1 = c2
+    (App f1 a1, App f2 a2) ↦ s1 ++ s2
+      where s1 = Unify.forward(f1,f2)
+        and s2 = Unify.forward(a1,a2)
+  }
+
+  // =====================================================
+  // Goal solving
+  // =====================================================
+
+  xform Solve : Program × Goal ⇄ Goal
+
+  rule Solve.forward {
+    (P, True) ↦ True
+    (P, And g1 g2) ↦ And (Solve.forward(P,g1))
+                          (Solve.forward(P,g2))
+    (Program cs, Call t) ↦ SolveClauses(cs, t)
+  }
+
+  xform SolveClauses : Clause* × Term ⇄ Goal
+
+  rule SolveClauses.forward {
+    ([Clause h b | rest], t) ↦
+      Solve.forward(
+        Program([Clause h b | rest]),
+        applySubsts(Unify.forward(h,t), b)
+      )
+    ([ _ | rest ], t) ↦ SolveClauses.forward(rest, t)
+  }
+
+  // =====================================================
+  // Apply substitutions to goals
+  // =====================================================
+
+  xform applySubsts : (String × Term)* × Goal ⇄ Goal
+
+  rule applySubsts.forward {
+    ([], g) ↦ g
+    ((x,t)::xs, g) ↦
+      applySubsts.forward(xs, substGoal(x,t,g))
+  }
+
+  xform substGoal : String × Term × Goal ⇄ Goal
+
+  rule substGoal.forward {
+    (x,t, True) ↦ True
+    (x,t, And g1 g2) ↦ And (substGoal(x,t,g1))
+                             (substGoal(x,t,g2))
+    (x,t, Call tm) ↦ Call (Subst.forward((x,t), tm))
+  }
+
+  // =====================================================
+  // Lexer
+  // =====================================================
+
+  token
+    IDENT
+    LAMBDA  "\\"
+    DOT     "."
+    COLON   ":"
+    ARROW   ":-"
+    LPAREN  "("
+    RPAREN  ")"
+    COMMA   ","
+    PERIOD  "."
+
+  // =====================================================
+  // Parser (real λProlog concrete syntax)
+  // =====================================================
+
+  syntax ident : String
+
+  syntax term : Term
+  syntax goal : Goal
+  syntax clause : Clause
+  syntax program : Program
+
+  grammar term {
+    IDENT                          => Var
+    IDENT IDENT                    => App
+    "(" term term ")"              => App
+    "\\" IDENT "." term            => Lam
+  }
+
+  grammar goal {
+    "true"                         => True
+    goal "," goal                  => And
+    term                           => Call
+  }
+
+  grammar clause {
+    term ":-" goal "."             => Clause
+    term "."                       => Clause(_, True)
+  }
+
+  grammar program {
+    clause*                        => Program
+  }
+
+  // =====================================================
+  // =================== EXAMPLES ========================
+  // Written in real λProlog syntax
+  // =====================================================
+
+  // Example program:
+  //
+  // parent alice.
+  // parent bob.
+  // ancestor X :- parent X.
+  // ancestor X :- parent Y, ancestor Y.
+  //
+
+  def exampleProgram : Program =
+    parse program """
+      parent alice.
+      parent bob.
+      ancestor X :- parent X.
+      ancestor X :- parent Y, ancestor Y.
+    """
+
+  // Example query:
+  //
+  // ancestor alice.
+  //
+
+  def query : Goal =
+    parse goal "ancestor alice."
+
+  def result : Goal =
+    Solve.forward(exampleProgram, query)
+}

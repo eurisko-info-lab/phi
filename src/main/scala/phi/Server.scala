@@ -331,6 +331,53 @@ object PhiRoutes:
             BadRequest(Json.obj("error" -> s"Incomplete expression: ${l.getOrElse("?")}".asJson))
       yield resp
 
+    case req @ POST -> Root / "eval" / "lc" =>
+      for
+        pr <- req.as[ParseRequest]
+        result = Pipeline.parseLC(pr.input)
+        resp <- result match
+          case Right(term) =>
+            term match
+              case Term.Done(lc) =>
+                try
+                  val value = LCInterpreter.eval(lc)
+                  Ok(Json.obj(
+                    "success" -> true.asJson,
+                    "result" -> LCInterpreter.render(value).asJson,
+                    "input" -> pr.input.asJson
+                  ))
+                catch
+                  case e: RuntimeException =>
+                    Ok(Json.obj(
+                      "success" -> false.asJson,
+                      "error" -> e.getMessage.asJson
+                    ))
+              case Term.Hole(l) =>
+                BadRequest(Json.obj("error" -> s"Incomplete: ${l.getOrElse("?")}".asJson))
+          case Left(err) =>
+            BadRequest(Json.obj("error" -> err.asJson))
+      yield resp
+
+    case req @ POST -> Root / "reduce" / "lc" =>
+      for
+        pr <- req.as[ParseRequest]
+        result = Pipeline.parseLC(pr.input)
+        resp <- result match
+          case Right(term) =>
+            term match
+              case Term.Done(lc) =>
+                val reduced = LCInterpreter.reduce(lc)
+                Ok(Json.obj(
+                  "success" -> true.asJson,
+                  "input" -> pr.input.asJson,
+                  "reduced" -> Pipeline.renderLC(Term.Done(reduced)).asJson
+                ))
+              case Term.Hole(l) =>
+                BadRequest(Json.obj("error" -> s"Incomplete: ${l.getOrElse("?")}".asJson))
+          case Left(err) =>
+            BadRequest(Json.obj("error" -> err.asJson))
+      yield resp
+
     // =========================================================================
     // LC Parsing
     // =========================================================================
@@ -598,6 +645,11 @@ object PhiRoutes:
       IO.pure(Response[IO](Status.Ok)
         .withBodyStream(fs2.Stream.emits(PhiHtml.repoPage.getBytes("UTF-8")))
         .withContentType(`Content-Type`(MediaType.text.html, Charset.`UTF-8`)))
+
+    case GET -> Root / "debug.html" =>
+      IO.pure(Response[IO](Status.Ok)
+        .withBodyStream(fs2.Stream.emits(PhiHtml.debugPage.getBytes("UTF-8")))
+        .withContentType(`Content-Type`(MediaType.text.html, Charset.`UTF-8`)))
   }
 
 // =============================================================================
@@ -605,6 +657,82 @@ object PhiRoutes:
 // =============================================================================
 
 object PhiHtml:
+  val debugPage: String = """<!DOCTYPE html>
+<html>
+<head><title>Debug</title></head>
+<body style="background:#111;color:#0f0;font-family:monospace;padding:20px;">
+<h1>Debug Page</h1>
+<div id="output">Loading...</div>
+<script>
+const out = document.getElementById('output');
+function log(msg) {
+  out.innerHTML += msg + '<br>';
+}
+
+async function test() {
+  log('1. Fetching /repo/lc/info...');
+  try {
+    const resp = await fetch('/repo/lc/info');
+    const info = await resp.json();
+    log('   OK - ' + info.names.length + ' names');
+    log('   Names: ' + info.names.slice(0,5).join(', ') + '...');
+    
+    log('2. Fetching /repo/lc/name/id...');
+    const resp2 = await fetch('/repo/lc/name/id');
+    const data = await resp2.json();
+    log('   OK - hash: ' + data.hash);
+    log('   Term: ' + JSON.stringify(data.term).substring(0,100) + '...');
+    
+    log('3. Testing renderLC...');
+    function normalizeLC(node) {
+      if (!node) return null;
+      if (node.type === 'done' && node.value) return normalizeLC(node.value);
+      if (node.type === 'hole') return { kind: 'hole', label: node.label };
+      if (node.type === 'var') return { kind: 'var', name: node.name };
+      if (node.type === 'lit') return { kind: 'lit', value: node.value };
+      if (node.type === 'lam') return { kind: 'lam', param: node.param, body: normalizeLC(node.body) };
+      if (node.type === 'app') return { kind: 'app', func: normalizeLC(node.func), arg: normalizeLC(node.arg) };
+      if (node.type === 'let') return { kind: 'let', name: node.name, value: normalizeLC(node.value), body: normalizeLC(node.body) };
+      if (node.type === 'prim') return { kind: 'prim', op: node.op, args: (node.args || []).map(normalizeLC) };
+      if (node.Var) return { kind: 'var', name: node.Var.name };
+      if (node.Lit) return { kind: 'lit', value: node.Lit.value };
+      if (node.Lam) return { kind: 'lam', param: node.Lam.param, body: normalizeLC(node.Lam.body) };
+      if (node.App) return { kind: 'app', func: normalizeLC(node.App.func), arg: normalizeLC(node.App.arg) };
+      if (node.Let) return { kind: 'let', name: node.Let.name, value: normalizeLC(node.Let.value), body: normalizeLC(node.Let.body) };
+      if (node.Prim) return { kind: 'prim', op: node.Prim.op, args: (node.Prim.args || []).map(normalizeLC) };
+      return { kind: 'unknown' };
+    }
+    function renderNormLC(n) {
+      if (!n) return '?';
+      switch (n.kind) {
+        case 'hole': return '?' + (n.label || '');
+        case 'var': return n.name;
+        case 'lit': return String(n.value);
+        case 'lam': return 'λ' + n.param + '.' + renderNormLC(n.body);
+        case 'app': return '(' + renderNormLC(n.func) + ' ' + renderNormLC(n.arg) + ')';
+        case 'let': return 'let ' + n.name + ' = ' + renderNormLC(n.value) + ' in ' + renderNormLC(n.body);
+        case 'prim':
+          if (n.args && n.args.length === 2) return '(' + renderNormLC(n.args[0]) + ' ' + n.op + ' ' + renderNormLC(n.args[1]) + ')';
+          return n.op + '(' + (n.args||[]).map(renderNormLC).join(', ') + ')';
+        default: return '?';
+      }
+    }
+    const rendered = renderNormLC(normalizeLC(data.term));
+    log('   Rendered: ' + rendered);
+    
+    log('');
+    log('=== ALL TESTS PASSED ===');
+  } catch (e) {
+    log('ERROR: ' + e.message);
+    log(e.stack);
+  }
+}
+test();
+</script>
+</body>
+</html>
+"""
+
   val indexPage: String = """<!DOCTYPE html>
 <html>
 <head>
@@ -1087,7 +1215,7 @@ POST /editor/lc/:id/redo</pre>
     .branch-bar button:hover { background: #1a4a80; }
     
     /* Terms list */
-    .terms-list { flex: 1; overflow-y: auto; }
+    .terms-list { flex: 1; overflow-y: auto; min-height: 200px; background: #12203a; }
     .term-item { padding: 12px 15px; border-bottom: 1px solid #0f3460; cursor: pointer; transition: background 0.2s; }
     .term-item:hover { background: #1a2a4a; }
     .term-item.selected { background: #0f3460; border-left: 3px solid #e94560; }
@@ -1095,8 +1223,11 @@ POST /editor/lc/:id/redo</pre>
     .term-hash { font-family: monospace; font-size: 11px; color: #888; }
     .term-preview { font-family: monospace; font-size: 12px; color: #aaa; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     
+    /* Section headers */
+    .section-header { padding: 10px 15px; background: #0a1628; font-size: 12px; font-weight: 600; color: #888; text-transform: uppercase; border-bottom: 1px solid #0f3460; }
+    
     /* History list */
-    .history-section { border-top: 2px solid #0f3460; }
+    .history-section { border-top: 2px solid #0f3460; max-height: 250px; overflow-y: auto; }
     .history-header { padding: 10px 15px; background: #0a1628; font-size: 12px; font-weight: 600; color: #888; text-transform: uppercase; }
     .patch-item { padding: 10px 15px; border-bottom: 1px solid #0f3460; cursor: pointer; font-size: 13px; }
     .patch-item:hover { background: #1a2a4a; }
@@ -1194,7 +1325,8 @@ POST /editor/lc/:id/redo</pre>
         <button onclick="showNewBranchModal()">+ Branch</button>
       </div>
       
-      <div class="terms-list" id="termsList"></div>
+      <div class="section-header">📁 Named Terms</div>
+      <div class="terms-list" id="termsList"><div class="empty-state">Loading...</div></div>
       
       <div class="history-section">
         <div class="history-header">📜 History</div>
@@ -1260,12 +1392,22 @@ Examples:
     const API = '';
     let currentTerm = null;
     let currentHash = null;
+    let currentName = null;
     
     // Initialize
     async function init() {
-      await loadBranches();
-      await loadTerms();
-      await loadHistory();
+      try {
+        console.log('Starting init...');
+        await loadBranches();
+        console.log('Branches loaded');
+        await loadTerms();
+        console.log('Terms loaded');
+        await loadHistory();
+        console.log('History loaded');
+      } catch (e) {
+        console.error('Init error:', e);
+        document.getElementById('termsList').innerHTML = '<div class="empty-state" style="color:red;">Error: ' + e.message + '</div>';
+      }
     }
     
     // Load branches
@@ -1278,26 +1420,49 @@ Examples:
       ).join('');
     }
     
-    // Load terms list
+    // Load terms list - fetch named terms from repo info
     async function loadTerms() {
-      const resp = await fetch(API + '/repo/lc/terms');
-      const terms = await resp.json();
+      console.log('loadTerms started');
       const list = document.getElementById('termsList');
+      list.innerHTML = '<div class="empty-state">Loading terms...</div>';
       
-      if (terms.length === 0) {
-        list.innerHTML = '<div class="empty-state">No terms yet.<br>Create one in the editor!</div>';
-        return;
+      try {
+        const resp = await fetch(API + '/repo/lc/info');
+        console.log('Got info response:', resp.status);
+        const info = await resp.json();
+        console.log('Info parsed, names:', info.names?.length || 0);
+        
+        if (!info.names || info.names.length === 0) {
+          list.innerHTML = '<div class="empty-state">No terms yet.<br>Create one in the editor!</div>';
+          return;
+        }
+        
+        // Show loading progress
+        list.innerHTML = '<div class="empty-state">Loading ' + info.names.length + ' terms...</div>';
+        
+        // Fetch each named term
+        const termItems = await Promise.all(info.names.map(async name => {
+          try {
+            const termResp = await fetch(API + '/repo/lc/name/' + encodeURIComponent(name));
+            const data = await termResp.json();
+            const preview = renderLC(data.term);
+            return `<div class="term-item" onclick="selectTermByName(event, '${esc(name)}')">
+              <div class="term-name">${esc(name)}</div>
+              <div class="term-hash">${data.hash.substring(0, 12)}...</div>
+              <div class="term-preview">${esc(preview.substring(0, 40))}</div>
+            </div>`;
+          } catch (e) {
+            console.error('Error loading term', name, e);
+            return `<div class="term-item"><div class="term-name">${esc(name)}</div><div class="term-hash">error</div></div>`;
+          }
+        }));
+        
+        console.log('All terms loaded, count:', termItems.length);
+        list.innerHTML = termItems.join('');
+      } catch (e) {
+        console.error('loadTerms error:', e);
+        list.innerHTML = '<div class="empty-state" style="color:red;">Error: ' + e.message + '</div>';
       }
-      
-      list.innerHTML = terms.map(t => {
-        const preview = renderPreview(t.term);
-        const names = t.term.names || [];
-        return `<div class="term-item" onclick="selectTerm('${t.hash}')">
-          <div class="term-name">${names[0] || 'unnamed'}</div>
-          <div class="term-hash">${t.hash}</div>
-          <div class="term-preview">${esc(preview)}</div>
-        </div>`;
-      }).join('');
     }
     
     // Load history
@@ -1321,30 +1486,52 @@ Examples:
       }).join('');
     }
     
-    // Select a term
-    async function selectTerm(hash) {
+    // Select a term by hash
+    async function selectTerm(e, hash) {
       const resp = await fetch(API + `/repo/lc/term/${hash}`);
       const data = await resp.json();
       currentTerm = data.term;
       currentHash = hash;
+      currentName = null;
       
       document.querySelectorAll('.term-item').forEach(el => el.classList.remove('selected'));
-      event.currentTarget?.classList.add('selected');
+      e?.currentTarget?.classList.add('selected');
       
       document.getElementById('currentTitle').textContent = `Term: ${hash.substring(0,8)}...`;
       updateViews();
       showView('viewer');
     }
     
+    // Select a term by name
+    async function selectTermByName(e, name) {
+      const resp = await fetch(API + `/repo/lc/name/${encodeURIComponent(name)}`);
+      const data = await resp.json();
+      currentTerm = data.term;
+      currentHash = data.hash;
+      currentName = name;
+      
+      document.querySelectorAll('.term-item').forEach(el => el.classList.remove('selected'));
+      e?.currentTarget?.classList.add('selected');
+      
+      document.getElementById('currentTitle').textContent = name;
+      updateViews();
+      showView('viewer');
+    }
+    
     // Update all views
     function updateViews() {
-      if (!currentTerm) return;
+      if (!currentTerm) { console.log('No currentTerm'); return; }
+      console.log('updateViews with:', currentTerm);
       
       // Code view
-      document.getElementById('codeContent').textContent = renderLC(currentTerm);
+      const code = renderLC(currentTerm);
+      console.log('Rendered code:', code);
+      document.getElementById('codeContent').textContent = code;
       
       // AST view
-      document.getElementById('astView').innerHTML = renderASTTree(currentTerm);
+      const ast = renderASTTree(currentTerm);
+      console.log('Rendered AST length:', ast.length);
+      document.getElementById('astView').innerHTML = ast;
       
       // JSON view
       document.getElementById('jsonContent').textContent = JSON.stringify(currentTerm, null, 2);

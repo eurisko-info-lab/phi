@@ -1,0 +1,9 @@
+// Minimal test
+language Test {
+  sort Term
+  constructor zero : Term
+  constructor succ : Term -> Term
+  
+  def one = succ(zero)
+  def two = succ(one)
+}

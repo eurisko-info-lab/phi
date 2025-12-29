@@ -44,11 +44,65 @@ object Pipeline:
       if input.substring(pos).startsWith(s) then { pos += s.length; true }
       else false
     
-    // Expression = Additive
+    // Expression = Or
     def parseExpr(): Either[String, Term[LC]] =
       skipWs()
       if atEnd then return Left("Unexpected end of input")
-      parseAdditive()
+      parseOr()
+    
+    // Or = And ('|' And)*
+    private def parseOr(): Either[String, Term[LC]] =
+      parseAnd().flatMap { left =>
+        var result = left
+        var continue = true
+        while continue do
+          skipWs()
+          if !atEnd && peek == '|' then
+            advance()
+            parseAnd() match
+              case Right(right) =>
+                result = Term.Done(LC.Prim("|", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
+              case Left(e) => return Left(e)
+          else continue = false
+        Right(result)
+      }
+    
+    // And = Comparison ('&' Comparison)*
+    private def parseAnd(): Either[String, Term[LC]] =
+      parseComparison().flatMap { left =>
+        var result = left
+        var continue = true
+        while continue do
+          skipWs()
+          if !atEnd && peek == '&' then
+            advance()
+            parseComparison() match
+              case Right(right) =>
+                result = Term.Done(LC.Prim("&", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
+              case Left(e) => return Left(e)
+          else continue = false
+        Right(result)
+      }
+    
+    // Comparison = Additive (('=' | '!=' | '<' | '>' | '<=' | '>=') Additive)?
+    private def parseComparison(): Either[String, Term[LC]] =
+      parseAdditive().flatMap { left =>
+        skipWs()
+        val op = 
+          if peek2 == "!=" then { pos += 2; Some("!=") }
+          else if peek2 == "<=" then { pos += 2; Some("<=") }
+          else if peek2 == ">=" then { pos += 2; Some(">=") }
+          else if peek == '=' then { advance(); Some("=") }
+          else if peek == '<' then { advance(); Some("<") }
+          else if peek == '>' then { advance(); Some(">") }
+          else None
+        op match
+          case Some(o) =>
+            parseAdditive().map { right =>
+              Term.Done(LC.Prim(o, List(left.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
+            }
+          case None => Right(left)
+      }
     
     // Additive = Multiplicative (('+' | '-') Multiplicative)*
     private def parseAdditive(): Either[String, Term[LC]] =
@@ -103,6 +157,149 @@ object Pipeline:
     private def isAtomStart(c: Char): Boolean =
       c.isLetter || c.isDigit || c == '(' || c == 'λ' || c == '\\' || c == '?'
     
+    private def isKeyword(s: String): Boolean =
+      Set("then", "else", "in").contains(s)
+    
+    private def lookingAtKeyword(): Boolean =
+      skipWs()
+      if atEnd || !peek.isLetter then false
+      else
+        val savedPos = pos
+        val word = parseIdent()
+        pos = savedPos
+        isKeyword(word)
+    
+    // Parse expression for if condition/branches - stops at then/else keywords
+    private def parseIfPart(): Either[String, Term[LC]] =
+      parseIfOr()
+    
+    private def parseIfOr(): Either[String, Term[LC]] =
+      parseIfAnd().flatMap { left =>
+        var result = left
+        var continue = true
+        while continue do
+          skipWs()
+          if atEnd || lookingAtKeyword() then continue = false
+          else if peek == '|' then
+            advance()
+            parseIfAnd() match
+              case Right(right) =>
+                result = Term.Done(LC.Prim("|", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
+              case Left(e) => return Left(e)
+          else continue = false
+        Right(result)
+      }
+    
+    private def parseIfAnd(): Either[String, Term[LC]] =
+      parseIfComparison().flatMap { left =>
+        var result = left
+        var continue = true
+        while continue do
+          skipWs()
+          if atEnd || lookingAtKeyword() then continue = false
+          else if peek == '&' then
+            advance()
+            parseIfComparison() match
+              case Right(right) =>
+                result = Term.Done(LC.Prim("&", List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
+              case Left(e) => return Left(e)
+          else continue = false
+        Right(result)
+      }
+    
+    private def parseIfComparison(): Either[String, Term[LC]] =
+      parseIfAdditive().flatMap { left =>
+        skipWs()
+        if atEnd || lookingAtKeyword() then Right(left)
+        else
+          val op = 
+            if peek2 == "!=" then { pos += 2; Some("!=") }
+            else if peek2 == "<=" then { pos += 2; Some("<=") }
+            else if peek2 == ">=" then { pos += 2; Some(">=") }
+            else if peek == '=' then { advance(); Some("=") }
+            else if peek == '<' then { advance(); Some("<") }
+            else if peek == '>' then { advance(); Some(">") }
+            else None
+          op match
+            case Some(o) =>
+              parseIfAdditive().map { right =>
+                Term.Done(LC.Prim(o, List(left.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
+              }
+            case None => Right(left)
+      }
+    
+    private def parseIfAdditive(): Either[String, Term[LC]] =
+      parseIfMultiplicative().flatMap { left =>
+        var result = left
+        var continue = true
+        while continue do
+          skipWs()
+          if atEnd || lookingAtKeyword() then continue = false
+          else if peek == '+' || peek == '-' then
+            val op = advance().toString
+            parseIfMultiplicative() match
+              case Right(right) =>
+                result = Term.Done(LC.Prim(op, List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
+              case Left(e) => return Left(e)
+          else continue = false
+        Right(result)
+      }
+    
+    private def parseIfMultiplicative(): Either[String, Term[LC]] =
+      parseIfApplication().flatMap { left =>
+        var result = left
+        var continue = true
+        while continue do
+          skipWs()
+          if atEnd || lookingAtKeyword() then continue = false
+          else if peek == '*' || peek == '/' then
+            val op = advance().toString
+            parseIfApplication() match
+              case Right(right) =>
+                result = Term.Done(LC.Prim(op, List(result.getOrElse(LC.Var("?")), right.getOrElse(LC.Var("?")))))
+              case Left(e) => return Left(e)
+          else continue = false
+        Right(result)
+      }
+    
+    private def parseIfApplication(): Either[String, Term[LC]] =
+      parseIfAtom().flatMap { first =>
+        var result = first
+        var continue = true
+        while continue do
+          skipWs()
+          if atEnd || lookingAtKeyword() || !isAtomStart(peek) then continue = false
+          else
+            parseIfAtom() match
+              case Right(arg) =>
+                result = Term.Done(LC.App(result.getOrElse(LC.Var("?")), arg.getOrElse(LC.Var("?"))))
+              case Left(_) => continue = false
+        Right(result)
+      }
+    
+    private def parseIfAtom(): Either[String, Term[LC]] =
+      skipWs()
+      if atEnd then return Left("Unexpected end of input in if")
+      peek match
+        case '(' =>
+          advance()
+          val result = parseExpr()
+          skipWs()
+          if peek == ')' then advance()
+          result
+        case c if c.isDigit =>
+          Right(Term.Done(LC.Lit(parseNumber())))
+        case c if c.isLetter =>
+          val savedPos = pos
+          val name = parseIdent()
+          if isKeyword(name) then
+            pos = savedPos
+            Left("Unexpected keyword in if expression")
+          else
+            Right(Term.Done(LC.Var(name)))
+        case _ =>
+          Left(s"Unexpected character in if: $peek")
+
     // Parse expression for let value - stops at 'in' keyword
     private def parseLetValue(): Either[String, Term[LC]] =
       parseLetAdditive()
@@ -227,7 +424,7 @@ object Pipeline:
         case c =>
           Left(s"Unexpected character: $c")
 
-    // Atom = Var | Lit | '(' Expr ')' | Lambda | Let | Hole
+    // Atom = Var | Lit | '(' Expr ')' | Lambda | Let | If | Hole
     private def parseAtom(): Either[String, Term[LC]] =
       skipWs()
       if atEnd then return Left("Unexpected end of input")
@@ -282,6 +479,20 @@ object Pipeline:
                 _ = { skipWs(); expect("in") }
                 body <- parseExpr()
               yield Term.Done(LC.Let(varName, value.getOrElse(LC.Var("?")), body.getOrElse(LC.Var("?"))))
+            
+            case "if" =>
+              skipWs()
+              for
+                cond <- parseIfPart()  // Stop at then/else
+                _ = { skipWs(); expect("then") }
+                thenBr <- parseIfPart()  // Stop at then/else
+                _ = { skipWs(); expect("else") }
+                elseBr <- parseExpr()  // Rest can be full expr
+              yield Term.Done(LC.Prim("if", List(
+                cond.getOrElse(LC.Var("?")),
+                thenBr.getOrElse(LC.Var("?")),
+                elseBr.getOrElse(LC.Var("?"))
+              )))
             
             case _ =>
               Right(Term.Done(LC.Var(name)))

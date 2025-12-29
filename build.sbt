@@ -19,6 +19,9 @@ lazy val root = (project in file("."))
       "io.circe" %% "circe-generic" % circeVersion,
       "io.circe" %% "circe-parser" % circeVersion,
       
+      // Parser combinators
+      "org.scala-lang.modules" %% "scala-parser-combinators" % "2.4.0",
+      
       // Testing
       "org.scalatest" %% "scalatest" % "3.2.19" % Test,
       "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
