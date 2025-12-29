@@ -557,6 +557,7 @@ object PhiParser extends RegexParsers:
   def strategyAtom: Parser[RewriteStrategy] =
     "(" ~> strategy <~ ")" |
     "repeat" ~> strategyAtom ^^ RewriteStrategy.Repeat.apply |
+    "all" ~> strategyAtom ^^ RewriteStrategy.All.apply |  // Non-deterministic: all results
     "id" ^^^ RewriteStrategy.Id |
     qualifiedIdent ^^ RewriteStrategy.Apply.apply  // Support Xform.forward as strategy
   

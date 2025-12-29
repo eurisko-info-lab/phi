@@ -263,6 +263,8 @@ object LangValidator:
     case RewriteStrategy.Seq(a, b) => collectStrategyRuleRefs(a) ++ collectStrategyRuleRefs(b)
     case RewriteStrategy.Choice(a, b) => collectStrategyRuleRefs(a) ++ collectStrategyRuleRefs(b)
     case RewriteStrategy.Repeat(s) => collectStrategyRuleRefs(s)
+    case RewriteStrategy.All(s) => collectStrategyRuleRefs(s)
+    case RewriteStrategy.Unify(_, _) => Nil
     case RewriteStrategy.Id => Nil
   
   private def checkUndefinedDefRefs(spec: LangSpec): ValidationResult =
@@ -520,6 +522,9 @@ object LangValidator:
         checkStrat(b, stratName)
       case RewriteStrategy.Repeat(s) =>
         checkStrat(s, stratName)
+      case RewriteStrategy.All(s) =>
+        checkStrat(s, stratName)
+      case RewriteStrategy.Unify(_, _) => ()
       case RewriteStrategy.Id => ()
     
     spec.strategies.foreach { case (name, strat) =>

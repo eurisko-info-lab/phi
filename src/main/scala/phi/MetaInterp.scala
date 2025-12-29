@@ -120,6 +120,8 @@ enum RewriteStrategy:
   case Seq(first: RewriteStrategy, second: RewriteStrategy)
   case Choice(left: RewriteStrategy, right: RewriteStrategy)
   case Repeat(inner: RewriteStrategy)
+  case All(inner: RewriteStrategy)  // Non-deterministic: return all results
+  case Unify(left: MetaPattern, right: MetaPattern)  // Built-in unification
   case Id
 
 // =============================================================================
@@ -230,124 +232,20 @@ class LangInterpreter(spec: LangSpec):
     case _ => None
 
   // ===========================================================================
-  // Unification (λProlog-style)
+  // Pattern/Value Conversion Utilities
   // ===========================================================================
-  
-  /** Unification of two values with a substitution context.
-    * Returns updated substitution if unification succeeds.
-    */
-  def unify(t1: Val, t2: Val, subst: Map[String, Val] = Map.empty): Option[Map[String, Val]] =
-    val s1 = applySubst(t1, subst)
-    val s2 = applySubst(t2, subst)
-    
-    (s1, s2) match
-      case (VCon(n1, args1), VCon(n2, args2)) if n1 == n2 && args1.length == args2.length =>
-        // Same constructor - unify arguments
-        args1.zip(args2).foldLeft(Option(subst)) {
-          case (Some(acc), (a1, a2)) => unify(a1, a2, acc)
-          case (None, _) => None
-        }
-      
-      case (VCon(v, Nil), t) if isLogicVar(v) =>
-        // Logic variable (lowercase single letter or _name) - bind it
-        Some(subst + (v -> t))
-      
-      case (t, VCon(v, Nil)) if isLogicVar(v) =>
-        // Logic variable on the right
-        Some(subst + (v -> t))
-        
-      case _ if s1 == s2 => Some(subst)  // Already equal
-      case _ => None  // Unification fails
-  
-  /** Check if a name represents a logic variable */
-  def isLogicVar(name: String): Boolean =
-    name.headOption.exists(c => c.isLower || c == '_') && 
-    name.forall(c => c.isLetterOrDigit || c == '_')
-  
-  /** Apply substitution to a value */
-  def applySubst(value: Val, subst: Map[String, Val]): Val = value match
-    case VCon(name, Nil) if subst.contains(name) => applySubst(subst(name), subst)
-    case VCon(name, args) => VCon(name, args.map(applySubst(_, subst)))
 
-  // ===========================================================================
-  // Goal Solving (λProlog-style)
-  // ===========================================================================
-  
-  /** Solve a goal with backtracking.
-    * Returns a lazy stream of solutions (substitutions).
-    */
-  def solve(goal: Val, clauses: List[RuleCase], subst: Map[String, Val] = Map.empty): LazyList[Map[String, Val]] =
-    val g = applySubst(goal, subst)
-    
-    g match
-      // True succeeds immediately
-      case VCon("True", Nil) => LazyList(subst)
-      case VCon("true", Nil) => LazyList(subst)
-      
-      // False fails
-      case VCon("False", Nil) => LazyList.empty
-      case VCon("false", Nil) => LazyList.empty
-      
-      // Conjunction: solve both goals
-      case VCon("And", List(g1, g2)) =>
-        for
-          s1 <- solve(g1, clauses, subst)
-          s2 <- solve(g2, clauses, s1)
-        yield s2
-      case VCon("and", List(g1, g2)) =>
-        for
-          s1 <- solve(g1, clauses, subst)
-          s2 <- solve(g2, clauses, s1)
-        yield s2
-      
-      // Disjunction: try both alternatives
-      case VCon("Or", List(g1, g2)) =>
-        solve(g1, clauses, subst) #::: solve(g2, clauses, subst)
-      case VCon("or", List(g1, g2)) =>
-        solve(g1, clauses, subst) #::: solve(g2, clauses, subst)
-      
-      // Negation as failure
-      case VCon("Not", List(g1)) =>
-        if solve(g1, clauses, subst).isEmpty then LazyList(subst)
-        else LazyList.empty
-      case VCon("not", List(g1)) =>
-        if solve(g1, clauses, subst).isEmpty then LazyList(subst)
-        else LazyList.empty
-      
-      // Call a clause
-      case _ =>
-        clauses.to(LazyList).flatMap { clause =>
-          // Freshen the clause variables
-          val freshClause = freshenClause(clause)
-          
-          // Convert the LHS pattern to a value for unification
-          // Unbound variables become logic variables (VCon with no args)
-          val clauseHead = patternToVal(freshClause.lhs)
-          
-          // Unify the goal with the clause head
-          unify(g, clauseHead, subst) match
-            case Some(newSubst) =>
-              // Solve the clause body (RHS) as a goal
-              freshClause.rhs match
-                case PVar(_) => LazyList(newSubst)  // Fact - no body
-                case body => 
-                  val bodyVal = patternToVal(body)
-                  solve(bodyVal, clauses, newSubst)
-            case None => LazyList.empty
-        }
-  
   /** Convert a pattern to a value, treating unbound variables as logic variables */
   def patternToVal(p: MetaPattern): Val = p match
     case PVar(name) => VCon(name, Nil)  // Variables become nullary constructors (logic vars)
     case PCon(name, args) => VCon(name, args.map(patternToVal))
     case PApp(f, a) => VCon("app", List(patternToVal(f), patternToVal(a)))
     case PSubst(body, v, repl) => 
-      // For substitution, just convert the parts
       VCon("subst", List(patternToVal(body), VCon(v, Nil), patternToVal(repl)))
   
   private var freshCounter = 0
   
-  /** Create fresh variables for a clause */
+  /** Create fresh variables for a clause (alpha-renaming) */
   def freshenClause(clause: RuleCase): RuleCase =
     freshCounter += 1
     val suffix = s"_$freshCounter"
@@ -393,6 +291,144 @@ class LangInterpreter(spec: LangSpec):
         else None
       }
     }.headOption
+
+  // ===========================================================================
+  // Non-deterministic Evaluation (for λProlog-style backtracking)
+  // ===========================================================================
+
+  /** 
+   * Apply a rule at the root, returning ALL matching results (non-deterministic).
+   * This enables backtracking search over multiple rule matches.
+   */
+  def applyRuleAll(value: Val, cases: List[RuleCase]): LazyList[Val] =
+    cases.to(LazyList).flatMap { rc =>
+      matchPat(value, rc.lhs) match
+        case Some(bindings) =>
+          val guardsOk = rc.guards.forall { g =>
+            try
+              val exprVal = instantiate(g.expr, bindings)
+              val expectedVal = instantiate(g.expected, bindings)
+              exprVal == expectedVal
+            catch case _: Exception => false
+          }
+          if guardsOk then
+            rc.rhs match
+              case PSubst(PVar(bodyVar), metaVar, PVar(replVar)) =>
+                (for
+                  bodyVal <- bindings.get(bodyVar)
+                  replVal <- bindings.get(replVar)
+                  varName <- bindings.get(metaVar) match
+                    case Some(VCon(name, Nil)) => Some(name)
+                    case _ => None
+                yield substitute(bodyVal, varName, replVal)).to(LazyList)
+              case _ =>
+                LazyList(instantiate(rc.rhs, bindings))
+          else LazyList.empty
+        case None => LazyList.empty
+    }
+
+  /** Apply rules anywhere in term, returning all results */
+  def applyAnywhereAll(value: Val, cases: List[RuleCase]): LazyList[Val] = value match
+    case VCon(name, args) if name.endsWith(".forward") || name.endsWith(".backward") =>
+      val argsAsTuple = args match
+        case List(a) => a
+        case List(a, b) => VCon("pair", List(a, b))
+        case List(a, b, c) => VCon("pair", List(a, VCon("pair", List(b, c))))
+        case _ => VCon("tuple", args)
+      
+      val directResults = applyRuleAll(argsAsTuple, cases)
+      val xformCases = rules.getOrElse(name, Nil)
+      val xformResults = if xformCases.nonEmpty && xformCases != cases then
+        applyRuleAll(argsAsTuple, xformCases)
+      else LazyList.empty
+      
+      val subResults = args.indices.to(LazyList).flatMap { i =>
+        applyAnywhereAll(args(i), cases).map { newArg =>
+          VCon(name, args.updated(i, newArg))
+        }
+      }
+      
+      directResults #::: xformResults #::: subResults
+        
+    case VCon(name, args) =>
+      // Try in subterms first
+      val subResults = args.indices.to(LazyList).flatMap { i =>
+        applyAnywhereAll(args(i), cases).map { newArg =>
+          VCon(name, args.updated(i, newArg))
+        }
+      }
+      // Then try at root
+      val constructorCases = cases.filter(_.lhs.isInstanceOf[PCon])
+      val rootResults = applyRuleAll(value, constructorCases)
+      subResults #::: rootResults
+
+  /**
+   * Run a strategy non-deterministically, returning all possible results.
+   */
+  def runStrategyAll(strat: RewriteStrategy, value: Val): LazyList[Val] = strat match
+    case RewriteStrategy.Id => LazyList(value)
+    
+    case RewriteStrategy.Apply(ruleName) =>
+      rules.get(ruleName).map(applyAnywhereAll(value, _)).getOrElse(LazyList.empty)
+    
+    case RewriteStrategy.Seq(first, second) =>
+      runStrategyAll(first, value).flatMap(runStrategyAll(second, _))
+    
+    case RewriteStrategy.Choice(left, right) =>
+      runStrategyAll(left, value) #::: runStrategyAll(right, value)
+    
+    case RewriteStrategy.All(inner) =>
+      // All is identity in non-det context - already returns all results
+      runStrategyAll(inner, value)
+    
+    case RewriteStrategy.Repeat(inner) =>
+      // Non-det repeat: try 0, 1, 2, ... applications
+      def repeatN(v: Val, n: Int, maxN: Int): LazyList[Val] =
+        if n >= maxN then LazyList(v)
+        else
+          val oneStep = runStrategyAll(inner, v)
+          if oneStep.isEmpty then LazyList(v)
+          else v #:: oneStep.flatMap(next => repeatN(next, n + 1, maxN))
+      repeatN(value, 0, 1000)
+    
+    case RewriteStrategy.Unify(left, right) =>
+      // Built-in unification - returns value with substitutions applied
+      val lVal = instantiate(left, Map.empty)
+      val rVal = instantiate(right, Map.empty)
+      unifyVals(lVal, rVal, Map.empty) match
+        case Some(subst) => LazyList(applySubstToVal(value, subst))
+        case None => LazyList.empty
+
+  /** Unify two values, returning substitution if successful */
+  def unifyVals(t1: Val, t2: Val, subst: Map[String, Val]): Option[Map[String, Val]] =
+    val s1 = applySubstToVal(t1, subst)
+    val s2 = applySubstToVal(t2, subst)
+    
+    (s1, s2) match
+      case (VCon(n1, args1), VCon(n2, args2)) if n1 == n2 && args1.length == args2.length =>
+        args1.zip(args2).foldLeft(Option(subst)) {
+          case (Some(acc), (a1, a2)) => unifyVals(a1, a2, acc)
+          case (None, _) => None
+        }
+      
+      case (VCon(v, Nil), t) if isLogicVariable(v) =>
+        Some(subst + (v -> t))
+      
+      case (t, VCon(v, Nil)) if isLogicVariable(v) =>
+        Some(subst + (v -> t))
+        
+      case _ if s1 == s2 => Some(subst)
+      case _ => None
+
+  /** Check if a name is a logic variable (lowercase start or underscore) */
+  def isLogicVariable(name: String): Boolean =
+    name.headOption.exists(c => c.isLower || c == '_') && 
+    name.forall(c => c.isLetterOrDigit || c == '_')
+
+  /** Apply substitution to a value */
+  def applySubstToVal(value: Val, subst: Map[String, Val]): Val = value match
+    case VCon(name, Nil) if subst.contains(name) => applySubstToVal(subst(name), subst)
+    case VCon(name, args) => VCon(name, args.map(applySubstToVal(_, subst)))
   
   /** Apply rules anywhere in term (innermost/bottom-up) */
   def applyAnywhere(value: Val, cases: List[RuleCase]): Option[Val] = value match
@@ -443,7 +479,7 @@ class LangInterpreter(spec: LangSpec):
   /** Result of running a strategy: value + step count */
   case class NormResult(value: Val, steps: Int)
   
-  /** Run a strategy on a value */
+  /** Run a strategy on a value (deterministic - first result only) */
   def runStrategy(strat: RewriteStrategy, value: Val, maxSteps: Int = 100000): NormResult =
     var steps = 0
     
@@ -471,6 +507,15 @@ class LangInterpreter(spec: LangSpec):
             case _ =>
               changed = false
         Some(cur)
+      
+      case RewriteStrategy.All(inner) =>
+        // In deterministic mode, All just returns the first result
+        go(inner, v)
+      
+      case RewriteStrategy.Unify(left, right) =>
+        val lVal = instantiate(left, Map.empty)
+        val rVal = instantiate(right, Map.empty)
+        unifyVals(lVal, rVal, Map.empty).map(_ => v)
     
     NormResult(go(strat, value).getOrElse(value), steps)
   
@@ -483,20 +528,69 @@ class LangInterpreter(spec: LangSpec):
   def normalize(value: Val): NormResult =
     spec.strategies.get("normalize").map(runStrategy(_, value)).getOrElse(NormResult(value, 0))
   
-  /** Run a logic query and return all solutions.
-    * Uses rules as clauses in λProlog-style.
-    * @param goal the goal to solve
-    * @param maxSolutions maximum number of solutions to return
-    * @return list of substitutions (each is a solution)
-    */
-  def query(goal: Val, maxSolutions: Int = 10): List[Map[String, Val]] =
-    val allClauses = rules.values.flatten.toList
-    solve(goal, allClauses).take(maxSolutions).toList
+  /** 
+   * Run a logic query using unification-based matching.
+   * This enables λProlog-style backtracking search.
+   * @param goal the goal to solve
+   * @param maxSolutions maximum number of solutions to return
+   * @return list of result values
+   */
+  def query(goal: Val, maxSolutions: Int = 10): List[Val] =
+    val allCases = rules.values.flatten.toList
+    solveGoal(goal, allCases).take(maxSolutions).toList
   
   /** Run a query on a specific set of rules */
-  def queryWith(goal: Val, ruleNames: List[String], maxSolutions: Int = 10): List[Map[String, Val]] =
-    val clauses = ruleNames.flatMap(rules.get).flatten
-    solve(goal, clauses).take(maxSolutions).toList
+  def queryWith(goal: Val, ruleNames: List[String], maxSolutions: Int = 10): List[Val] =
+    val cases = ruleNames.flatMap(rules.get).flatten
+    solveGoal(goal, cases).take(maxSolutions).toList
+  
+  /** 
+   * Solve a goal using unification-based matching with backtracking.
+   * Returns all possible RHS values that the goal can unify to.
+   */
+  def solveGoal(goal: Val, cases: List[RuleCase], subst: Map[String, Val] = Map.empty): LazyList[Val] =
+    val g = applySubstToVal(goal, subst)
+    
+    g match
+      // Built-in True succeeds
+      case VCon("True", Nil) => LazyList(g)
+      case VCon("true", Nil) => LazyList(g)
+      
+      // Built-in False fails
+      case VCon("False", Nil) => LazyList.empty
+      case VCon("false", Nil) => LazyList.empty
+      
+      // Conjunction
+      case VCon("And", List(g1, g2)) =>
+        for
+          r1 <- solveGoal(g1, cases, subst)
+          r2 <- solveGoal(g2, cases, subst)
+        yield VCon("And", List(r1, r2))
+      
+      // Disjunction
+      case VCon("Or", List(g1, g2)) =>
+        solveGoal(g1, cases, subst) #::: solveGoal(g2, cases, subst)
+      
+      // Try to unify with each rule's LHS
+      case _ =>
+        cases.to(LazyList).flatMap { rc =>
+          // Freshen clause variables
+          val fresh = freshenClause(rc)
+          val lhsVal = patternToVal(fresh.lhs)
+          
+          // Unify goal with LHS
+          unifyVals(g, lhsVal, subst) match
+            case Some(newSubst) =>
+              // Success! Return the RHS with substitution applied
+              val rhsVal = patternToVal(fresh.rhs)
+              LazyList(applySubstToVal(rhsVal, newSubst))
+            case None =>
+              LazyList.empty
+        }
+  
+  /** Run a strategy and return all results (non-deterministic) */
+  def queryStrategy(strat: RewriteStrategy, value: Val, maxSolutions: Int = 10): List[Val] =
+    runStrategyAll(strat, value).take(maxSolutions).toList
 
   // ===========================================================================
   // Attribute Evaluation
