@@ -57,7 +57,7 @@ language STLCNat {
   // -----------------------
   // Normalization strategy
   // -----------------------
-  normalize := repeat (BetaReduce | NatRecZero | NatRecSucc | FstPair | SndPair)
+  strategy normalize := repeat (BetaReduce | NatRecZero | NatRecSucc | FstPair | SndPair)
 
   // -----------------------
   // Standard library

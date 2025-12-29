@@ -18,217 +18,10 @@ import scala.util.parsing.combinator.*
  *       app (lam x A body) v ↦ body[x := v]
  *     }
  *     
- *     def add : Term = lam m Nat (...)
+ *     def add : Term = lam m Nat (...)  
  *     
  *     normalize := repeat (BetaReduce | NatRecZero)
  *   }
- */
-object PhiParser extends RegexParsers:
-  
-  // Skip whitespace and comments
-  override val whiteSpace = """(\s|//[^\n]*)+""".r
-  
-  // =========================================================================
-  // Lexical Elements
-  // =========================================================================
-  
-  def ident: Parser[String] = """[a-zA-Z_][a-zA-Z0-9_]*""".r
-  
-  def number: Parser[Int] = """\d+""".r ^^ (_.toInt)
-  
-  // Keywords
-  def LANGUAGE = "language"
-  def SORT = "sort"
-  def CONSTRUCTOR = "constructor"
-  def XFORM = "xform"
-  def CHANGE = "change"
-  def RULE = "rule"
-  def DEF = "def"
-  def WHERE = "where"
-  def AND = "and"
-  
-  // Symbols - support both Unicode and ASCII
-  def ARROW = "→" | "->"
-  def BIARROW = "⇄" | "<->"
-  def MAPSTO = "↦" | "|->"
-  def LAMBDA = "λ" | "\\"
-  def ASSIGN = ":=" | "="
-  
-  // =========================================================================
-  // Top Level
-  // =========================================================================
-  
-  def spec: Parser[LangSpec] =
-    LANGUAGE ~> ident ~ ("{" ~> rep(declaration) <~ "}") ^^ {
-      case name ~ decls =>
-        val sorts = decls.collect { case s: Sort => s }
-        val cons = decls.collect { case c: Constructor => c }
-        val xforms = decls.collect { case x: XformSpec => x }
-        val changes = decls.collect { case c: ChangeSpec => c }
-        val rules = decls.collect { case r: Rule => r }
-        val defs = decls.collect { case d: Def => d }
-        val strats = decls.collect { case s: (String, Strat) @unchecked => s }.toMap
-        LangSpec(name, sorts, cons, xforms, changes, rules, defs, strats)
-    }
-  
-  def declaration: Parser[Any] =
-    sortDecl | constructorDecl | xformDecl | changeDecl | ruleDecl | defDecl | strategyDecl
-  
-  // =========================================================================
-  // Declarations
-  // =========================================================================
-  
-  // sort Type
-  def sortDecl: Parser[Sort] =
-    SORT ~> ident ^^ Sort.apply
-  
-  // constructor Unit : Type
-  // constructor succ : Term → Term
-  // constructor lam : (x : Term) → Type → Term → Term
-  def constructorDecl: Parser[Constructor] =
-    CONSTRUCTOR ~> ident ~ (":" ~> constructorType) ^^ {
-      case name ~ ((params, ret)) => Constructor(name, params, ret)
-    }
-  
-  def constructorType: Parser[(List[(Option[String], LangType)], String)] =
-    rep(paramType <~ ARROW) ~ ident ^^ {
-      case params ~ ret => (params, ret)
-    }
-  
-  def paramType: Parser[(Option[String], LangType)] =
-    // (x : Term) or just Term
-    ("(" ~> ident ~ (":" ~> langType) <~ ")") ^^ { case n ~ t => (Some(n), t) } |
-    langType ^^ { t => (None, t) }
-  
-  def langType: Parser[LangType] =
-    ident ^^ LangType.SortRef.apply
-  
-  // xform TypeCheck : Term ⇄ Type  
-  def xformDecl: Parser[XformSpec] =
-    XFORM ~> ident ~ (":" ~> ident) ~ (BIARROW ~> ident) ^^ {
-      case name ~ src ~ tgt => XformSpec(name, src, tgt)
-    }
-  
-  // change BetaReduce : Term ⇄ Term
-  def changeDecl: Parser[ChangeSpec] =
-    CHANGE ~> ident ~ (":" ~> ident <~ BIARROW <~ ident) ^^ {
-      case name ~ sort => ChangeSpec(name, sort)
-    }
-  
-  // rule BetaReduce { pattern ↦ result }
-  def ruleDecl: Parser[Rule] =
-    RULE ~> ident ~ ("{" ~> rep(ruleCase) <~ "}") ^^ {
-      case name ~ cases => Rule(name, RuleDir.Both, cases)
-    } |
-    // Single-line rule: rule BetaReduce { lhs ↦ rhs }
-    RULE ~> ident ~ ("{" ~> ruleCase <~ "}") ^^ {
-      case name ~ cas => Rule(name, RuleDir.Both, List(cas))
-    }
-  
-  def ruleCase: Parser[RuleCase] =
-    pattern ~ (MAPSTO ~> pattern) ~ opt(guards) ^^ {
-      case lhs ~ rhs ~ gs => RuleCase(lhs, rhs, gs.getOrElse(Nil))
-    }
-  
-  def guards: Parser[List[RuleGuard]] =
-    WHERE ~> repsep(guard, AND)
-  
-  def guard: Parser[RuleGuard] =
-    ident ~ ("=" ~> pattern) ^^ {
-      case v ~ expected => RuleGuard(v, Pat.PVar(v), expected)
-    }
-  
-  // def add : Term = lam m Nat (...)
-  def defDecl: Parser[Def] =
-    DEF ~> ident ~ opt(":" ~> ident) ~ (ASSIGN ~> pattern) ^^ {
-      case name ~ sort ~ body => Def(name, sort, body)
-    }
-  
-  // normalize := repeat (BetaReduce | NatRecZero | NatRecSucc)
-  def strategyDecl: Parser[(String, Strat)] =
-    ident ~ (ASSIGN ~> strategy) ^^ { case n ~ s => (n, s) }
-  
-  // =========================================================================
-  // Patterns
-  // =========================================================================
-  
-  def pattern: Parser[Pat] = substitution | application
-  
-  // body[x := v]
-  def substitution: Parser[Pat] =
-    atomPattern ~ ("[" ~> ident ~ (ASSIGN ~> pattern) <~ "]") ^^ {
-      case body ~ (varName ~ repl) => Pat.PSubst(body, varName, repl)
-    }
-  
-  // f a b c = app(app(app(f, a), b), c)
-  def application: Parser[Pat] =
-    rep1(atomPattern) ^^ {
-      case List(single) => single
-      case head :: tail => tail.foldLeft(head)((f, a) => Pat.PApp(f, a))
-      case Nil => ??? // unreachable with rep1
-    }
-  
-  def atomPattern: Parser[Pat] =
-    "(" ~> pattern <~ ")" |
-    number ^^ { n => numeral(n) } |
-    LAMBDA ~> ident ~ ("." ~> pattern) ^^ { case p ~ b => 
-      Pat.PCon("lam", List(Pat.PCon(p, Nil), Pat.PVar("_"), b)) 
-    } |
-    ident ^^ { name => 
-      // In rule patterns, identifiers are metavariables unless they're known constructors
-      // This includes both lowercase (x, body) and uppercase (A, T) metavars
-      if isKnownConstructor(name) then Pat.PCon(name, Nil)
-      else Pat.PVar(name)
-    }
-  
-  // Known constructors that start lowercase
-  def isKnownConstructor(name: String): Boolean =
-    Set("zero", "succ", "unit", "lam", "app", "pair", "fst", "snd", 
-        "NatRec", "true", "false").contains(name)
-  
-  // Build numeral as succ^n(zero)
-  def numeral(n: Int): Pat =
-    if n == 0 then Pat.PCon("zero", Nil)
-    else Pat.PCon("succ", List(numeral(n - 1)))
-  
-  // =========================================================================
-  // Strategies
-  // =========================================================================
-  
-  def strategy: Parser[Strat] = strategyChoice
-  
-  def strategyChoice: Parser[Strat] =
-    strategySeq ~ rep(("|" | "∣") ~> strategySeq) ^^ {
-      case first ~ rest => rest.foldLeft(first)(Strat.Choice.apply)
-    }
-  
-  def strategySeq: Parser[Strat] =
-    strategyAtom ~ rep((";" | "⨟") ~> strategyAtom) ^^ {
-      case first ~ rest => rest.foldLeft(first)(Strat.Seq.apply)
-    }
-  
-  def strategyAtom: Parser[Strat] =
-    "(" ~> strategy <~ ")" |
-    "repeat" ~> strategyAtom ^^ Strat.Repeat.apply |
-    "id" ^^^ Strat.Id |
-    ident ^^ Strat.Apply.apply
-  
-  // =========================================================================
-  // Entry Point
-  // =========================================================================
-  
-  def parse(input: String): Either[String, LangSpec] =
-    parseAll(spec, input) match
-      case Success(result, _) => Right(result)
-      case failure: NoSuccess => Left(failure.msg)
-
-
-// =============================================================================
-// Extended Parser with Full Pattern Support
-// =============================================================================
-
-/**
- * Full Phi parser supporting constructor application patterns.
  * 
  * Pattern syntax:
  *   app (lam x A body) v     - constructor with args
@@ -240,7 +33,7 @@ object PhiParser extends RegexParsers:
  *   []                       - empty list
  *   Xform.forward(args)      - qualified xform call
  */
-object PhiParserFull extends RegexParsers:
+object PhiParser extends RegexParsers:
   
   override val whiteSpace = """(\s|//[^\n]*)+""".r
   
@@ -263,19 +56,20 @@ object PhiParserFull extends RegexParsers:
   def SYNTAX = "syntax"
   def GRAMMAR = "grammar"
   def PARSE = "parse"
+  def STRATEGY = "strategy"
   
   val keywords = Set("language", "sort", "constructor", "xform", "change", "rule", "def", 
-                     "repeat", "id", "where", "and", "token", "syntax", "grammar", "parse")
+                     "repeat", "id", "where", "and", "token", "syntax", "grammar", "parse", "strategy")
   
-  def ARROW = "→" | "->"
-  def BIARROW = "⇄" | "<->"
-  def MAPSTO = "↦" | "|->"
-  def LAMBDA = "λ" | "\\"
-  def ASSIGN = ":="
-  def EQUALS = "="
-  def TIMES = "×" | "*"
-  def NEQ = "≠" | "!="
-  def CONS = "::" | "|"
+  def ARROW: Parser[String] = "→" | "->"
+  def BIARROW: Parser[String] = "⇄" | "<->"
+  def MAPSTO: Parser[String] = "↦" | "|->"
+  def LAMBDA: Parser[String] = "λ" | "\\"
+  def ASSIGN: Parser[String] = ":="
+  def EQUALS: Parser[String] = "="
+  def TIMES: Parser[String] = "×" | "*"
+  def NEQ: Parser[String] = "≠" | "!="
+  def CONS: Parser[String] = "::" | "|"  // | is safe inside [...] brackets
   
   // =========================================================================
   // Top Level
@@ -303,25 +97,17 @@ object PhiParserFull extends RegexParsers:
     xformDecl ^^ (List(_)) | 
     changeDecl ^^ (List(_)) | 
     ruleDecl ^^ (List(_)) | 
+    strategyDecl ^^ (List(_)) |  // Before defDecl - both start with ident
     defDecl ^^ (List(_)) | 
-    strategyDecl ^^ (List(_)) |
     tokenBlock ^^ (_ => Nil) |     // Parse but ignore token blocks for now
     syntaxDecl ^^ (_ => Nil) |     // Parse but ignore syntax decls
     grammarBlock ^^ (_ => Nil)     // Parse but ignore grammar blocks
   
   def sortDecl: Parser[Sort] = SORT ~> ident ^^ Sort.apply
   
-  // Support multi-constructor blocks:
-  //   constructor
-  //     Foo : A -> B
-  //     Bar : C -> D
+  // Constructor declaration: constructor Foo : A -> B
   def constructorBlock: Parser[List[Constructor]] =
-    CONSTRUCTOR ~> (
-      // Multi-line block
-      rep1(constructorLine) |
-      // Single constructor on same line
-      constructorLine ^^ (List(_))
-    )
+    CONSTRUCTOR ~> constructorLine ^^ (List(_))
   
   def constructorLine: Parser[Constructor] =
     ident ~ (":" ~> constructorType) ^^ {
@@ -331,12 +117,21 @@ object PhiParserFull extends RegexParsers:
   def constructorType: Parser[(List[(Option[String], LangType)], String)] =
     rep(typeArg <~ ARROW) ~ ident ^^ { case params ~ ret => (params, ret) }
   
+  // Type arg in constructor signature - non-arrow to avoid greedy consumption
   def typeArg: Parser[(Option[String], LangType)] =
     "(" ~> ident ~ (":" ~> typeExpr) <~ ")" ^^ { case n ~ t => (Some(n), t) } |
-    typeExpr ^^ { t => (None, t) }
+    "(" ~> typeExpr <~ ")" ^^ { t => (None, t) } |  // Parenthesized arrow types OK
+    productType ^^ { t => (None, t) }  // Non-parenthesized must be non-arrow
   
-  // Type expressions: A, A × B, A*, (A × B) × C
-  def typeExpr: Parser[LangType] = productType
+  // Type expressions: A, A → B, A × B, A*, (A × B) → C
+  // Arrow is right-associative: A → B → C = A → (B → C)
+  def typeExpr: Parser[LangType] = arrowType
+  
+  def arrowType: Parser[LangType] =
+    productType ~ opt(ARROW ~> arrowType) ^^ {
+      case a ~ Some(b) => LangType.Arrow(a, b)
+      case a ~ None => a
+    }
   
   def productType: Parser[LangType] =
     listType ~ rep(TIMES ~> listType) ^^ {
@@ -499,6 +294,7 @@ object PhiParserFull extends RegexParsers:
   
   def termAtom: Parser[Pat] =
     "(" ~> termPattern <~ ")" |
+    termListLit |
     number ^^ numeral |
     LAMBDA ~> rep1(nonKeywordIdent) ~ ("." ~> termPattern) ^^ { case params ~ body =>
       params.foldRight(body)((p, b) => Pat.PCon("lam", List(Pat.PCon(p, Nil), Pat.PVar("_"), b)))
@@ -507,19 +303,27 @@ object PhiParserFull extends RegexParsers:
     termQualifiedPat |
     nonKeywordIdent ^^ { name => Pat.PCon(name, Nil) }  // Always constructor, never metavar
   
+  // List literals in term position: [a, b, c] -> cons(a, cons(b, nil))
+  // Use termSubst (not termPattern) to avoid comma being treated as pair
+  def termListLit: Parser[Pat] =
+    "[" ~ "]" ^^^ Pat.PCon("nil", Nil) |
+    "[" ~> rep1sep(termSubst, ",") <~ "]" ^^ { elems =>
+      elems.foldRight(Pat.PCon("nil", Nil): Pat)((e, acc) => Pat.PCon("cons", List(e, acc)))
+    }
+  
   def termConstructorPat: Parser[Pat] =
-    ident ~ ("(" ~> repsep(termPattern, ",") <~ ")") ^^ {
+    ident ~ ("(" ~> repsep(termSubst, ",") <~ ")") ^^ {
       case name ~ args => Pat.PCon(name, args)
     }
   
   // Qualified constructor: Xform.forward(args)
   def termQualifiedPat: Parser[Pat] =
-    qualifiedIdent ~ ("(" ~> repsep(termPattern, ",") <~ ")") ^^ {
+    qualifiedIdent ~ ("(" ~> repsep(termSubst, ",") <~ ")") ^^ {
       case name ~ args => Pat.PCon(name, args)
     }
   
   def strategyDecl: Parser[(String, Strat)] =
-    ident ~ (ASSIGN ~> strategy) ^^ { case n ~ s => (n, s) }
+    STRATEGY ~> ident ~ (ASSIGN ~> strategy) ^^ { case n ~ s => (n, s) }
   
   // =========================================================================
   // Patterns - Key difference: constructor application
@@ -600,20 +404,28 @@ object PhiParserFull extends RegexParsers:
   def constructorPat: Parser[Pat] =
     """[\p{L}_][\p{L}\p{N}_]*\(""".r >> { s =>
       val name = s.dropRight(1)  // Remove the (
-      repsep(pattern, ",") <~ ")" ^^ { args => Pat.PCon(name, args) }
+      repsep(patternNoComma, ",") <~ ")" ^^ { args => Pat.PCon(name, args) }
     }
   
   // Qualified pattern: Xform.forward(args) - NO space before paren
   def qualifiedPat: Parser[Pat] =
     """[\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)*\(""".r >> { s =>
       val name = s.dropRight(1)  // Remove the (
-      repsep(pattern, ",") <~ ")" ^^ { args => Pat.PCon(name, args) }
+      repsep(patternNoComma, ",") <~ ")" ^^ { args => Pat.PCon(name, args) }
     }
   
-  def knownCons(s: String) = Set("zero", "succ", "unit", "lam", "app", 
-    "pair", "fst", "snd", "NatRec", "true", "false", 
-    "nil", "cons",  // List constructors
-    "Var", "Const", "Lam", "App", "True", "And", "Call", "Clause", "Program"  // λProlog
+  // Known constructors - used in rule patterns to distinguish constructors from metavariables
+  // These are the nullary constructors that appear in rule patterns  
+  def knownCons(s: String) = Set(
+    // STLC
+    "zero", "succ", "unit", "lam", "app", "pair", "fst", "snd", "NatRec", "true", "false",
+    // List
+    "nil", "cons",
+    // λProlog AST
+    "Var", "Const", "Lam", "App", "True", "And", "Call", "Clause", "Program",
+    // HKT
+    "Star", "KArrow", "TVar", "TApp", "TArrow", "TForall", "TList", "TMaybe", 
+    "TEither", "TPair", "TFix", "TyLam", "TyApp"
   ).contains(s)
   
   def numeral(n: Int): Pat =

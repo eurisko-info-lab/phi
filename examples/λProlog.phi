@@ -20,32 +20,28 @@ language λProlog {
   // Types (simple types, implicit)
   // =====================================================
 
-  constructor
-    TyConst : String → Type
-    TyArr   : Type → Type → Type
+  constructor TyConst : String → Type
+  constructor TyArr   : Type → Type → Type
 
   // =====================================================
   // Terms (λProlog core)
   // =====================================================
 
-  constructor
-    Var   : String → Term
-    Const : String → Term
-    Lam   : String → Term → Term
-    App   : Term → Term → Term
+  constructor Var   : String → Term
+  constructor Const : String → Term
+  constructor Lam   : String → Term → Term
+  constructor App   : Term → Term → Term
 
   // =====================================================
   // Goals and clauses
   // =====================================================
 
-  constructor
-    True  : Goal
-    And   : Goal → Goal → Goal
-    Call  : Term → Goal
+  constructor True  : Goal
+  constructor And   : Goal → Goal → Goal
+  constructor Call  : Term → Goal
 
-  constructor
-    Clause : Term → Goal → Clause
-    Program : Clause* → Program
+  constructor Clause : Term → Goal → Clause
+  constructor Program : Clause* → Program
 
   // =====================================================
   // Substitution
@@ -74,7 +70,7 @@ language λProlog {
     App (Lam x b) v ↦ Subst.forward((x,v), b)
   }
 
-  normalizeTerm := repeat Beta
+  strategy normalizeTerm := repeat Beta
 
   // =====================================================
   // Higher-order pattern unification (fragment)

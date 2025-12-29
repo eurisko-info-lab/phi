@@ -21,7 +21,7 @@ import java.nio.file.{Files, Paths}
   
   // Parse
   println("Parsing...")
-  val parseResult: Either[String, LangSpec] = PhiParserFull.parse(source)
+  val parseResult: Either[String, LangSpec] = PhiParser.parse(source)
   parseResult match
     case Left(err) =>
       println(s"Parse error: $err")
@@ -41,6 +41,7 @@ import java.nio.file.{Files, Paths}
       }
       
       println(s"  Definitions: ${spec.defs.map(_.name).mkString(", ")}")
+      println(s"  Strategies: ${spec.strategies.keys.mkString(", ")}")
       println()
       
       // Run

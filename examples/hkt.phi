@@ -1,0 +1,137 @@
+// Higher-Kinded Types Example
+// Demonstrates type constructors and their application
+
+language HKT {
+  // =========================================================================
+  // Kinds
+  // =========================================================================
+  // * (Type)           - kind of types
+  // * → *              - kind of type constructors (e.g., List, Maybe)
+  // * → * → *          - kind of binary type constructors (e.g., Either, Map)
+  // (* → *) → *        - kind of higher-order type constructors (e.g., Fix)
+  
+  sort Kind
+  sort Type
+  sort Term
+  sort String  // for type variable names
+  
+  // Kinds
+  constructor Star : Kind                           // *
+  constructor KArrow : Kind → Kind → Kind           // k₁ → k₂
+  
+  // Types with kind annotations
+  constructor TVar : String → Type                  // type variable: a
+  constructor TApp : Type → Type → Type             // type application: F A
+  constructor TArrow : Type → Type → Type           // function type: A → B
+  constructor TForall : String → Kind → Type → Type // ∀(a : k). T
+  
+  // Common type constructors (as constants)
+  constructor TList : Type                          // List : * → *
+  constructor TMaybe : Type                         // Maybe : * → *
+  constructor TEither : Type                        // Either : * → * → *
+  constructor TPair : Type                          // Pair : * → * → *
+  
+  // Fix point for recursive types: Fix : (* → *) → *
+  constructor TFix : Type
+  
+  // Terms
+  constructor Var : String → Term
+  constructor Lam : String → Type → Term → Term     // λ(x : A). t
+  constructor App : Term → Term → Term              // t u
+  constructor TyLam : String → Kind → Term → Term   // Λ(a : k). t
+  constructor TyApp : Term → Type → Term            // t [A]
+  
+  // =========================================================================
+  // Kind checking: Type ⇄ Kind
+  // =========================================================================
+  
+  xform KindOf : Type ⇄ Kind
+  
+  // Type variables have kind * by default (simplified)
+  rule KindOf.forward {
+    TVar(x) ↦ Star
+  }
+  
+  // Function types have kind *
+  rule KindOf.arrow {
+    TArrow(a, b) ↦ Star
+  }
+  
+  // List : * → *
+  rule KindOf.list {
+    TList ↦ KArrow(Star, Star)
+  }
+  
+  // Maybe : * → *
+  rule KindOf.maybe {
+    TMaybe ↦ KArrow(Star, Star)
+  }
+  
+  // Either : * → * → *
+  rule KindOf.either {
+    TEither ↦ KArrow(Star, KArrow(Star, Star))
+  }
+  
+  // Pair : * → * → *
+  rule KindOf.pair {
+    TPair ↦ KArrow(Star, KArrow(Star, Star))
+  }
+  
+  // Fix : (* → *) → *
+  rule KindOf.fix {
+    TFix ↦ KArrow(KArrow(Star, Star), Star)
+  }
+  
+  // Type application: if F : k₁ → k₂ and A : k₁, then F A : k₂
+  // This would need dependent matching, simplified here
+  rule KindOf.app {
+    TApp(f, a) ↦ Star  // simplified: assume result is *
+  }
+  
+  // =========================================================================
+  // Example types
+  // =========================================================================
+  
+  // List Int : *
+  def listInt = TApp(TList, TVar(Int))
+  
+  // Maybe String : *
+  def maybeString = TApp(TMaybe, TVar(String))
+  
+  // Either String Int : *
+  def eitherStringInt = TApp(TApp(TEither, TVar(String)), TVar(Int))
+  
+  // Pair A B : *
+  def pairAB = TApp(TApp(TPair, TVar(A)), TVar(B))
+  
+  // Fix List : * (infinite list type)
+  // Fix F = F (Fix F), so Fix List ≅ List (Fix List) ≅ [[[...]]]
+  def fixList = TApp(TFix, TList)
+  
+  // ∀(f : * → *). f Int → f String
+  // A polymorphic function over type constructors
+  def hktPoly = TForall(f, KArrow(Star, Star), 
+                  TArrow(TApp(TVar(f), TVar(Int)), 
+                         TApp(TVar(f), TVar(String))))
+  
+  // =========================================================================
+  // Functor typeclass (as a type)
+  // =========================================================================
+  
+  // Functor : (* → *) → Type  (in a real system, this would be a constraint)
+  // fmap : ∀(f : * → *). Functor f → ∀a b. (a → b) → f a → f b
+  
+  // Simplified: just the fmap type for a specific functor
+  def fmapType = TForall(a, Star, TForall(b, Star,
+                   TArrow(TArrow(TVar(a), TVar(b)),
+                     TArrow(TApp(TList, TVar(a)), 
+                            TApp(TList, TVar(b))))))
+  
+  // =========================================================================
+  // Normalize
+  // =========================================================================
+  
+  strategy normalize := repeat (KindOf.forward | KindOf.arrow | KindOf.list | 
+                       KindOf.maybe | KindOf.either | KindOf.pair | 
+                       KindOf.fix | KindOf.app)
+}
