@@ -1,0 +1,603 @@
+// =======================================================
+// Phi Mega-Language: Structured Editor, Xforms, Repo, Typed LC, IC
+// =======================================================
+
+| Concept     | Where it lives                  |
+| ----------- | ------------------------------- |
+| Syntax      | Free category                   |
+| Editing     | Rewrites with holes             |
+| Typing      | Natural transformation          |
+| Evaluation  | IC reduction                    |
+| Lambda Cube | Functor lattice                 |
+| Proofs      | Reversible Xforms               |
+| Abella      | Stratified logic over same nets |
+| Unison      | Hash-consed nets                |
+| Pijul       | Patch = invertible morphism     |
+
+language PhiMega {
+
+    // =====================================================
+    // Core Term & Structured Editor
+    // =====================================================
+    sort Term[A]
+    sort Done[A]
+    sort Hole[A]
+    sort Zipper[A]
+    sort Change[A]
+
+    // Structured editor navigation
+    constructor Up[A]    : Zipper[A] → Zipper[A]
+    constructor Down[A]  : Zipper[A] → Zipper[A]
+    constructor Focus[A] : Term[A] → Zipper[A]
+
+    // Term holes & edits
+    constructor Hole[A] : Hole[A]
+    constructor Done[A] : A → Done[A]
+
+    // Edits as changes
+    constructor Insert[A]  : Term[A] → Change[A]
+    constructor Replace[A] : Term[A] → Change[A]
+    constructor Map[A]     : (A → A) → Change[A]
+    constructor Many[A]    : Change[A]* → Change[A]
+    constructor Choice[A]  : Change[A]* → Change[A]
+
+    // Apply a change propagates through term
+    xform ApplyChange[A] : (Change[A], Term[A]) ⇄ Term[A]
+
+    // =====================================================
+    // Parsing & Syntax
+    // =====================================================
+    sort Syntax[A]
+    sort Lex
+    sort Parser[A]
+
+    // Combinators
+    constructor Seq[A,B]   : Syntax[A] → Syntax[B] → Syntax[(A,B)]
+    constructor Alt[A]     : Syntax[A]* → Syntax[A]
+    constructor Opt[A]     : Syntax[A] → Syntax[Option[A]]
+    constructor Many[A]    : Syntax[A] → Syntax[List[A]]
+    constructor ManyTerm[A] : Syntax[A] → Syntax[List[Term[A]]]
+    constructor Iso[A,B]   : (A ⇄ B) → Syntax[A]
+
+    // Lexer & parser
+    xform Lexify : String ⇄ Stream[Lex]
+    xform Parse[A] : Stream[Lex] ⇄ Term[A]
+
+    // =====================================================
+    // Repository (Pijul-style)
+    # Patch, Repo, canonical storage
+    sort Patch[A]
+    sort Repo[A]
+
+    constructor Repo[A] : Patch[A]* → Repo[A]
+
+    // Apply patch updates repo and produces new term
+    xform ApplyPatch[A] : (Patch[A], Repo[A]) ⇄ Term[A]
+
+    // Hashing & Unison-style naming
+    xform Hash[A] : Term[A] ⇄ String
+    xform Lookup[A] : (Repo[A], String) ⇄ Option[Term[A]]
+
+    // =====================================================
+    // Reversible Transformations (Xforms)
+    // =====================================================
+    sort Xform[A,B]
+
+    xform LC2IC : Term[Term] ⇄ Net
+    xform IC2LC : Net ⇄ Term[Term]
+
+    // Typed LC
+    xform TypeCheck : Term[A] ⇄ Term[A]
+
+    // Dependent matches compilation
+    xform DepPattern : Term[A] ⇄ Net
+
+    // Bidirectional, hole-aware transformations
+    xform Forward[A,B] : Xform[A,B]
+    xform Backward[A,B] : Xform[B,A]
+
+    // Composable transformations
+    xform Compose[A,B,C] : Xform[A,B] × Xform[B,C] ⇄ Xform[A,C]
+
+    // =====================================================
+    // Dependent Types & Attributes
+    // =====================================================
+    sort Attr
+    constructor InheritedFlow[A] : A → Attr
+    constructor SynthesizedFlow[A] : A → Attr
+
+    // Second-order holes
+    constructor Hole2[A] : Term[Term[A]]
+
+    // Attribute propagation
+    xform AttrFlow[A] : Term[A] ⇄ Term[A]
+
+    // =====================================================
+    // Grammar & Expression Language
+    // =====================================================
+    sort SpecFile
+    sort Section
+    sort GrammarSec
+    sort GrammarRule
+    sort Alternative
+    sort GrammarPart
+    sort Modifier
+    sort Annotation
+    sort TypeRef
+
+    xform ParseGrammar : Stream[Lex] ⇄ Term[SpecFile]
+
+    // =====================================================
+    // Web Interface (stubbed for structure)
+    sort HTTPServer
+    xform ServeRepo : Repo[A] ⇄ HTTPServer
+    xform DisplayTerm : Term[A] ⇄ String
+    xform InteractiveEditor : Term[A] ⇄ Zipper[A]
+
+    // =====================================================
+    // Smart Tests
+    sort TestCase
+    constructor TestParse[A] : Term[A] → Term[A] → TestCase
+    constructor TestXform[A,B] : Xform[A,B] → Term[A] → Term[B] → TestCase
+    constructor TestRepo[A] : Repo[A] → TestCase
+
+    xform RunTests : TestCase* ⇄ List[Bool]
+
+    // =====================================================
+    // LC / IC / Lambda Cube as example
+    // =====================================================
+    sort TermLC
+    sort TermIC
+    sort Axes
+    sort Corner
+
+    // LC terms
+    constructor Var : String → TermLC
+    constructor Lam : String → TermLC → TermLC
+    constructor App : TermLC → TermLC → TermLC
+
+    // Typed LC
+    constructor TyVar : String → TermLC
+    constructor TyArr : TermLC → TermLC → TermLC
+
+    // Interaction calculus nets
+    constructor Node : String × TermIC* → TermIC
+    constructor Link : TermIC × TermIC → TermIC
+
+    // Translations
+    xform LC2IC : TermLC ⇄ TermIC
+    xform IC2LC : TermIC ⇄ TermLC
+
+    // Lambda cube axes & corners
+    constructor TermAx : TermLC → Axes
+    constructor PolyAx : TermLC → Axes
+    constructor DepAx : TermLC → TypeRef → Axes
+    constructor LC_λ  : TermLC → TypeRef → Corner
+    constructor LC_λ2 : TermLC → TypeRef → Corner
+    constructor LC_λω : TermLC → TypeRef → Corner
+    constructor LC_λP : TermLC → TypeRef → TypeRef → Corner
+    constructor LC_λP2 : TermLC → TypeRef → TypeRef → Corner
+    constructor LC_λPω : TermLC → TypeRef → TypeRef → Corner
+    constructor LC_λC : TermLC → TypeRef → TypeRef → TypeRef → Corner
+
+    // Functorial translations
+    xform F_LC2IC : TermLC ⇄ TermIC
+    xform Nat_LC2IC : TermLC ⇄ TermIC
+
+    // =====================================================
+    // Example Term and Round-Trip
+    // =====================================================
+    def exampleLC : TermLC = App(Lam("x", Var("x")), Lam("y", Var("y")))
+    def exampleNet : TermIC = LC2IC.forward(exampleLC)
+    def backToLC : TermLC = IC2LC.forward(exampleNet)
+
+    // =====================================================
+    // Attributes and type propagation
+    // =====================================================
+    def exampleTyped : TermLC = TypeCheck.forward(exampleLC)
+    def exampleAttr  : TermLC = AttrFlow.forward(exampleTyped)
+
+    // =====================================================
+    // Patch & Repo Example
+    // =====================================================
+    def repo0 : Repo[TermLC] = Repo(Nil)
+    def patch1 : Patch[TermLC] = Insert(exampleLC)
+    def repo1 : Repo[TermLC] = ApplyPatch.forward(patch1, repo0)
+
+    // =====================================================
+    // Smart Test Example
+    // =====================================================
+    def test1 : TestCase = TestParse.forward(exampleLC, backToLC)
+    def test2 : TestCase = TestXform.forward(LC2IC, exampleLC, exampleNet)
+    def testSuite : List[Bool] = RunTests.forward(test1, test2)
+
+// =======================================================
+// PhiMega Extensions: Category Theory, Functoriality, Naturality, Workflow
+// =======================================================
+
+    // =====================================================
+    // Category Theory Fundamentals
+    // =====================================================
+    sort Obj
+    sort Morph
+    sort Cat
+    sort Diagram
+
+    // Objects and morphisms
+    constructor Obj : String → Obj
+    constructor Id  : Obj → Morph
+    constructor Comp : Morph × Morph → Morph
+    constructor Hom : Obj × Obj → Morph*
+
+    // Functor
+    sort Functor[A,B]
+    constructor FObj : Functor[A,B] → A → B
+    constructor FMor : Functor[A,B] → Morph → Morph
+
+    // Natural Transformation
+    sort NatTrans[A,B]
+    constructor Nat : NatTrans[A,B] → Functor[A,B] → Functor[A,B]
+
+    // Composition laws
+    xform ComposeMorph : Morph × Morph ⇄ Morph
+    xform ComposeFunctor : Functor[A,B] × Functor[B,C] ⇄ Functor[A,C]
+
+    // =====================================================
+    // Functoriality of LC ↔ IC
+    // =====================================================
+
+    // LC ↔ IC as categories
+    sort LC_Cat
+    sort IC_Cat
+
+    constructor LC_Obj : TermLC → LC_Cat
+    constructor IC_Obj : TermIC → IC_Cat
+    constructor LC_Mor : TermLC × TermLC → Morph
+    constructor IC_Mor : TermIC × TermIC → Morph
+
+    // Functor mapping LC → IC
+    constructor F_LC_IC : Functor[LC_Cat, IC_Cat]
+
+    // Functoriality laws as reversible xforms
+    xform FObjLaw : TermLC ⇄ TermIC
+    rule FObjLaw.forward {
+      FObj(F_LC_IC, t) ↦ LC2IC.forward(t)
+    }
+    rule FObjLaw.backward {
+      FObj(F_LC_IC, t) ↦ IC2LC.forward(t)
+    }
+
+    // Morphism mapping preserves composition
+    xform FMorLaw : Morph ⇄ Morph
+    rule FMorLaw.forward {
+      FMor(F_LC_IC, Comp(f,g)) ↦ Comp(FMor(F_LC_IC,f), FMor(F_LC_IC,g))
+    }
+
+    // =====================================================
+    // Natural Transformation LC → Typed LC
+    // =====================================================
+
+    // Functors: Identity and TypeCheck
+    constructor F_Id : Functor[LC_Cat, LC_Cat]
+    constructor F_TypeCheck : Functor[LC_Cat, LC_Cat]
+
+    // Natural transformation η: Id → TypeCheck
+    constructor Eta : NatTrans[LC_Cat, LC_Cat]
+    rule NatLaw {
+      // η ∘ F(f) = F'(f) ∘ η
+      ComposeMorph(Eta, FObj(F_TypeCheck, f)) ↦ ComposeMorph(FObj(F_Id, f), Eta)
+    }
+
+    // =====================================================
+    // Xforms Composition Examples
+    // =====================================================
+    xform ComposeXforms[A,B,C] : Xform[A,B] × Xform[B,C] ⇄ Xform[A,C]
+    rule ComposeXforms.forward {
+      ComposeXforms(L2I, TCheck) ↦ Compose(L2I, TCheck)
+    }
+
+    // Bidirectional propagation through repo
+    xform RepoFlow[A,B] : Repo[A] × Xform[A,B] ⇄ Repo[B]
+    rule RepoFlow.forward {
+      RepoFlow(r, xf) ↦
+        r' where r' = mapPatch(r, p → ApplyChange.forward(xf.forward(p)))
+    }
+
+    // =====================================================
+    // Example Term Flow (Workflow Demo)
+    // =====================================================
+    def lc1 : TermLC = App(Lam("x", Var("x")), Lam("y", Var("y")))
+    def ic1 : TermIC = LC2IC.forward(lc1)
+    def typed1 : TermLC = TypeCheck.forward(lc1)
+    def attr1 : TermLC = AttrFlow.forward(typed1)
+
+    // Patch and repo example
+    def repo0 : Repo[TermLC] = Repo(Nil)
+    def patch0 : Patch[TermLC] = Insert(lc1)
+    def repo1 : Repo[TermLC] = ApplyPatch.forward(patch0, repo0)
+    def repo_ic : Repo[TermIC] = RepoFlow.forward(repo1, LC2IC)
+
+    // =====================================================
+    // Smart Test Extensions: Functoriality & Naturality
+    // =====================================================
+    def testFunctorObj : TestCase = TestXform.forward(FObjLaw, lc1, ic1)
+    def testFunctorMor : TestCase = TestXform.forward(FMorLaw, Comp(lc1, lc1), Comp(ic1, ic1))
+    def testNatTrans   : TestCase = TestXform.forward(NatLaw, lc1, typed1)
+    def testComposeXf  : TestCase = TestXform.forward(ComposeXforms.forward(L2I, TypeCheck.forward), lc1, typed1)
+
+    def testSuiteCat : List[Bool] = RunTests.forward(testFunctorObj, testFunctorMor, testNatTrans, testComposeXf)
+
+// =======================================================
+// PhiMega Lambda Cube Extensions
+// =======================================================
+
+  // =====================================================
+  // Axes of the Lambda Cube (Functors)
+  // =====================================================
+  sort LC_Axis
+  constructor TermArr   : LC_Axis      // λ→
+  constructor TermType  : LC_Axis      // λ2
+  constructor TermPi    : LC_Axis      // λP
+  constructor TermOmega : LC_Axis      // λω
+
+  // =====================================================
+  // Corners of Lambda Cube (Categories)
+  // =====================================================
+  sort LC_Corner
+  constructor LC_00 : LC_Corner // λ→
+  constructor LC_01 : LC_Corner // λ2
+  constructor LC_10 : LC_Corner // λP
+  constructor LC_11 : LC_Corner // λP2
+  constructor LC_20 : LC_Corner // λω
+  constructor LC_21 : LC_Corner // λPω
+  constructor LC_30 : LC_Corner // λω_
+  constructor LC_31 : LC_Corner // λC = λPω
+
+  // =====================================================
+  // Functorial embeddings along axes
+  // =====================================================
+  sort LC_Functor[A,B]
+  constructor F_Axis : LC_Axis × LC_Corner → LC_Functor[LC_Corner, LC_Corner]
+
+  xform ApplyAxis : TermLC × LC_Axis ⇄ TermLC
+  rule ApplyAxis.forward {
+    ApplyAxis(t, TermArr)   ↦ TypeArrow.forward(t)
+    ApplyAxis(t, TermType)  ↦ TypeAbstraction.forward(t)
+    ApplyAxis(t, TermPi)    ↦ PiAbstraction.forward(t)
+    ApplyAxis(t, TermOmega) ↦ OmegaAbstraction.forward(t)
+  }
+
+  xform ApplyAxis.backward {
+    ApplyAxis(t, TermArr)   ↦ TypeArrow.backward(t)
+    ApplyAxis(t, TermType)  ↦ TypeAbstraction.backward(t)
+    ApplyAxis(t, TermPi)    ↦ PiAbstraction.backward(t)
+    ApplyAxis(t, TermOmega) ↦ OmegaAbstraction.backward(t)
+  }
+
+  // =====================================================
+  // Corner composition as categories
+  // =====================================================
+  xform ComposeCorner : LC_Corner × LC_Corner ⇄ LC_Corner
+  rule ComposeCorner.forward {
+    ComposeCorner(c1,c2) ↦ CornerCompose.forward(c1,c2)
+  }
+  rule ComposeCorner.backward {
+    ComposeCorner(c1,c2) ↦ CornerCompose.backward(c1,c2)
+  }
+
+  // =====================================================
+  // Typed / Untyped LC to IC via functorial mapping
+  // =====================================================
+  xform LC_Corner2IC : TermLC × LC_Corner ⇄ TermIC
+  rule LC_Corner2IC.forward {
+    LC_Corner2IC(t,c) ↦ ComposeXforms.forward(LC2IC, ApplyAxis.forward(t, AxisOf(c)))
+  }
+  rule LC_Corner2IC.backward {
+    LC_Corner2IC(t,c) ↦ ComposeXforms.forward(IC2LC, ApplyAxis.backward(t, AxisOf(c)))
+  }
+
+  // Helper: map corner to axis
+  def AxisOf(c: LC_Corner) : LC_Axis =
+    match c with
+      LC_00 | LC_01 | LC_10 | LC_11 ↦ TermArr
+      LC_20 | LC_21 | LC_30 | LC_31 ↦ TermOmega
+
+  // =====================================================
+  // Dependent Types Integration (Second-order holes)
+  // =====================================================
+  xform DepTypeFlow : TermLC ⇄ TermLC
+  rule DepTypeFlow.forward {
+    DepTypeFlow(Lam(x, t)) ↦ Lam(x, AttrFlow.forward(t))
+    DepTypeFlow(App(f, a)) ↦ App(DepTypeFlow.forward(f), DepTypeFlow.forward(a))
+  }
+  rule DepTypeFlow.backward {
+    DepTypeFlow(Lam(x, t)) ↦ Lam(x, AttrFlow.backward(t))
+    DepTypeFlow(App(f, a)) ↦ App(DepTypeFlow.backward(f), DepTypeFlow.backward(a))
+  }
+
+  // =====================================================
+  // Category Theory Theorems on Lambda Cube
+  // =====================================================
+  // Composition and Functoriality along axes
+  xform FMorAxis : Morph × LC_Axis ⇄ Morph
+  rule FMorAxis.forward {
+    FMorAxis(Comp(f,g), a) ↦ Comp(FMorAxis(f,a), FMorAxis(g,a))
+  }
+
+  // Natural Transformation across axes
+  constructor NatAxis : NatTrans[LC_Corner, LC_Corner]
+  rule NatAxisLaw {
+    ComposeMorph(NatAxis, ApplyAxis.forward(f,AxisOf(c))) ↦ ComposeMorph(ApplyAxis.forward(f,AxisOf(c)), NatAxis)
+  }
+
+  // =====================================================
+  // Example workflow: LC Corner → Typed → IC → Attr → Repo
+  // =====================================================
+  def lcX : TermLC = App(Lam("x", Var("x")), Lam("y", Var("y")))
+  def typedX : TermLC = TypeCheck.forward(lcX)
+  def icX : TermIC = LC_Corner2IC.forward(lcX, LC_11)
+  def depX : TermLC = DepTypeFlow.forward(typedX)
+
+  def repoX0 : Repo[TermLC] = Repo(Nil)
+  def patchX0 : Patch[TermLC] = Insert(lcX)
+  def repoX1 : Repo[TermLC] = ApplyPatch.forward(patchX0, repoX0)
+  def repoICX : Repo[TermIC] = RepoFlow.forward(repoX1, LC_Corner2IC.forward(_, LC_11))
+
+  // =====================================================
+  // Smart Tests: Functoriality, Naturality, LC ↔ IC, Dependent Types
+  // =====================================================
+  def testAxisFun : TestCase = TestXform.forward(FMorAxis.forward, Comp(lcX,lcX), Comp(icX,icX))
+  def testCornerNat : TestCase = TestXform.forward(NatAxisLaw, lcX, depX)
+  def testWorkflow : TestCase = TestXform.forward(RepoFlow.forward, repoX1, repoICX)
+
+  def testSuiteLC : List[Bool] = RunTests.forward(testAxisFun, testCornerNat, testWorkflow)
+
+// =======================================================
+// Interaction Calculus Core (Categorical)
+// =======================================================
+
+    sort Port
+    sort Agent
+    sort Net
+    sort Interface
+
+    constructor P     : String → Port
+    constructor I     : Port* → Interface
+
+    constructor Agent :
+      name:String →
+      ports:Port* →
+      Agent
+
+    constructor Wire  : Port × Port → Net
+    constructor Cell  : Agent × Net* → Net
+    constructor Empty : Net
+
+    // Monoidal composition (⊗)
+    xform Tensor : Net × Net ⇄ Net
+    rule Tensor.forward {
+      Tensor(n1,n2) ↦ Parallel(n1,n2)
+    }
+    rule Tensor.backward {
+      Parallel(n1,n2) ↦ Tensor(n1,n2)
+    }
+
+    // Categorical composition (∘)
+    xform Compose : Net × Net ⇄ Net
+    rule Compose.forward {
+      Compose(n1,n2) ↦ Connect(n1,n2)
+    }
+    rule Compose.backward {
+      Connect(n1,n2) ↦ Compose(n1,n2)
+    }
+
+    // =======================================================
+    // Functor: Lambda Calculus → Interaction Calculus
+    // =======================================================
+
+    xform LC2IC : TermLC ⇄ Net
+
+    rule LC2IC.forward {
+      Var(x) ↦ Wire(P(x), P(x))
+      Lam(x, b) ↦
+        Cell(Agent("λ",[P(x),P("out")]),
+             [LC2IC.forward(b)])
+      App(f,a) ↦
+        Cell(Agent("@",[P("f"),P("a"),P("out")]),
+             [LC2IC.forward(f),
+              LC2IC.forward(a)])
+    }
+
+    rule LC2IC.backward {
+      Cell(Agent("λ",_), [b]) ↦ Lam(x, LC2IC.backward(b))
+      Cell(Agent("@",_), [f,a]) ↦ App(LC2IC.backward(f), LC2IC.backward(a))
+    }
+
+    // F(f ∘ g) = F(f) ∘ F(g)
+    rule Functoriality_LC2IC {
+      LC2IC.forward(Comp(t1,t2))
+      ↦ Compose.forward(LC2IC.forward(t1), LC2IC.forward(t2))
+    }
+
+    // =======================================================
+    // Type-Level Agents (Lambda Cube Axes)
+    // =======================================================
+
+    constructor TyAgent : String → Agent
+
+    // λ→
+    constructor ArrowAgent : Agent = TyAgent("→")
+
+    // λ2
+    constructor ForallAgent : Agent = TyAgent("∀")
+
+    // λP
+    constructor PiAgent : Agent = TyAgent("Π")
+
+    // λω
+    constructor KindAgent : Agent = TyAgent("□")
+
+    // =======================================================
+    // Dependent Pattern Compilation
+    // =======================================================
+
+    constructor MatchAgent : Agent = Agent("match",[P("scrut"),P("out")])
+    constructor FanAgent   : Agent = Agent("fan",[P("x"),P("y"),P("out")])
+
+    xform DepMatch2IC : DepMatch ⇄ Net
+
+    rule DepMatch2IC.forward {
+      Match(e, cases) ↦
+        Cell(MatchAgent,
+          [LC2IC.forward(e),
+           CompileCases.forward(cases)])
+    }
+
+    // =======================================================
+    // Type Checking as Xform
+    // =======================================================
+
+    xform TypeCheck : TermLC ⇄ (TermLC × Type)
+
+    rule TypeCheck.forward {
+      Lam(x,b) ↦
+        let (b',τ) = TypeCheck.forward(b) in
+        (Lam(x,b'), Pi(x,?,τ))
+    }
+
+    rule TypeCheck.backward {
+      (t,_) ↦ t
+    }
+
+    xform TypeCheck2IC : (TermLC × Type) ⇄ Net
+    rule TypeCheck2IC.forward {
+      (t,τ) ↦
+        Compose.forward(LC2IC.forward(t),
+                        Type2IC.forward(τ))
+    }
+
+    // =======================================================
+    // Cube Corners via Functor Composition
+    // =======================================================
+
+    def LC_arrow   = LC2IC
+    def LC_2       = LC2IC ∘ Type2IC
+    def LC_P       = LC2IC ∘ DepMatch2IC
+    def LC_omega   = LC2IC ∘ Kind2IC
+    def LC_C       = LC2IC ∘ Type2IC ∘ DepMatch2IC
+
+    // =======================================================
+    // Interaction Rules (Reduction)
+    // =======================================================
+
+    change Interact : Net ⇄ Net
+
+    rule Interact {
+      Connect(Cell(Agent("λ"), [b]),
+              Cell(Agent("@"), [a]))
+      ↦ SubstituteNet.forward(b,a)
+    }
+
+    // Merge = categorical pushout
+    xform MergeRepo : Repo[Net] × Repo[Net] ⇄ Repo[Net]
+}

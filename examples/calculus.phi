@@ -118,24 +118,24 @@ rule Nat_LamToNet.forward {
 // =====================================================
 // Example ULC term and translations
 // =====================================================
-def ulc_example : Term =
+def example_ulc : Term =
   App(Lam("x", App(Var("x"), Var("x"))), Lam("y", Var("y")))
 
-def ic_example : Net = LamToNet.forward(ulc_example)
+def example_ic : Net = LamToNet.forward(example_ulc)
 
-def back_to_ulc : Term = NetToLam.forward(ic_example)
+def example_back_to_ulc : Term = NetToLam.forward(example_ic)
 
 // =====================================================
 // Example axes and corners
 // =====================================================
-def axis_example : Axes = TermAx.forward(ulc_example)
-def poly_axis_example : Axes = PolyAx.forward(ulc_example)
-def corner_example : Corner = LC_λ.forward(ulc_example, TyVar("A"))
+def example_axis : Axes = TermAx.forward(example_ulc)
+def example_poly_axis : Axes = PolyAx.forward(example_ulc)
+def example_corner : Corner = LC_λ.forward(example_ulc, TyVar("A"))
 
 // =====================================================
 // Proof: β-reduction preserved by translation
 // =====================================================
-def beta_preservation : Proof =
+def example_beta_preservation : Proof =
   Nat_LamToNet.forward(App(Lam("x", Var("x")), Var("y"))) // example
 
 }

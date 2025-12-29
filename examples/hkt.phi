@@ -122,7 +122,7 @@ language HKT {
   // fmap : ∀(f : * → *). Functor f → ∀a b. (a → b) → f a → f b
   
   // Simplified: just the fmap type for a specific functor
-  def fmapType = TForall(a, Star, TForall(b, Star,
+  def example_fmap_type = TForall(a, Star, TForall(b, Star,
                    TArrow(TArrow(TVar(a), TVar(b)),
                      TArrow(TApp(TList, TVar(a)), 
                             TApp(TList, TVar(b))))))

@@ -1,0 +1,189 @@
+language CubicalPhi {
+    // =============================================================
+    // Core universes
+    // =============================================================
+
+    sort Term[A]
+    constructor Done : A -> Term[A]
+    constructor Hole : Term[A]
+
+    sort Change[A]
+    constructor Insert  : Term[A] -> Change[A]
+    constructor Replace : Term[A] -> Change[A]
+    constructor MapC    : (A -> B) -> Change[A] -> Change[B]
+    constructor ManyC   : List[Change[A]] -> Change[A]
+    constructor ChoiceC : Change[A] × Change[A] -> Change[A]
+
+    xform ApplyChange : Term[A] × Change[A] ⇄ Term[A]
+
+    // =============================================================
+    // Syntax algebra
+    // =============================================================
+
+    sort Syntax[A]
+
+    constructor Pure : A -> Syntax[A]
+    constructor Fail : Syntax[A]
+
+    xform Seq  : Syntax[A] × Syntax[B] ⇄ Syntax[A × B]
+    xform Alt  : Syntax[A] × Syntax[A] ⇄ Syntax[A]
+    xform Map  : Syntax[A] × (A ⇄ B) ⇄ Syntax[B]
+    xform Many : Syntax[A] ⇄ Syntax[List[A]]
+    xform Opt  : Syntax[A] ⇄ Syntax[Option[A]]
+    xform Iso  : (A ⇄ B) ⇄ Syntax[A] ⇄ Syntax[B]
+
+    xform Parse  : Syntax[A] × List[Lex] ⇄ Term[A]
+    xform Render : Term[A] ⇄ List[Lex]
+
+    // =============================================================
+    // Phi AST
+    // =============================================================
+
+    sort PhiTerm
+
+    constructor PTVar    : String -> PhiTerm
+    constructor PTHole   : PhiTerm
+    constructor PTApp    : PhiTerm × PhiTerm -> PhiTerm
+    constructor PTLam    : String × PhiTerm -> PhiTerm
+    constructor PTChange : PhiTerm × PhiTerm -> PhiTerm
+    constructor PTXform  : String -> PhiTerm
+
+    // =============================================================
+    // Lexical atoms (assumed reversible)
+    // =============================================================
+
+    def ident   : Syntax[String]
+    def symbol  : String -> Syntax[String]
+    def parens[A] : Syntax[A] -> Syntax[A]
+
+    // =============================================================
+    // Precedence
+    // =============================================================
+
+    sort Prec
+    constructor Prec : Int -> Prec
+
+    // =============================================================
+    // Expression grammar (mutually recursive)
+    // =============================================================
+
+    def Expr(p:Prec) : Syntax[Term[PhiTerm]]
+
+    // Atoms
+
+    def Atom : Syntax[Term[PhiTerm]] =
+    Alt(
+        Map(ident, x ⇄ Done(PTVar(x))),
+        Alt(
+        Map(symbol("_"), _ ⇄ Hole),
+        parens(Expr(Prec(0)))
+        )
+    )
+
+    // Application (left associative)
+
+    def AppExpr(p:Prec) : Syntax[Term[PhiTerm]] =
+    Map(
+        Seq(Atom, Many(Atom)),
+        (f, args) ⇄ args.foldLeft(f){ (acc, a) =>
+        Done(PTApp(acc.unwrap, a.unwrap))
+        }
+    )
+
+    // Lambda abstraction
+
+    def LamExpr : Syntax[Term[PhiTerm]] =
+    Map(
+        Seq(symbol("\\"), Seq(ident, Seq(symbol("."), Expr(Prec(0))))),
+        (_, (x, (_, body))) ⇄ Done(PTLam(x, body.unwrap))
+    )
+
+    // Cubical change paths
+
+    def ChangeExpr : Syntax[Term[PhiTerm]] =
+    Map(
+        Seq(Expr(Prec(1)), Seq(symbol("⇄"), Expr(Prec(1)))),
+        (a, (_, b)) ⇄ Done(PTChange(a.unwrap, b.unwrap))
+    )
+
+    // Expression lattice
+
+    def Expr(p:Prec) : Syntax[Term[PhiTerm]] =
+    Alt(
+        LamExpr,
+        Alt(ChangeExpr, AppExpr(p))
+    )
+
+    // =============================================================
+    // Grammar root
+    // =============================================================
+
+    def PhiGrammar : Syntax[Term[PhiTerm]] =
+    Expr(Prec(0))
+
+    // =============================================================
+    // Lambda calculus (untyped)
+    // =============================================================
+
+    sort LC
+    constructor Var : String -> LC
+    constructor Lam : String × LC -> LC
+    constructor App : LC × LC -> LC
+
+    xform PhiToLC : PhiTerm ⇄ LC
+
+    // =============================================================
+    // Interaction calculus (nets)
+    // =============================================================
+
+    sort IC
+    constructor Node : String × List[IC] -> IC
+
+    xform LCToIC : LC ⇄ IC
+    xform ICToLC : IC ⇄ LC
+
+    // =============================================================
+    // Lambda cube axes
+    // =============================================================
+
+    sort Kind
+    constructor Star : Kind
+    constructor Box  : Kind
+
+    sort Ty
+    constructor TyVar  : String -> Ty
+    constructor Pi     : String × Ty × Ty -> Ty
+    constructor Arrow  : Ty × Ty -> Ty
+
+    xform TypeCheck : LC ⇄ Ty
+
+    // Axes
+    // λ→  : Arrow
+    // λP  : Pi over terms
+    // λ2  : Pi over types
+    // λω  : Type operators
+    // λPω : Full cube
+
+    // =============================================================
+    // Category-theoretic laws as theorems
+    // =============================================================
+
+    theorem MapId : forall A. Map(Pure(x), id) ⇄ Pure(x)
+
+    theorem MapCompose : forall A B C f g.
+    Map(Map(s,f),g) ⇄ Map(s, g ∘ f)
+
+    theorem SeqAssoc : forall a b c.
+    Seq(Seq(a,b),c) ⇄ Seq(a,Seq(b,c))
+
+    // =============================================================
+    // Meta-circularity
+    // =============================================================
+
+    // PhiGrammar parses Phi terms
+    // Parsed terms are editable
+    // Edits are Changes
+    // Changes are cubical paths
+    // Paths compose
+    // The repo is a higher groupoid
+}

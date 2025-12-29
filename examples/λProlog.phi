@@ -197,7 +197,7 @@ language λProlog {
   // ancestor X :- parent Y, ancestor Y.
   //
 
-  def exampleProgram : Program =
+  def example_program : Program =
     parse program """
       parent alice.
       parent bob.
@@ -210,9 +210,9 @@ language λProlog {
   // ancestor alice.
   //
 
-  def query : Goal =
+  def example_query : Goal =
     parse goal "ancestor alice."
 
-  def result : Goal =
-    Solve.forward(exampleProgram, query)
+  def example_result : Goal =
+    Solve.forward(example_program, example_query)
 }

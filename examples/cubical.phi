@@ -1,0 +1,288 @@
+// =======================================================
+// Φ — A Cubical, Reversible, Categorical Language
+// Everything Is a Path
+// =======================================================
+//
+// This file defines:
+//
+// • Terms with holes and structured editing
+// • Changes as cubical paths
+// • Parsing and rendering as isomorphisms
+// • Repositories as higher groupoids (Pijul)
+// • Hash-consed identity (Unison)
+// • Lambda Calculus ↔ Interaction Calculus
+// • Lambda Cube axes as composable extensions
+// • Dependent types as second-order holes
+// • Type checking as a reversible Xform
+// • Proofs as paths, paths as edits
+// • Phi defined in Phi
+//
+// Category theory does not appear as theory.
+// It appears as invariants enforced by construction.
+//
+// =======================================================
+
+language Phi {
+
+  // =====================================================
+  // 0. Categorical substrate
+  // =====================================================
+
+  // Objects
+  sort Obj
+
+  // Morphisms
+  sort Hom[A,B]
+
+  // Identity
+  constructor Id[A] : Hom[A,A]
+
+  // Composition
+  xform Comp : Hom[A,B] × Hom[B,C] ⇄ Hom[A,C]
+
+  law Category {
+    Comp(Id, f) ≡ f
+    Comp(f, Id) ≡ f
+    Comp(Comp(f,g), h) ≡ Comp(f, Comp(g,h))
+  }
+
+  // Invertible morphisms (groupoid)
+  sort Iso[A,B]
+  xform Invert : Iso[A,B] ⇄ Iso[B,A]
+
+  // =====================================================
+  // 1. Core terms and holes
+  // =====================================================
+
+  sort Term[A]
+
+  constructor Done[A] : A → Term[A]
+  constructor Hole[A] : Term[A]
+
+  // Terms form a groupoid under Change
+  alias Obj := Term[_]
+
+  // =====================================================
+  // 2. Changes as cubical paths
+  // =====================================================
+
+  // A Change IS a path
+  change Change[A] : Term[A] ⇄ Term[A]
+
+  // Identity path
+  constructor Refl[A] : Change[A]
+
+  // Composition of paths
+  xform Then[A] : Change[A] × Change[A] ⇄ Change[A]
+
+  // Inverse path
+  xform Sym[A] : Change[A] ⇄ Change[A]
+
+  law PathGroupoid {
+    Then(Refl, c) ≡ c
+    Then(c, Refl) ≡ c
+    Then(c, Sym(c)) ≡ Refl
+    Then(Sym(c), c) ≡ Refl
+    Then(Then(a,b), c) ≡ Then(a, Then(b,c))
+  }
+
+  // Higher paths
+  alias Path2[A] := Change[Change[A]]
+
+  // =====================================================
+  // 3. Structured editing
+  // =====================================================
+
+  change Insert[A]   : A ⇄ Term[A]
+  change Replace[A]  : Term[A] ⇄ Term[A]
+  change Delete[A]   : Term[A] ⇄ Hole[A]
+
+  change Many[A]     : Change[A]*
+  change Choice[A]  : Change[A] | Change[A]
+
+  // Editing respects holes (Kan filling)
+  xform Fill : Hole[A] × Context ⇄ Term[A]
+
+  // =====================================================
+  // 4. Zippers and navigation
+  // =====================================================
+
+  sort Zipper[A]
+  xform Down : Term[A] ⇄ Zipper[A]
+  xform Up   : Zipper[A] ⇄ Term[A]
+
+  law ZipperAdjunction {
+    Up ∘ Down ≡ Id
+  }
+
+  // =====================================================
+  // 5. Syntax and parsing (isomorphisms)
+  // =====================================================
+
+  sort Lex
+  sort Syntax[A]
+
+  xform Parse  : Syntax[A] × Lex* ⇄ Term[A]
+  xform Render : Term[A] ⇄ Lex*
+
+  law RoundTrip {
+    Render ∘ Parse ≡ Id
+    Parse ∘ Render ≡ Id   // modulo holes
+  }
+
+  // =====================================================
+  // 6. Repository as higher groupoid (Pijul)
+  // =====================================================
+
+  sort Hash
+  sort Patch[A]
+
+  constructor Patch :
+    Change[A] × Hash × Hash → Patch[A]
+
+  sort Repo[A]
+
+  xform ApplyPatch : Repo[A] × Patch[A] ⇄ Repo[A]
+  xform InvertPatch : Patch[A] ⇄ Patch[A]
+
+  law PatchGroupoid {
+    ApplyPatch(r, p ⋆ p⁻¹) ≡ r
+  }
+
+  // =====================================================
+  // 7. Hash-consed identity (Unison)
+  // =====================================================
+
+  xform HashOf : Term[A] ⇄ Hash
+
+  law HashExtensionality {
+    HashOf(t1) = HashOf(t2) ⇒ t1 ≡ t2
+  }
+
+  // =====================================================
+  // 8. Lambda Calculus (untyped)
+  // =====================================================
+
+  sort LC
+
+  constructor Var : String → LC
+  constructor Lam : String → LC → LC
+  constructor App : LC → LC → LC
+
+  alias Term[LC]
+
+  change Beta : LC ⇄ LC
+  rule Beta {
+    App(Lam(x,b), v) ↦ Subst(x,v,b)
+  }
+
+  // =====================================================
+  // 9. Interaction Calculus
+  // =====================================================
+
+  sort Net
+  constructor Node : String → Net*
+  constructor Wire : Net × Net → Net
+
+  change Interact : Net ⇄ Net
+
+  // =====================================================
+  // 10. LC ↔ IC (reversible compilation)
+  // =====================================================
+
+  xform LCtoIC : Term[LC] ⇄ Term[Net]
+  xform ICtoLC : Term[Net] ⇄ Term[LC]
+
+  law Simulation {
+    LCtoIC ∘ ICtoLC ≡ Id
+    ICtoLC ∘ LCtoIC ≡ Id   // modulo sharing
+  }
+
+  // =====================================================
+  // 11. Lambda Cube axes as extensions
+  // =====================================================
+
+  sort Type
+
+  constructor TyVar   : String → Type
+  constructor TyArr   : Type → Type → Type
+  constructor TyPi    : Type → (Term → Type) → Type
+  constructor TyUniv  : Nat → Type
+
+  // Axes
+  axis →  : Term → Type
+  axis P  : Type → Type
+  axis ω  : Type → Term
+  axis 2  : Type → Type
+
+  // Corners are combinations of axes
+  // Each axis is a functor
+  // Their commutation is a natural isomorphism
+
+  // =====================================================
+  // 12. Type checking as reversible Xform
+  // =====================================================
+
+  xform TypeCheck : Term × Context ⇄ Type
+
+  law Functoriality {
+    TypeCheck(Then(c1,c2), Γ)
+      ≡ Then(TypeCheck(c1,Γ), TypeCheck(c2,Γ))
+  }
+
+  // =====================================================
+  // 13. Dependent types as second-order holes
+  // =====================================================
+
+  alias DepHole[A] := Hole[Term[A]]
+
+  // =====================================================
+  // 14. Dependent pattern matching → IC nets
+  // =====================================================
+
+  xform CompileMatch : Term × Type ⇄ Net
+
+  // =====================================================
+  // 15. Cubical paths = changes
+  // =====================================================
+
+  // Interval
+  sort I
+  constructor I0 : I
+  constructor I1 : I
+
+  alias Path[A] := I → Term[A]
+
+  xform PathAsChange : Path[A] ⇄ Change[A]
+
+  law Cubical {
+    PathAsChange(p)(I0) = source
+    PathAsChange(p)(I1) = target
+  }
+
+  // =====================================================
+  // 16. Phi defined in Phi (meta-circular)
+  // =====================================================
+
+  def PhiGrammar : Syntax[Term] = ...
+
+  def PhiRepo : Repo[Term] =
+    ApplyPatch(
+      emptyRepo,
+      Patch(
+        Insert(PhiGrammar),
+        genesis,
+        HashOf(PhiGrammar)
+      )
+    )
+
+  // =====================================================
+  // 17. Everything commutes
+  // =====================================================
+
+  theorem Coherence {
+    Parse ∘ Edit ∘ TypeCheck ∘ Compile ∘ Render
+      ≡ Id
+  }
+
+}

@@ -6,4 +6,6 @@ language Test {
   
   def one = succ(zero)
   def two = succ(one)
+  
+  def test_two = two
 }

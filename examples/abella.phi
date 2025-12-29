@@ -153,24 +153,24 @@ language Abella extends λProlog {
 
   // Identity: applying Id does not change proof
   def trivialThm : Theorem = Thm("trivial", True)
-  def trivialProof : Proof = ApplyTactic.forward(Id, Prf(True))    //<cat>identity</cat>
+  def test_trivialProof : Proof = ApplyTactic.forward(Id, Prf(True))    //<cat>identity</cat>
 
   // Associativity: sequence of tactics
   def seqThm : Theorem = Thm("seq", Call(Const("Q")))
-  def seqProof : Proof = ApplyTactic.forward(
+  def test_seqProof : Proof = ApplyTactic.forward(
     Seq(Apply(Const("h1")), Seq(Apply(Const("h2")), Apply(Const("h3")))), Prf(Call(Const("Q"))))  //<cat>associativity</cat>
 
   // Functoriality: Case acts as functor on proofs
   def caseThm : Theorem = Thm("case", Call(Const("R")))
-  def caseProof : Proof = ApplyTactic.forward(Case(Const("R"), Id), Prf(Call(Const("R"))))  //<cat>functoriality</cat>
+  def test_caseProof : Proof = ApplyTactic.forward(Case(Const("R"), Id), Prf(Call(Const("R"))))  //<cat>functoriality</cat>
 
   // Natural transformation: rewriting preserves structure
   def rewriteThm : Theorem = Thm("rewrite", Call(Const("S")))
-  def rewriteProof : Proof = ApplyTactic.forward(
+  def test_rewriteProof : Proof = ApplyTactic.forward(
     Rewrite(Var("x"), Var("y"), Id), Prf(Call(Const("S"))))  //<cat>naturality</cat>
 
   // Composition of morphisms: Induction then Split
   def indSplitThm : Theorem = Thm("ind_split", And(Call(Const("P")), Call(Const("Q"))))
-  def indSplitProof : Proof = ApplyTactic.forward(
+  def test_indSplitProof : Proof = ApplyTactic.forward(
     Seq(Induction(Const("n"), Id), Split), Prf(And(Call(Const("P")), Call(Const("Q")))))  //<cat>composition</cat>
 }

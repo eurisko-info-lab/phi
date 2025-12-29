@@ -101,7 +101,7 @@ language STLCNat {
   // Tests
   // -----------------------
   def test_add = app(app(add, two), three)
-  def fib5 = app(fib, five)
-  def fib7 = app(fib, seven)
-  def fact5 = app(fact, five)
+  def test_fib5 = app(fib, five)
+  def test_fib7 = app(fib, seven)
+  def test_fact5 = app(fact, five)
 }

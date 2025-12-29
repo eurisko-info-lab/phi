@@ -214,14 +214,18 @@ object PhiParser extends RegexParsers:
   // Atom allowed in RHS - includes parenthesized expressions that aren't tuple LHS patterns
   // A tuple LHS would be (a, b, c), Foo... - with comma at end
   // A function arg would be (Subst.forward(...)) - application inside parens
+  // NOTE: We don't include constructorPat here to avoid accidentally grabbing 
+  // the next rule's LHS pattern like Baz(y) when parsing RHS of previous rule.
+  // If you need Con(args) on RHS, rhsApp handles it at the top level.
+  // Identifiers must not be immediately followed by '(' (use possessive quantifier + negative lookahead)
   def rhsAtom: Parser[Pat] =
     listPat |
     number ^^ numeral |
-    constructorPat |
     qualifiedPat |
     // Parenthesized application (not tuple-like) - starts with uppercase or qualified
     "(" ~> applicationPat <~ ")" |
-    nonKeywordIdent ^^ { name =>
+    // Identifier NOT immediately followed by '(' - regex handles this at char level
+    """[\p{L}_][\p{L}\p{N}_]*+(?!\()""".r.filter(s => !keywords.contains(s)) ^^ { name =>
       // Uppercase identifiers > 1 char are constructors (e.g., True, Foo)
       // Single uppercase letters are variables (e.g., X, A, B)
       // Indexed variables like X_1, A_n are also variables
@@ -442,9 +446,9 @@ object PhiParser extends RegexParsers:
       repsep(patternNoComma, ",") <~ ")" ^^ { args => Pat.PCon(name, args) }
     }
   
-  // Qualified pattern: Xform.forward(args) - NO space before paren
+  // Qualified pattern: Xform.forward(args) - requires at least one dot, NO space before paren
   def qualifiedPat: Parser[Pat] =
-    """[\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)*\(""".r >> { s =>
+    """[\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)+\(""".r >> { s =>
       val name = s.dropRight(1)  // Remove the (
       repsep(patternNoComma, ",") <~ ")" ^^ { args => Pat.PCon(name, args) }
     }

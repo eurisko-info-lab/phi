@@ -234,22 +234,22 @@ language PhiCategoryTheory {
   // Examples in Phi
   // =========================================================
 
-  def ExampleHom : Morphism =
+  def example_hom : Morphism =
     Hom(Obj(CatA), Obj(CatB))
 
-  def ExampleCompose : Morphism =
+  def example_compose : Morphism =
     Comp(Hom(ObjA, ObjB), Hom(ObjB, ObjC))
 
-  def ExampleFunctor : Functor =
+  def example_functor : Functor =
     Fun(CatA, CatB)
 
-  def ExampleNatTrans : NatTrans =
+  def example_nat_trans : NatTrans =
     Nat(Functor1, Functor2)
 
-  def ExampleYonedaUse : Proof =
+  def example_yoneda : Proof =
     Yoneda.forward(Nat(HomF(Obj1), Functor1))
 
-  def ExampleAdjUse : Proof =
+  def example_adj : Proof =
     Adj(Free, Forget)
 
   // Main normalization strategy
