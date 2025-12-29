@@ -1,0 +1,235 @@
+// =============================================================
+// Scala Grammar: Bidirectional syntax for Scala 3
+// =============================================================
+//
+// Defines Scala's syntax using Phi's grammar mechanism.
+// Parsing and pretty-printing are automatic from the grammar.
+//
+// Focus: case classes, enums, objects, traits - what we need
+// to generate MetaInterp.scala, PhiParser.scala, etc.
+
+language Scala {
+
+  // =============================================================
+  // Sorts
+  // =============================================================
+  
+  sort String
+  sort Int
+  sort Name
+  sort TypeRef
+  sort TypeParam
+  sort Param
+  sort Expr
+  sort Pattern
+  sort Literal
+  sort Case
+  sort Stmt
+  sort Defn
+  sort EnumCase
+  sort Import
+  sort SourceFile
+
+  // =============================================================
+  // Names
+  // =============================================================
+  
+  constructor SimpleName : String → Name
+  constructor QualName : Name → String → Name
+  
+  // SimpleName(n)      <-> n
+  // QualName(base, n)  <-> base "." n
+
+  // =============================================================
+  // Type References
+  // =============================================================
+  
+  constructor TyName : Name → TypeRef
+  constructor TyApp : Name → TypeRef* → TypeRef
+  constructor TyFunc : TypeRef → TypeRef → TypeRef
+  constructor TyTuple : TypeRef* → TypeRef
+  constructor TyUnit : TypeRef
+  
+  // TyUnit             <-> "Unit"
+  // TyName(n)          <-> n
+  // TyApp(n, args)     <-> n "[" args "]"
+  // TyFunc(from, to)   <-> from " => " to
+  // TyTuple(elems)     <-> "(" elems ")"
+
+  // =============================================================
+  // Type Parameters
+  // =============================================================
+  
+  constructor TypeParam : String → TypeParam
+  constructor TypeParamBound : String → TypeRef → TypeRef → TypeParam
+  
+  // TypeParam(n)                    <-> n
+  // TypeParamBound(n, upper, lower) <-> n " <: " upper " >: " lower
+
+  // =============================================================
+  // Parameters
+  // =============================================================
+  
+  constructor Param : String → TypeRef → Param
+  constructor ParamDefault : String → TypeRef → Expr → Param
+  
+  // Param(n, ty)           <-> n ": " ty
+  // ParamDefault(n, ty, d) <-> n ": " ty " = " d
+
+  // =============================================================
+  // Literals
+  // =============================================================
+  
+  constructor LitString : String → Literal
+  constructor LitInt : Int → Literal
+  constructor LitTrue : Literal
+  constructor LitFalse : Literal
+  constructor LitNil : Literal
+  
+  // LitString(s)  <-> s
+  // LitInt(n)     <-> n
+  // LitTrue       <-> "true"
+  // LitFalse      <-> "false"
+  // LitNil        <-> "Nil"
+
+  // =============================================================
+  // Patterns
+  // =============================================================
+  
+  constructor PVar : String → Pattern
+  constructor PWildcard : Pattern
+  constructor PLit : Literal → Pattern
+  constructor PCon : Name → Pattern* → Pattern
+  constructor PTuple : Pattern* → Pattern
+  constructor PTyped : Pattern → TypeRef → Pattern
+  constructor PInfix : Pattern → String → Pattern → Pattern
+  
+  // PWildcard              <-> "_"
+  // PVar(n)                <-> n
+  // PLit(l)                <-> l
+  // PCon(n, args)          <-> n "(" args ")"
+  // PTuple(elems)          <-> "(" elems ")"
+  // PTyped(p, ty)          <-> p ": " ty
+  // PInfix(l, op, r)       <-> l " " op " " r
+
+  // =============================================================
+  // Expressions
+  // =============================================================
+  
+  constructor EVar : String → Expr
+  constructor ELit : Literal → Expr
+  constructor EApp : Expr → Expr* → Expr
+  constructor ESelect : Expr → String → Expr
+  constructor ELambda : Param* → Expr → Expr
+  constructor EMatch : Expr → Case* → Expr
+  constructor EIf : Expr → Expr → Expr → Expr
+  constructor ETuple : Expr* → Expr
+  constructor ENew : TypeRef → Expr* → Expr
+  constructor EBlock : Stmt* → Expr → Expr
+  constructor EThrow : Expr → Expr
+  constructor EInfix : Expr → String → Expr → Expr
+  constructor ETypeApply : Expr → TypeRef* → Expr
+  
+  // EVar(n)                <-> n
+  // ELit(l)                <-> l
+  // EApp(f, args)          <-> f "(" args ")"
+  // ESelect(e, field)      <-> e "." field
+  // ELambda(ps, body)      <-> "(" ps ") => " body
+  // EMatch(e, cases)       <-> e " match {" cases "}"
+  // EIf(c, t, f)           <-> "if " c " then " t " else " f
+  // ETuple(elems)          <-> "(" elems ")"
+  // ENew(ty, args)         <-> "new " ty "(" args ")"
+  // EBlock(stmts, e)       <-> "{" stmts e "}"
+  // EThrow(e)              <-> "throw " e
+  // EInfix(l, op, r)       <-> l " " op " " r
+  // ETypeApply(e, tys)     <-> e "[" tys "]"
+
+  // =============================================================
+  // Match Cases
+  // =============================================================
+  
+  constructor CaseSimple : Pattern → Expr → Case
+  constructor CaseGuard : Pattern → Expr → Expr → Case
+  
+  // CaseSimple(pat, body)       <-> "case " pat " => " body
+  // CaseGuard(pat, guard, body) <-> "case " pat " if " guard " => " body
+
+  // =============================================================
+  // Statements
+  // =============================================================
+  
+  constructor SVal : String → TypeRef → Expr → Stmt
+  constructor SValInfer : String → Expr → Stmt
+  constructor SVar : String → TypeRef → Expr → Stmt
+  constructor SDef : String → TypeParam* → Param* → TypeRef → Expr → Stmt
+  constructor SExpr : Expr → Stmt
+  
+  // SVal(n, ty, e)          <-> "val " n ": " ty " = " e
+  // SValInfer(n, e)         <-> "val " n " = " e
+  // SVar(n, ty, e)          <-> "var " n ": " ty " = " e
+  // SDef(n, tps, ps, ret, body) <-> "def " n tps ps ": " ret " = " body
+  // SExpr(e)                <-> e
+
+  // =============================================================
+  // Top-level Definitions
+  // =============================================================
+  
+  constructor CaseClass : String → TypeParam* → Param* → Defn
+  constructor CaseClassExtends : String → TypeParam* → Param* → TypeRef → Defn
+  constructor SealedTrait : String → TypeParam* → Defn
+  constructor Trait : String → TypeParam* → Defn
+  constructor TraitExtends : String → TypeParam* → TypeRef* → Defn
+  constructor Object : String → Defn* → Defn
+  constructor ObjectExtends : String → TypeRef* → Defn* → Defn
+  constructor Enum : String → TypeParam* → EnumCase* → Defn
+  constructor Class : String → TypeParam* → Param* → Defn* → Defn
+  constructor ValDef : String → TypeRef → Expr → Defn
+  constructor ValDefInfer : String → Expr → Defn
+  constructor MethodDef : String → TypeParam* → Param* → TypeRef → Expr → Defn
+  constructor TypeAlias : String → TypeParam* → TypeRef → Defn
+  
+  // CaseClass(n, tps, ps)        <-> "case class " n tps "(" ps ")"
+  // CaseClassExtends(n, tps, ps, ext) <-> "case class " n tps "(" ps ") extends " ext
+  // SealedTrait(n, tps)          <-> "sealed trait " n tps
+  // Trait(n, tps)                <-> "trait " n tps
+  // TraitExtends(n, tps, exts)   <-> "trait " n tps " extends " exts
+  // Object(n, body)              <-> "object " n " {" body "}"
+  // ObjectExtends(n, exts, body) <-> "object " n " extends " exts " {" body "}"
+  // Enum(n, tps, cases)          <-> "enum " n tps " {" cases "}"
+  // Class(n, tps, ps, body)      <-> "class " n tps "(" ps ") {" body "}"
+  // ValDef(n, ty, e)             <-> "val " n ": " ty " = " e
+  // ValDefInfer(n, e)            <-> "val " n " = " e
+  // MethodDef(n, tps, ps, ret, body) <-> "def " n tps ps ": " ret " = " body
+  // TypeAlias(n, tps, ty)        <-> "type " n tps " = " ty
+
+  // =============================================================
+  // Enum Cases
+  // =============================================================
+  
+  constructor EnumVal : String → EnumCase
+  constructor EnumClass : String → Param* → EnumCase
+  
+  // EnumVal(n)       <-> "case " n
+  // EnumClass(n, ps) <-> "case " n "(" ps ")"
+
+  // =============================================================
+  // Imports
+  // =============================================================
+  
+  constructor ImportName : Name → Import
+  constructor ImportAll : Name → Import
+  constructor ImportSel : Name → String* → Import
+  
+  // ImportName(n)    <-> "import " n
+  // ImportAll(n)     <-> "import " n "._"
+  // ImportSel(n, ss) <-> "import " n ".{" ss "}"
+
+  // =============================================================
+  // Source File
+  // =============================================================
+  
+  constructor SourceFile : String → Import* → Defn* → SourceFile
+  
+  // SourceFile(pkg, imps, defns) <-> "package " pkg imps defns
+
+}
