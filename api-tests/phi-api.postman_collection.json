@@ -1,0 +1,580 @@
+{
+  "info": {
+    "name": "Phi Language Server API",
+    "description": "API tests for the Phi structured editing server",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health & Info",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/health"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Status is ok', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.status).to.equal('ok');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Server Info",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/info"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Has name and version', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.name).to.equal('Phi Language Server');",
+                  "  pm.expect(json.version).to.exist;",
+                  "  pm.expect(json.features).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Parsing",
+      "item": [
+        {
+          "name": "Parse Simple Expression",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/parse/expr",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"input\": \"1 + 2 * 3\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Parse succeeded', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.term).to.exist;",
+                  "  pm.expect(json.isComplete).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Parse Lambda Calculus",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/parse/lc",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"input\": \"fn x => fn y => x + y\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Parse succeeded', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.term).to.exist;",
+                  "  pm.expect(json.rendered).to.exist;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Parse Let Expression",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/parse/lc",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"input\": \"let x = 5 in x * 2 + 1\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Parse succeeded with let', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.isComplete).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Parse Incomplete (with holes)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/parse/expr",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"input\": \"1 +\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Has holes for incomplete input', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.term).to.exist;",
+                  "  pm.expect(json.isComplete).to.be.false;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Evaluation",
+      "item": [
+        {
+          "name": "Evaluate Expression",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/eval/expr",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"input\": \"1 + 2 * 3\", \"env\": {}}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Evaluates to 7', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.value).to.equal(7);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Evaluate with Variables",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/eval/expr",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"input\": \"x + y * 2\", \"env\": {\"x\": 5, \"y\": 3}}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Evaluates to 11', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.value).to.equal(11);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Evaluate LC Expression",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/eval/lc",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"input\": \"let x = 5 in x * 2 + 1\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Evaluation succeeds', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.result).to.exist;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reduce LC Expression",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/reduce/lc",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"input\": \"(fn x => x + 1) 5\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Reduction succeeds', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.reduced).to.exist;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Repository",
+      "item": [
+        {
+          "name": "Get Repo Info",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/repo/lc/info"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Has repo info', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.branches).to.be.an('array');",
+                  "  pm.expect(json.currentBranch).to.exist;",
+                  "  pm.expect(json.names).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Branches",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/repo/lc/branches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Returns branches array', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.be.an('array');",
+                  "  pm.expect(json.some(b => b.isCurrent)).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Terms",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/repo/lc/terms"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Returns terms array', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Named Term (id)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/repo/lc/name/id"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Returns term with hash', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.hash).to.exist;",
+                  "  pm.expect(json.term).to.exist;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get History",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/repo/lc/history"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Returns history info', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.branch).to.exist;",
+                  "  pm.expect(json.patches).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Commit Code",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/repo/lc/commit",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"code\": \"fn x => x * 2\", \"message\": \"Add double function\", \"name\": \"test_double\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Commit succeeds', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.hash).to.exist;",
+                  "  pm.expect(json.patchId).to.exist;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Transformations",
+      "item": [
+        {
+          "name": "List Xforms",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/xforms"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Returns xforms list', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Type Check",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/xform/typecheck",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"type\": \"done\", \"value\": {\"type\": \"lam\", \"param\": \"x\", \"body\": {\"type\": \"var\", \"name\": \"x\"}}}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Type check returns result', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.result).to.exist;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Structured Editor",
+      "item": [
+        {
+          "name": "Get Editor State",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/editor/lc/test-session"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Returns editor state', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.id).to.equal('test-session');",
+                  "  pm.expect(json.termType).to.equal('LC');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Editor Term",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/editor/lc/test-session/term"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Returns term', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.type).to.exist;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Set Editor Term",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/editor/lc/test-session/set",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"type\": \"done\", \"value\": {\"type\": \"lit\", \"value\": 42}}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Set succeeds', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Undo",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/editor/lc/test-session/undo"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Undo returns result', () => {",
+                  "  const json = pm.response.json();",
+                  "  // May succeed or fail depending on state",
+                  "  pm.expect(json).to.have.property('success');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

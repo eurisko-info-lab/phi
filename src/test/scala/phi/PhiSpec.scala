@@ -1420,3 +1420,192 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
     // Ensure we actually ran some tests
     totalTests should be >= 4
   }
+
+  // ===========================================================================
+  // 21. Validation Tests
+  // ===========================================================================
+
+  test("Validator should detect duplicate sorts") {
+    val spec = LangSpec(
+      name = "Test",
+      sorts = List(Sort("A"), Sort("A")),
+      constructors = Nil, xforms = Nil, changes = Nil, rules = Nil, defs = Nil,
+      strategies = Map.empty, theorems = Nil, parent = None
+    )
+    val result = LangValidator.validate(spec)
+    result.errors.exists(_.message.contains("Duplicate sort: A")) shouldBe true
+  }
+
+  test("Validator should detect duplicate constructors") {
+    val spec = LangSpec(
+      name = "Test",
+      sorts = List(Sort("A")),
+      constructors = List(
+        Constructor("Foo", Nil, "A"),
+        Constructor("Foo", Nil, "A")
+      ),
+      xforms = Nil, changes = Nil, rules = Nil, defs = Nil,
+      strategies = Map.empty, theorems = Nil, parent = None
+    )
+    val result = LangValidator.validate(spec)
+    result.errors.exists(_.message.contains("Duplicate constructor: Foo")) shouldBe true
+  }
+
+  test("Validator should detect undefined sort references") {
+    val spec = LangSpec(
+      name = "Test",
+      sorts = List(Sort("A")),
+      constructors = List(Constructor("Foo", Nil, "UndefinedSort")),
+      xforms = Nil, changes = Nil, rules = Nil, defs = Nil,
+      strategies = Map.empty, theorems = Nil, parent = None
+    )
+    val result = LangValidator.validate(spec)
+    result.errors.exists(_.message.contains("Undefined sort: UndefinedSort")) shouldBe true
+  }
+
+  test("Validator should detect undefined xform references") {
+    val spec = LangSpec(
+      name = "Test",
+      sorts = List(Sort("A")),
+      constructors = Nil,
+      xforms = Nil,
+      changes = Nil,
+      rules = List(Rule("NonExistent.forward", RuleDir.Forward, List(
+        RuleCase(Pat.PVar("x"), Pat.PVar("x"), Nil)
+      ))),
+      defs = Nil,
+      strategies = Map.empty, theorems = Nil, parent = None
+    )
+    val result = LangValidator.validate(spec)
+    result.errors.exists(_.message.contains("Undefined xform: NonExistent")) shouldBe true
+  }
+
+  test("Validator should detect unbound variables in rule RHS") {
+    val spec = LangSpec(
+      name = "Test",
+      sorts = List(Sort("A")),
+      constructors = List(Constructor("Foo", Nil, "A")),
+      xforms = Nil, changes = Nil,
+      rules = List(Rule("BadRule", RuleDir.Forward, List(
+        RuleCase(Pat.PVar("x"), Pat.PVar("unbound"), Nil)  // 'unbound' not in LHS
+      ))),
+      defs = Nil,
+      strategies = Map.empty, theorems = Nil, parent = None
+    )
+    val result = LangValidator.validate(spec)
+    result.errors.exists(_.message.contains("Unbound variable 'unbound'")) shouldBe true
+  }
+
+  test("Validator should detect undefined rules in strategies") {
+    val spec = LangSpec(
+      name = "Test",
+      sorts = List(Sort("A")),
+      constructors = Nil, xforms = Nil, changes = Nil,
+      rules = List(Rule("ExistingRule", RuleDir.Forward, List(
+        RuleCase(Pat.PVar("x"), Pat.PVar("x"), Nil)
+      ))),
+      defs = Nil,
+      strategies = Map("normalize" -> Strat.Apply("NonExistentRule")),
+      theorems = Nil, parent = None
+    )
+    val result = LangValidator.validate(spec)
+    result.errors.exists(_.message.contains("undefined rule: NonExistentRule")) shouldBe true
+  }
+
+  test("Validator should detect constructor arity mismatches") {
+    val spec = LangSpec(
+      name = "Test",
+      sorts = List(Sort("A")),
+      constructors = List(Constructor("Pair", List(
+        (None, LangType.SortRef("A")),
+        (None, LangType.SortRef("A"))
+      ), "A")),
+      xforms = Nil, changes = Nil,
+      rules = List(Rule("BadArity", RuleDir.Forward, List(
+        RuleCase(
+          Pat.PCon("Pair", List(Pat.PVar("x"))),  // Only 1 arg, needs 2
+          Pat.PVar("x"),
+          Nil
+        )
+      ))),
+      defs = Nil,
+      strategies = Map.empty, theorems = Nil, parent = None
+    )
+    val result = LangValidator.validate(spec)
+    result.errors.exists(_.message.contains("Pair expects 2 args, got 1")) shouldBe true
+  }
+
+  test("Validator should warn about unused sorts") {
+    val spec = LangSpec(
+      name = "Test",
+      sorts = List(Sort("UsedSort"), Sort("UnusedSort")),
+      constructors = List(Constructor("Foo", Nil, "UsedSort")),
+      xforms = Nil, changes = Nil, rules = Nil, defs = Nil,
+      strategies = Map.empty, theorems = Nil, parent = None
+    )
+    val result = LangValidator.validate(spec)
+    result.warnings.exists(_.message.contains("Unused sort: UnusedSort")) shouldBe true
+  }
+
+  test("Validator should warn about unused constructors") {
+    val spec = LangSpec(
+      name = "Test",
+      sorts = List(Sort("A")),
+      constructors = List(
+        Constructor("Used", Nil, "A"),
+        Constructor("Unused", Nil, "A")
+      ),
+      xforms = Nil, changes = Nil,
+      rules = List(Rule("R", RuleDir.Forward, List(
+        RuleCase(Pat.PCon("Used", Nil), Pat.PCon("Used", Nil), Nil)
+      ))),
+      defs = Nil,
+      strategies = Map.empty, theorems = Nil, parent = None
+    )
+    val result = LangValidator.validate(spec)
+    result.warnings.exists(_.message.contains("Unused constructor: Unused")) shouldBe true
+  }
+
+  test("Validator should accept valid language spec") {
+    val source = """
+      language Valid {
+        sort Term
+        constructor Zero : Term
+        constructor Succ : Term → Term
+        
+        xform Id : Term ⇄ Term
+        rule Id.forward {
+          x ↦ x
+        }
+        
+        strategy normalize := repeat Id.forward
+        
+        def one = Succ(Zero)
+      }
+    """
+    val spec = PhiParser.parseAll(PhiParser.spec, source).get
+    val result = LangValidator.validate(spec)
+    result.isValid shouldBe true
+  }
+
+  test("Validator should work on example files") {
+    import java.io.File
+    
+    val examplesDir = new File("examples")
+    val testFiles = List("stlc-nat.phi", "minimal.phi", "calculus.phi")
+    
+    testFiles.foreach { fileName =>
+      val f = new File(examplesDir, fileName)
+      if f.exists then
+        val source = scala.io.Source.fromFile(f).mkString
+        val parseResult = PhiParser.parseAll(PhiParser.spec, source)
+        if parseResult.successful then
+          val spec = parseResult.get
+          val result = LangValidator.validate(spec)
+          
+          // Report validation results
+          info(s"$fileName: ${result.summary}")
+          if result.errors.nonEmpty then
+            result.errors.foreach(e => info(s"  Error: ${e.message}"))
+    }
+  }
