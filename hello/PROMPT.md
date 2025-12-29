@@ -29,7 +29,25 @@ for bootstrapping - the language that describes languages.
 - `xform Name : Source ⇄ Target` - Declare a bidirectional transform
 - `rule Name.case { pattern ↦ result }` - Define transform rules
 
-### 2. `hello.phi` - Source Language
+### 2. `meta.phi` - The Interpreter Language
+Defines the semantic primitives: Val, Env, Pat, Expr, Result.
+This is the "runtime" - what values look like and how matching/evaluation work.
+
+**Key constructs:**
+- `Val` - Runtime values (VCon, VStr, VInt, VList)
+- `Env` - Variable bindings
+- `Pat` - Patterns for matching (PVar, PCon, PWild)
+- `Expr` - Expressions (EVar, ECon, EApp, ELam, EMatch)
+- `Match`, `Eval`, `Subst` - Core operations
+
+### 3. `meta2scala.phi` - Interpreter to Scala
+Compiles the meta-level definitions into executable Scala code.
+
+### 4. `phi2scala.phi` - Spec Compiler
+Transforms any `.phi` spec into a Scala implementation.
+This generates parsers, interpreters, etc. from language definitions.
+
+### 5. `hello.phi` - Source Language
 A tiny language with just one construct: `Hello <name>`
 
 ```
@@ -42,7 +60,7 @@ language Hello {
 }
 ```
 
-### 3. `scala.phi` - Target Language
+### 6. `scala.phi` - Target Language
 Defines the Scala AST subset we generate:
 
 ```
@@ -56,7 +74,7 @@ language Scala {
 }
 ```
 
-### 4. `hello2scala.phi` - Transform Spec
+### 7. `hello2scala.phi` - Transform Spec
 Maps Hello AST to Scala AST:
 
 ```
@@ -99,10 +117,13 @@ hello/
 ├── build.sbt                    # SBT build (Scala 3.7.4)
 ├── project/build.properties     # sbt.version=1.11.7
 ├── examples/
-│   ├── phi.phi                  # Meta-language spec
-│   ├── hello.phi                # Source language
-│   ├── scala.phi                # Target language  
-│   └── hello2scala.phi          # Transform spec
+│   ├── phi.phi                  # Syntax: .phi file format
+│   ├── meta.phi                 # Semantics: Val, Env, Pat, Expr
+│   ├── phi2scala.phi            # Compiler: phi specs → Scala
+│   ├── meta2scala.phi           # Compiler: meta interpreter → Scala
+│   ├── hello.phi                # Demo source language
+│   ├── scala.phi                # Demo target language  
+│   └── hello2scala.phi          # Demo transform
 ├── src/main/scala/phi/
 │   ├── Val.scala                # AST values: VCon(name, args)
 │   ├── LangSpec.scala           # Spec data types
@@ -125,6 +146,38 @@ This self-description is what makes Phi a **meta-language** - it can define
 any language, including itself. The Hello World demo is the simplest possible
 instance of this pattern.
 
+### Bootstrap Equation
+
+```
+┌─────────────┐     ┌─────────────┐
+│  phi.phi    │     │  meta.phi   │
+│  (syntax)   │     │ (semantics) │
+└──────┬──────┘     └──────┬──────┘
+       │                   │
+       ▼                   ▼
+┌─────────────┐     ┌─────────────┐
+│ phi2scala   │     │ meta2scala  │
+│   .phi      │     │   .phi      │
+└──────┬──────┘     └──────┬──────┘
+       │                   │
+       └─────────┬─────────┘
+                 ▼
+       ┌─────────────────┐
+       │ Scala compiler  │
+       │ (Val, Parser,   │
+       │  Interpreter)   │
+       └────────┬────────┘
+                │
+                ▼
+       ┌─────────────────┐
+       │ Can now parse & │
+       │ run any .phi!   │
+       └─────────────────┘
+```
+
+The hand-written Scala in this project (`Val.scala`, `PhiParser.scala`, etc.)
+is what `phi2scala.phi` + `meta2scala.phi` would generate.
+
 ## Minimal Implementation (~500 lines)
 
 | File              | Lines | Purpose                          |
@@ -143,4 +196,5 @@ To extend this demo:
 1. Add more Hello constructs (e.g., `Goodbye`, `Question`)
 2. Add more Scala constructs (e.g., `Val`, `If`, `Match`)
 3. Make the renderer use the `scala.phi` grammar bidirectionally
-4. Bootstrap: use phi.phi to parse phi.phi itself!
+4. **Bootstrap**: Apply `phi2scala.phi` + `meta2scala.phi` to generate the Scala implementation!
+5. Verify the generated Scala can parse and run the original specs

@@ -1,0 +1,153 @@
+// =============================================================================
+// Meta: The Language of Interpreters
+// =============================================================================
+// Defines the semantic primitives for pattern matching, substitution,
+// and evaluation. This is the "runtime" that phi2scala.phi targets.
+
+language Meta {
+  // ==========================================================================
+  // Core Semantic Sorts
+  // ==========================================================================
+  sort Val           // Runtime values
+  sort Env           // Variable bindings
+  sort Pat           // Patterns for matching
+  sort Expr          // Expressions to evaluate
+  sort Result        // Match/eval results
+  
+  // ==========================================================================
+  // Values - The Universal AST
+  // ==========================================================================
+  constructor VCon : String → List[Val] → Val        // Constructor application
+  constructor VStr : String → Val                     // String literal
+  constructor VInt : Int → Val                        // Integer literal
+  constructor VList : List[Val] → Val                 // List value
+  
+  // ==========================================================================
+  // Environments
+  // ==========================================================================
+  constructor EmptyEnv : Env
+  constructor Bind : String → Val → Env → Env
+  
+  // ==========================================================================
+  // Patterns
+  // ==========================================================================
+  constructor PVar : String → Pat                     // Variable pattern
+  constructor PCon : String → List[Pat] → Pat         // Constructor pattern
+  constructor PWild : Pat                             // Wildcard
+  constructor PLit : Val → Pat                        // Literal pattern
+  
+  // ==========================================================================
+  // Expressions
+  // ==========================================================================
+  constructor EVar : String → Expr                    // Variable reference
+  constructor ECon : String → List[Expr] → Expr       // Constructor call
+  constructor EApp : Expr → Expr → Expr               // Application
+  constructor ELam : String → Expr → Expr             // Lambda
+  constructor ELet : String → Expr → Expr → Expr      // Let binding
+  constructor EMatch : Expr → List[Expr] → Expr       // Pattern match
+  constructor ECase : Pat → Expr → Expr               // Case clause
+  
+  // ==========================================================================
+  // Results
+  // ==========================================================================
+  constructor ROk : Val → Env → Result                // Successful match
+  constructor RFail : Result                          // Match failure
+  
+  // ==========================================================================
+  // Grammars for Reading/Writing Values
+  // ==========================================================================
+  grammar val {
+    IDENT "(" val* ")" => VCon(IDENT, val)
+    IDENT => VCon(IDENT, List)
+    STRING => VStr(STRING)
+    INT => VInt(INT)
+    "[" val* "]" => VList(val)
+  }
+  
+  grammar pat {
+    IDENT "(" pat* ")" => PCon(IDENT, pat)
+    IDENT => PVar(IDENT)
+    "_" => PWild
+    STRING => PLit(VStr(STRING))
+  }
+  
+  grammar expr {
+    IDENT => EVar(IDENT)
+    IDENT "(" expr* ")" => ECon(IDENT, expr)
+    expr expr => EApp(expr, expr)
+    "λ" IDENT "." expr => ELam(IDENT, expr)
+    "let" IDENT "=" expr "in" expr => ELet(IDENT, expr, expr)
+    "match" expr "{" case* "}" => EMatch(expr, case)
+  }
+  
+  grammar case {
+    pat "=>" expr => ECase(pat, expr)
+  }
+  
+  // ==========================================================================
+  // Core Operations (defined as xforms for specification)
+  // ==========================================================================
+  
+  // Pattern matching: (Pat, Val) → Result
+  xform Match : Pat ⇄ Result
+  
+  // Evaluation: (Expr, Env) → Val
+  xform Eval : Expr ⇄ Val
+  
+  // Substitution: (Expr, Env) → Expr
+  xform Subst : Expr ⇄ Expr
+  
+  // ==========================================================================
+  // Match Rules
+  // ==========================================================================
+  
+  // Variable matches anything, binds it
+  rule Match.var {
+    PVar(name) ↦ ROk(val, Bind(name, val, env))
+  }
+  
+  // Constructor matches if names equal and args match
+  rule Match.con {
+    PCon(name, pats) ↦ 
+      Match.args(pats, args, env)
+  }
+  
+  // Wildcard matches anything, binds nothing
+  rule Match.wild {
+    PWild ↦ ROk(val, env)
+  }
+  
+  // Literal matches if equal
+  rule Match.lit {
+    PLit(expected) ↦ ROk(val, env)
+  }
+  
+  // ==========================================================================
+  // Eval Rules
+  // ==========================================================================
+  
+  // Variable lookup
+  rule Eval.var {
+    EVar(name) ↦ Lookup(name, env)
+  }
+  
+  // Constructor: evaluate args, build value
+  rule Eval.con {
+    ECon(name, args) ↦ VCon(name, Eval.list(args, env))
+  }
+  
+  // Application: evaluate both, apply
+  rule Eval.app {
+    EApp(f, x) ↦ Apply(Eval.forward(f), Eval.forward(x))
+  }
+  
+  // Lambda: create closure
+  rule Eval.lam {
+    ELam(param, body) ↦ VClosure(param, body, env)
+  }
+  
+  // Match: evaluate scrutinee, try cases
+  rule Eval.match {
+    EMatch(scrut, cases) ↦ TryCases(Eval.forward(scrut), cases, env)
+  }
+}

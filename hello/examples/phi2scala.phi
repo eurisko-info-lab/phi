@@ -1,0 +1,239 @@
+// =============================================================================
+// Meta: Bootstrap Transform - Phi to Scala Implementation
+// =============================================================================
+// This spec defines how to compile a Phi language spec into a working
+// Scala implementation. It's the key to bootstrapping: phi.phi + meta.phi
+// can generate the Scala code that interprets phi.phi.
+
+language Meta {
+  // ==========================================================================
+  // Input Sorts (from Phi)
+  // ==========================================================================
+  sort Spec
+  sort Decl
+  sort Sort
+  sort Constructor
+  sort Type
+  sort Grammar
+  sort SyntaxRule
+  sort SyntaxToken
+  sort SyntaxArg
+  sort Xform
+  sort Rule
+  sort Pattern
+
+  // ==========================================================================
+  // Output Sorts (Scala AST)
+  // ==========================================================================
+  sort ScalaFile
+  sort ScalaDecl
+  sort ScalaStmt
+  sort ScalaExpr
+  sort ScalaPat
+  sort ScalaType
+  sort ScalaCase
+
+  // ==========================================================================
+  // Input Constructors (from Phi)
+  // ==========================================================================
+  constructor LangSpec : String → List[Decl] → Spec
+  constructor SortDecl : String → Decl
+  constructor ConstructorDecl : String → Type → Decl
+  constructor GrammarDecl : String → List[SyntaxRule] → Decl
+  constructor XformDecl : String → String → String → Decl
+  constructor RuleDecl : String → List[Pattern] → Decl
+  constructor SortRef : String → Type
+  constructor Arrow : Type → Type → Type
+  constructor SynRule : List[SyntaxToken] → SyntaxArg → SyntaxRule
+  constructor Literal : String → SyntaxToken
+  constructor NonTerm : String → SyntaxToken
+  constructor ArgRef : String → SyntaxArg
+  constructor ArgCon : String → List[SyntaxArg] → SyntaxArg
+  constructor PVar : String → Pattern
+  constructor PCon : String → List[Pattern] → Pattern
+  constructor RuleCase : Pattern → Pattern → Rule
+
+  // ==========================================================================
+  // Output Constructors (Scala AST)
+  // ==========================================================================
+  // File structure
+  constructor Package : String → List[ScalaDecl] → ScalaFile
+  
+  // Declarations
+  constructor ObjectDecl : String → List[ScalaDecl] → ScalaDecl
+  constructor EnumDecl : String → List[ScalaDecl] → ScalaDecl
+  constructor CaseDecl : String → List[ScalaType] → ScalaDecl
+  constructor DefDecl : String → List[ScalaType] → ScalaType → ScalaExpr → ScalaDecl
+  constructor ValDecl : String → ScalaExpr → ScalaDecl
+  
+  // Types
+  constructor TypeRef : String → ScalaType
+  constructor TypeApp : String → List[ScalaType] → ScalaType
+  constructor FuncType : ScalaType → ScalaType → ScalaType
+  
+  // Expressions
+  constructor Var : String → ScalaExpr
+  constructor App : ScalaExpr → List[ScalaExpr] → ScalaExpr
+  constructor Lambda : String → ScalaExpr → ScalaExpr
+  constructor Match : ScalaExpr → List[ScalaCase] → ScalaExpr
+  constructor Block : List[ScalaStmt] → ScalaExpr
+  constructor StringLit : String → ScalaExpr
+  constructor ListExpr : List[ScalaExpr] → ScalaExpr
+  constructor MapExpr : List[ScalaExpr] → ScalaExpr
+  constructor If : ScalaExpr → ScalaExpr → ScalaExpr → ScalaExpr
+  
+  // Patterns
+  constructor PatVar : String → ScalaPat
+  constructor PatCon : String → List[ScalaPat] → ScalaPat
+  constructor PatWild : ScalaPat
+  
+  // Case clause
+  constructor CaseClause : ScalaPat → ScalaExpr → ScalaCase
+
+  // ==========================================================================
+  // Transforms
+  // ==========================================================================
+  xform Spec2Scala : Spec ⇄ ScalaFile
+  xform Decl2Scala : Decl ⇄ ScalaDecl
+  xform Type2Scala : Type ⇄ ScalaType
+  xform Pattern2Match : Pattern ⇄ ScalaPat
+  xform Pattern2Build : Pattern ⇄ ScalaExpr
+  xform SyntaxRule2Parser : SyntaxRule ⇄ ScalaExpr
+  xform SyntaxArg2Builder : SyntaxArg ⇄ ScalaExpr
+
+  // ==========================================================================
+  // Rules: Spec → Scala Package
+  // ==========================================================================
+  
+  // A language spec becomes a Scala package with:
+  // - LangSpec case class
+  // - Val enum
+  // - Parser object
+  // - Interpreter class
+  rule Spec2Scala.langSpec {
+    LangSpec(name, decls) ↦ 
+      Package(StringLit("phi"), ListExpr(
+        // enum Val { case VCon(name: String, args: List[Val]) }
+        EnumDecl(StringLit("Val"), ListExpr(
+          CaseDecl(StringLit("VCon"), ListExpr(TypeRef(StringLit("String")), 
+                                                TypeApp(StringLit("List"), ListExpr(TypeRef(StringLit("Val"))))))
+        )),
+        // case class LangSpec(...)
+        Decl2Scala.forward(decls)
+      ))
+  }
+
+  // ==========================================================================
+  // Rules: Sort → Scala Type Alias (comment only, sorts are semantic)
+  // ==========================================================================
+  rule Decl2Scala.sort {
+    SortDecl(name) ↦ 
+      ValDecl(StringConcat(StringLit("// sort "), Var(name)), Var(StringLit("()")))
+  }
+
+  // ==========================================================================
+  // Rules: Constructor → Pattern Match Case
+  // ==========================================================================
+  rule Decl2Scala.constructor {
+    ConstructorDecl(name, ty) ↦
+      DefDecl(Var(name), Type2Scala.forward(ty), TypeRef(StringLit("Val")),
+        Lambda(StringLit("args"), 
+          App(Var(StringLit("VCon")), ListExpr(Var(name), Var(StringLit("args"))))))
+  }
+
+  // ==========================================================================
+  // Rules: Grammar → Parser Methods
+  // ==========================================================================
+  rule Decl2Scala.grammar {
+    GrammarDecl(name, rules) ↦
+      DefDecl(StringConcat(StringLit("parse_"), Var(name)),
+        ListExpr(TypeRef(StringLit("TokenStream"))),
+        TypeApp(StringLit("Either"), ListExpr(TypeRef(StringLit("String")), TypeRef(StringLit("Val")))),
+        Match(Var(StringLit("stream")), 
+              SyntaxRule2Parser.forward(rules)))
+  }
+
+  // ==========================================================================
+  // Rules: SyntaxRule → Case Clause
+  // ==========================================================================
+  rule SyntaxRule2Parser.rule {
+    SynRule(tokens, result) ↦
+      CaseClause(PatWild, SyntaxArg2Builder.forward(result))
+  }
+
+  // ==========================================================================
+  // Rules: SyntaxArg → Val Builder Expression
+  // ==========================================================================
+  rule SyntaxArg2Builder.ref {
+    ArgRef(name) ↦ 
+      App(Var(StringLit("bindings.get")), ListExpr(Var(name)))
+  }
+
+  rule SyntaxArg2Builder.con {
+    ArgCon(name, args) ↦
+      App(Var(StringLit("VCon")), 
+          ListExpr(Var(name), 
+                   App(Var(StringLit("List")), SyntaxArg2Builder.forward(args))))
+  }
+
+  // ==========================================================================
+  // Rules: Type → Scala Type
+  // ==========================================================================
+  rule Type2Scala.sortRef {
+    SortRef(name) ↦ TypeRef(StringLit("Val"))
+  }
+
+  rule Type2Scala.arrow {
+    Arrow(from, to) ↦ 
+      FuncType(Type2Scala.forward(from), Type2Scala.forward(to))
+  }
+
+  // ==========================================================================
+  // Rules: Pattern → Scala Pattern (for matching)
+  // ==========================================================================
+  rule Pattern2Match.var {
+    PVar(name) ↦ PatVar(Var(name))
+  }
+
+  rule Pattern2Match.con {
+    PCon(name, args) ↦ 
+      PatCon(StringConcat(StringLit("VCon"), 
+             StringConcat(StringLit("(\""), 
+             StringConcat(Var(name), StringLit("\", _)")))),
+             Pattern2Match.forward(args))
+  }
+
+  // ==========================================================================
+  // Rules: Pattern → Scala Expression (for building)
+  // ==========================================================================
+  rule Pattern2Build.var {
+    PVar(name) ↦ 
+      App(Var(StringLit("bindings")), ListExpr(Var(name)))
+  }
+
+  rule Pattern2Build.con {
+    PCon(name, args) ↦
+      App(Var(StringLit("VCon")), 
+          ListExpr(Var(name), 
+                   App(Var(StringLit("List")), Pattern2Build.forward(args))))
+  }
+
+  // ==========================================================================
+  // Rules: Xform/Rule → Interpreter Method
+  // ==========================================================================
+  rule Decl2Scala.xform {
+    XformDecl(name, src, tgt) ↦
+      DefDecl(Var(name),
+        ListExpr(TypeRef(StringLit("Val"))),
+        TypeApp(StringLit("Option"), ListExpr(TypeRef(StringLit("Val")))),
+        Var(StringLit("???")))
+  }
+
+  rule Decl2Scala.rule {
+    RuleDecl(name, cases) ↦
+      DefDecl(Var(name),
+        ListExpr(TypeRef(StringLit("Val"))),
+        TypeApp(StringLit("Option"), ListExpr(TypeRef(StringLit("Val")))),
+        Match(Var(StringLit("v")), Pattern2Match.forward(cases)))
+  }
+}

@@ -1,0 +1,149 @@
+// =============================================================================
+// Meta2Scala: Compile Meta interpreter to Scala
+// =============================================================================
+// Transforms the meta-level semantic definitions into executable Scala code.
+
+language Meta2Scala {
+  // ==========================================================================
+  // Input Sorts (from Meta)
+  // ==========================================================================
+  sort Val
+  sort Env
+  sort Pat
+  sort Expr
+  sort Result
+  
+  // ==========================================================================
+  // Output Sorts (Scala AST)
+  // ==========================================================================
+  sort ScalaFile
+  sort ScalaDecl
+  sort ScalaStmt
+  sort ScalaExpr
+  sort ScalaPat
+  sort ScalaType
+  sort ScalaCase
+  
+  // ==========================================================================
+  // Input Constructors (from Meta)
+  // ==========================================================================
+  constructor VCon : String → List[Val] → Val
+  constructor VStr : String → Val
+  constructor VInt : Int → Val
+  constructor VList : List[Val] → Val
+  constructor EmptyEnv : Env
+  constructor Bind : String → Val → Env → Env
+  constructor PVar : String → Pat
+  constructor PCon : String → List[Pat] → Pat
+  constructor PWild : Pat
+  constructor PLit : Val → Pat
+  constructor EVar : String → Expr
+  constructor ECon : String → List[Expr] → Expr
+  constructor EApp : Expr → Expr → Expr
+  constructor ELam : String → Expr → Expr
+  constructor EMatch : Expr → List[Expr] → Expr
+  constructor ECase : Pat → Expr → Expr
+  constructor ROk : Val → Env → Result
+  constructor RFail : Result
+  
+  // ==========================================================================
+  // Output Constructors (Scala AST)
+  // ==========================================================================
+  constructor Package : String → List[ScalaDecl] → ScalaFile
+  constructor EnumDecl : String → List[ScalaDecl] → ScalaDecl
+  constructor CaseDecl : String → List[ScalaType] → ScalaDecl
+  constructor DefDecl : String → List[ScalaType] → ScalaType → ScalaExpr → ScalaDecl
+  constructor TypeRef : String → ScalaType
+  constructor TypeApp : String → List[ScalaType] → ScalaType
+  constructor Var : String → ScalaExpr
+  constructor App : ScalaExpr → List[ScalaExpr] → ScalaExpr
+  constructor Match : ScalaExpr → List[ScalaCase] → ScalaExpr
+  constructor StringLit : String → ScalaExpr
+  constructor PatVar : String → ScalaPat
+  constructor PatCon : String → List[ScalaPat] → ScalaPat
+  constructor PatWild : ScalaPat
+  constructor CaseClause : ScalaPat → ScalaExpr → ScalaCase
+  
+  // ==========================================================================
+  // Transforms
+  // ==========================================================================
+  xform Val2Scala : Val ⇄ ScalaDecl
+  xform Pat2Scala : Pat ⇄ ScalaPat
+  xform Expr2Scala : Expr ⇄ ScalaExpr
+  xform Result2Scala : Result ⇄ ScalaExpr
+  
+  // ==========================================================================
+  // Rules: Val enum
+  // ==========================================================================
+  
+  // Generate: enum Val { case VCon(name: String, args: List[Val]) ... }
+  rule Val2Scala.enum {
+    VCon(name, args) ↦ 
+      EnumDecl(StringLit("Val"), 
+        CaseDecl(StringLit("VCon"), 
+          TypeRef(StringLit("String")), 
+          TypeApp(StringLit("List"), TypeRef(StringLit("Val")))))
+  }
+  
+  // ==========================================================================
+  // Rules: Pattern → Scala Pattern
+  // ==========================================================================
+  
+  rule Pat2Scala.var {
+    PVar(name) ↦ PatVar(Var(name))
+  }
+  
+  rule Pat2Scala.con {
+    PCon(name, pats) ↦ 
+      PatCon(StringLit("VCon"),
+        PatCon(StringLit("Seq"), Pat2Scala.forward(pats)))
+  }
+  
+  rule Pat2Scala.wild {
+    PWild ↦ PatWild
+  }
+  
+  // ==========================================================================
+  // Rules: Expr → Scala Expr
+  // ==========================================================================
+  
+  rule Expr2Scala.var {
+    EVar(name) ↦ 
+      App(Var(StringLit("env.get")), Var(name))
+  }
+  
+  rule Expr2Scala.con {
+    ECon(name, args) ↦
+      App(Var(StringLit("VCon")), 
+        Var(name),
+        App(Var(StringLit("List")), Expr2Scala.forward(args)))
+  }
+  
+  rule Expr2Scala.app {
+    EApp(f, x) ↦
+      App(Expr2Scala.forward(f), Expr2Scala.forward(x))
+  }
+  
+  rule Expr2Scala.match {
+    EMatch(scrut, cases) ↦
+      Match(Expr2Scala.forward(scrut), Expr2Scala.forward(cases))
+  }
+  
+  rule Expr2Scala.case {
+    ECase(pat, body) ↦
+      CaseClause(Pat2Scala.forward(pat), Expr2Scala.forward(body))
+  }
+  
+  // ==========================================================================
+  // Rules: Result → Option[Val]
+  // ==========================================================================
+  
+  rule Result2Scala.ok {
+    ROk(val, env) ↦ 
+      App(Var(StringLit("Some")), Val2Scala.forward(val))
+  }
+  
+  rule Result2Scala.fail {
+    RFail ↦ Var(StringLit("None"))
+  }
+}
