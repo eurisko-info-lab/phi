@@ -67,9 +67,9 @@ language Abella extends λProlog {
   // =====================================================
   rule Subst.forward {
     ((x,v), Var(x)) ↦ v
-    ((x,v), Var(y)) ↦ Var(y) where x ≠ y
-    ((x,v), Const(c)) ↦ Const(c)
-    ((x,v), Lam(y,t)) ↦ Lam(y,t) where x = y
+    ((x,_), Var(y)) ↦ Var(y) where x ≠ y
+    ((_,_), Const(c)) ↦ Const(c)
+    ((x,_), Lam(y,t)) ↦ Lam(y,t) where x = y
     ((x,v), Lam(y,t)) ↦ Lam(y,Subst.forward((x,v),t)) where x ≠ y
     ((x,v), App(f,a)) ↦ App(Subst.forward((x,v),f), Subst.forward((x,v),a))
   }
@@ -86,7 +86,7 @@ language Abella extends λProlog {
   }
 
   rule Solve.forward {
-    (P, True) ↦ True
+    (_, True) ↦ True
     (P, And(g1,g2)) ↦ And(Solve.forward(P,g1), Solve.forward(P,g2))
     (Program(cs), Call(t)) ↦ SolveClauses.forward(cs, t)
   }
@@ -102,7 +102,7 @@ language Abella extends λProlog {
   }
 
   rule substGoal.forward {
-    (x, t, True) ↦ True
+    (_, _, True) ↦ True
     (x, t, And(g1,g2)) ↦ And(substGoal.forward(x,t,g1), substGoal.forward(x,t,g2))
     (x, t, Call(tm)) ↦ Call(Subst.forward((x,t),tm))
   }
@@ -112,13 +112,13 @@ language Abella extends λProlog {
     (Fail, p) ↦ p                                       // terminal arrow
     (Seq(t1,t2), p) ↦ ApplyTactic.forward(t2, ApplyTactic.forward(t1, p))  // composition
     (Repeat(t), p) ↦ ApplyTactic.forward(t, ApplyTactic.forward(Repeat(t), p))
-    (Apply(c), Prf(g)) ↦ Prf(Call(c))
+    (Apply(c), Prf(_)) ↦ Prf(Call(c))
     (Assume(x), Prf(g)) ↦ Prf(And(Call(Var(x)), g))
     (Split, Prf(And(g1,g2))) ↦ Prf(And(Prf(g1), Prf(g2)))
     (Intros, Prf(Call(App(Lam(x,b),v)))) ↦ Prf(Call(Subst.forward((x,v),b)))
-    (Exact(t), Prf(g)) ↦ Prf(Call(t))
-    (Case(t, tac), Prf(g)) ↦ ApplyTactic.forward(tac, Prf(g))   // functorial action
-    (Induction(t, tac), Prf(g)) ↦ ApplyTactic.forward(tac, Prf(g))
+    (Exact(t), Prf(_)) ↦ Prf(Call(t))
+    (Case(_, tac), Prf(g)) ↦ ApplyTactic.forward(tac, Prf(g))   // functorial action
+    (Induction(_, tac), Prf(g)) ↦ ApplyTactic.forward(tac, Prf(g))
     (Rewrite(Var(x),t2,tac), Prf(g)) ↦ ApplyTactic.forward(tac, Prf(Call(Subst.forward((x,t2),g))))
   }
 
@@ -127,8 +127,8 @@ language Abella extends λProlog {
   }
 
   rule ApplyCtx.forward {
-    (nil, t) ↦ Prf(True)
-    (cons(Hyp(x,g),rest), t) ↦ ApplyTactic.forward(t, Prf(g))
+    (nil, _) ↦ Prf(True)
+    (cons(Hyp(_,g),_), t) ↦ ApplyTactic.forward(t, Prf(g))
   }
 
   // Strategy for normalization

@@ -35,11 +35,11 @@ language STLCNat {
   // -----------------------
   
   rule BetaReduce {
-    app(lam(x, A, body), v) |-> body[x := v]
+    app(lam(x, _, body), v) |-> body[x := v]
   }
 
   rule NatRecZero {
-    NatRec(zero, z, s) |-> z
+    NatRec(zero, z, _) |-> z
   }
 
   rule NatRecSucc {
@@ -47,11 +47,11 @@ language STLCNat {
   }
 
   rule FstPair {
-    fst(pair(a, b)) |-> a
+    fst(pair(a, _)) |-> a
   }
 
   rule SndPair {
-    snd(pair(a, b)) |-> b
+    snd(pair(_, b)) |-> b
   }
 
   // -----------------------
@@ -104,4 +104,11 @@ language STLCNat {
   def test_fib5 = app(fib, five)
   def test_fib7 = app(fib, seven)
   def test_fact5 = app(fact, five)
+
+  // -----------------------
+  // Type examples (to use all constructors)
+  // -----------------------
+  def type_unit : Type = Unit
+  def type_nat_to_nat : Type = Arr(Nat, Nat)
+  def term_unit : Term = unit
 }

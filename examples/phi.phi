@@ -78,10 +78,61 @@ language Phi {
 
   constructor DSort : String → Decl
   constructor DCon : String → Type → Decl
-  constructor DRule : String → Pat → Pat → Decl
+  constructor DRule : String → RuleDir → RuleCase* → Decl  // Full rule with direction and cases
   constructor DDef : String → Pat → Decl
   constructor DStrat : String → Strat → Decl
-  constructor DAttr : String → Type → String → Decl  // name, type, "inherited"|"synthesized"
+  constructor DXform : String → String → String → Decl     // xform Name : Source ⇄ Target
+  constructor DChange : String → String → Decl             // change Name : Sort
+  constructor DAttr : String → Type → AttrFlow → Decl      // Attribute declaration
+  constructor DAttrEq : AttrEquation → Decl                // Attribute equation
+
+  // =====================================================
+  // Rule Direction
+  // =====================================================
+
+  sort RuleDir
+  constructor Forward : RuleDir   // lhs → rhs only
+  constructor Backward : RuleDir  // rhs → lhs only  
+  constructor Both : RuleDir      // bidirectional
+
+  // =====================================================
+  // Rule Cases with Guards
+  // =====================================================
+
+  sort RuleCase
+  constructor RuleCase : Pat → Pat → Guard* → RuleCase  // lhs, rhs, guards
+
+  sort Guard
+  constructor Guard : String → Pat → Pat → Guard  // varName, expr, expected
+  // Guard succeeds if expr evaluates to expected
+  // e.g., where x ≠ y becomes Guard(x, PVar(x), PVar(y)) with neq check
+
+  // =====================================================
+  // Attribute Flow Direction
+  // =====================================================
+
+  sort AttrFlow
+  constructor Inherited : AttrFlow    // Flows from parent to children (down)
+  constructor Synthesized : AttrFlow  // Flows from children to parent (up)
+
+  // =====================================================
+  // Attribute Specifications
+  // =====================================================
+
+  sort AttrSpec
+  constructor AttrSpec : String → Type → AttrFlow → Pat → AttrSpec  // name, type, flow, default
+
+  // =====================================================
+  // Attribute Equations
+  // =====================================================
+  //
+  // Defines how to compute an attribute for a given pattern.
+  // Synthesized: attr type(Var(x)) = lookup(x, env)
+  // Inherited:   attr env(Lam(x, body)) for body = extend(env, x, t)
+
+  sort AttrEquation
+  constructor AttrEq : String → Pat → String → Pat → AttrEquation  // attrName, pattern, forChild, computation
+  // forChild is "" for synthesized, or child variable name for inherited
 
   // =====================================================
   // Types
@@ -113,6 +164,8 @@ language Phi {
   constructor SSeq : Strat → Strat → Strat  // s1 ; s2
   constructor SChoice : Strat → Strat → Strat  // s1 | s2
   constructor SRepeat : Strat → Strat       // repeat s
+  constructor SAll : Strat → Strat          // all s (non-deterministic: return all results)
+  constructor SUnify : Pat → Pat → Strat    // unify(p1, p2) built-in unification
 
   // =====================================================
   // Tokens (for parsing)
@@ -146,20 +199,20 @@ language Phi {
 
   // Parse: sort Name
   rule Parse.sortDecl {
-    [TokKw(kw_sort), TokId(name) | rest] ↦ 
+    [TokKw(_), TokId(name) | rest] ↦ 
       cons(DSort(name), Parse.forward(rest))
   }
 
   // Parse: constructor Name : Type
   rule Parse.constructorDecl {
-    [TokKw(kw_constructor), TokId(name), TokColon | typeAndRest] ↦
+    [TokKw(_), TokId(name), TokColon | typeAndRest] ↦
       cons(DCon(name, ParseType.forward(typeAndRest)), 
            Parse.forward(afterType(typeAndRest)))
   }
 
   // Parse: rule Name { lhs ↦ rhs }
   rule Parse.ruleDecl {
-    [TokKw(kw_rule), TokId(name), TokLBrace | bodyAndRest] ↦
+    [TokKw(_), TokId(name), TokLBrace | bodyAndRest] ↦
       cons(DRule(name, ParsePat.forward(lhs(bodyAndRest)), 
                        ParsePat.forward(rhs(bodyAndRest))),
            Parse.forward(afterBrace(bodyAndRest)))
@@ -167,14 +220,14 @@ language Phi {
 
   // Parse: def Name = Pat
   rule Parse.defDecl {
-    [TokKw(kw_def), TokId(name), TokSym(eq) | patAndRest] ↦
+    [TokKw(_), TokId(name), TokSym(_) | patAndRest] ↦
       cons(DDef(name, ParsePat.forward(patAndRest)),
            Parse.forward(afterPat(patAndRest)))
   }
 
   // Parse: strategy Name := Strat
   rule Parse.strategyDecl {
-    [TokKw(kw_strategy), TokId(name), TokSym(assign) | stratAndRest] ↦
+    [TokKw(_), TokId(name), TokSym(_) | stratAndRest] ↦
       cons(DStrat(name, ParseStrat.forward(stratAndRest)),
            Parse.forward(afterStrat(stratAndRest)))
   }
@@ -185,7 +238,7 @@ language Phi {
   }
   
   rule Parse.emptyEOF {
-    [TokEOF | rest] ↦ nil
+    [TokEOF | _] ↦ nil
   }
 
   // =====================================================
@@ -195,11 +248,11 @@ language Phi {
   xform ParseType : Token* ⇄ Type
 
   rule ParseType.name {
-    [TokId(name) | rest] ↦ TName(name)
+    [TokId(name) | _] ↦ TName(name)
   }
 
   rule ParseType.arrow {
-    [TokId(a), TokSym(arrow), TokId(b) | rest] ↦ 
+    [TokId(a), TokSym(_), TokId(b) | _] ↦ 
       TArrow(TName(a), TName(b))
   }
 
@@ -210,11 +263,11 @@ language Phi {
   xform ParsePat : Token* ⇄ Pat
 
   rule ParsePat.var {
-    [TokId(name) | rest] ↦ PVar(name)
+    [TokId(name) | _] ↦ PVar(name)
   }
 
   rule ParsePat.num {
-    [TokNum(n) | rest] ↦ PNum(n)
+    [TokNum(n) | _] ↦ PNum(n)
   }
 
   rule ParsePat.con {
@@ -229,15 +282,15 @@ language Phi {
   xform ParseStrat : Token* ⇄ Strat
 
   rule ParseStrat.idStrat {
-    [TokKw(kw_id) | rest] ↦ SId
+    [TokKw(_) | _] ↦ SId
   }
 
   rule ParseStrat.apply {
-    [TokId(name) | rest] ↦ SApply(name)
+    [TokId(name) | _] ↦ SApply(name)
   }
 
   rule ParseStrat.repeatStrat {
-    [TokKw(kw_repeat) | stratRest] ↦ 
+    [TokKw(_) | stratRest] ↦ 
       SRepeat(ParseStrat.forward(stratRest))
   }
 
@@ -252,7 +305,7 @@ language Phi {
   }
 
   rule Subst.var.other {
-    (x, v), PVar(y) ↦ PVar(y) where x ≠ y
+    (x, _), PVar(y) ↦ PVar(y) where x ≠ y
   }
 
   rule Subst.con {
@@ -266,7 +319,7 @@ language Phi {
   }
 
   rule Subst.lam.capture {
-    (x, v), PLam(x, body) ↦ PLam(x, body)  // x is bound, don't subst
+    (x, _), PLam(x, body) ↦ PLam(x, body)  // x is bound, don't subst
   }
 
   rule Subst.lam.other {
@@ -296,16 +349,667 @@ language Phi {
   def example_mini_spec = miniLang
 
   // =====================================================
+  // Runtime Values
+  // =====================================================
+  //
+  // Values are the result of evaluating patterns.
+  // VCon(name, args) is the only runtime value form.
+
+  sort Val
+  constructor VCon : String → Val* → Val
+
+  // =====================================================
+  // Environments (for variable bindings)
+  // =====================================================
+
+  sort Binding
+  constructor Bind : String → Val → Binding
+
+  // Environment is a list of bindings
+  // env = [Bind(x, v1), Bind(y, v2), ...]
+
+  // =====================================================
+  // Pattern Matching
+  // =====================================================
+  //
+  // MatchPat : Val × Pat ⇄ Binding*
+  // Returns list of bindings if match succeeds
+
+  xform MatchPat : Val × Pat ⇄ Binding*
+
+  // Variable matches anything, binds it
+  rule MatchPat.var {
+    (v, PVar(x)) ↦ [Bind(x, v)]
+  }
+
+  // Constructor must match name and recursively match args
+  rule MatchPat.con {
+    (VCon(name, vargs), PCon(name, pargs)) ↦ 
+      MatchArgs.forward(vargs, pargs)
+  }
+
+  // Application pattern
+  rule MatchPat.app {
+    (VCon(app, [f, a]), PApp(pf, pa)) ↦
+      concat(MatchPat.forward(f, pf), MatchPat.forward(a, pa))
+  }
+
+  // Helper: match argument lists pairwise
+  xform MatchArgs : Val* × Pat* ⇄ Binding*
+
+  rule MatchArgs.nil {
+    ([], []) ↦ []
+  }
+
+  rule MatchArgs.cons {
+    ([v | vs], [p | ps]) ↦
+      concat(MatchPat.forward(v, p), MatchArgs.forward(vs, ps))
+  }
+
+  // =====================================================
+  // Instantiation (pattern → value with bindings)
+  // =====================================================
+  //
+  // Instantiate : Pat × Binding* ⇄ Val
+  // Replaces pattern variables with bound values
+
+  xform Instantiate : Pat × Binding* ⇄ Val
+
+  // Variable: look up in environment
+  rule Instantiate.var {
+    (PVar(x), env) ↦ Lookup.forward(x, env)
+  }
+
+  // Nullary constructor
+  rule Instantiate.con0 {
+    (PCon(name, []), _) ↦ VCon(name, [])
+  }
+
+  // Constructor with args: instantiate each
+  rule Instantiate.con {
+    (PCon(name, [a | as]), env) ↦ 
+      VCon(name, [Instantiate.forward(a, env) | InstantiateList.forward(as, env)])
+  }
+
+  // Application
+  rule Instantiate.app {
+    (PApp(f, a), env) ↦
+      VCon(app, [Instantiate.forward(f, env), Instantiate.forward(a, env)])
+  }
+
+  // Substitution: instantiate then substitute
+  rule Instantiate.subst {
+    (PSubst(body, x, repl), env) ↦
+      SubstVal.forward((x, Instantiate.forward(repl, env)), 
+                       Instantiate.forward(body, env))
+  }
+
+  // Helper: instantiate a list of patterns
+  xform InstantiateList : Pat* × Binding* ⇄ Val*
+
+  rule InstantiateList.nil {
+    ([], _) ↦ []
+  }
+
+  rule InstantiateList.cons {
+    ([p | ps], env) ↦ [Instantiate.forward(p, env) | InstantiateList.forward(ps, env)]
+  }
+
+  // =====================================================
+  // Environment Lookup
+  // =====================================================
+
+  xform Lookup : String × Binding* ⇄ Val
+
+  rule Lookup.found {
+    (x, [Bind(x, v) | _]) ↦ v
+  }
+
+  rule Lookup.skip {
+    (x, [Bind(y, _) | rest]) ↦ Lookup.forward(x, rest) where x ≠ y
+  }
+
+  // =====================================================
+  // Substitution on Values
+  // =====================================================
+  //
+  // SubstVal : (String × Val) × Val ⇄ Val
+  // Replace variable x with value v in a value
+
+  xform SubstVal : (String × Val) × Val ⇄ Val
+
+  // Variable matches: replace
+  rule SubstVal.match {
+    (x, v), VCon(x, []) ↦ v
+  }
+
+  // Variable doesn't match: keep
+  rule SubstVal.other {
+    (x, _), VCon(y, []) ↦ VCon(y, []) where x ≠ y
+  }
+
+  // Lambda captures: don't substitute under binder
+  rule SubstVal.lam.capture {
+    (x, _), VCon(lam, [VCon(x, []), ty, body]) ↦ VCon(lam, [VCon(x, []), ty, body])
+  }
+
+  // Lambda other: substitute in body
+  rule SubstVal.lam.other {
+    (x, v), VCon(lam, [VCon(y, []), ty, body]) ↦ 
+      VCon(lam, [VCon(y, []), SubstVal.forward((x, v), ty), SubstVal.forward((x, v), body)])
+      where x ≠ y
+  }
+
+  // Non-nullary constructor: substitute in children
+  rule SubstVal.con {
+    (x, v), VCon(name, [a | as]) ↦ 
+      VCon(name, [SubstVal.forward((x, v), a) | SubstValList.forward((x, v), as)])
+  }
+
+  // Helper for list
+  xform SubstValList : (String × Val) × Val* ⇄ Val*
+
+  rule SubstValList.nil {
+    (_, _), [] ↦ []
+  }
+
+  rule SubstValList.cons {
+    (x, v), [a | as] ↦ [SubstVal.forward((x, v), a) | SubstValList.forward((x, v), as)]
+  }
+
+  // =====================================================
+  // Rule Application (single case)
+  // =====================================================
+  //
+  // TryRule : Val × RuleCase ⇄ Val
+  // Apply a single rule case if it matches
+
+  xform TryRule : Val × RuleCase ⇄ Val
+
+  rule TryRule.match {
+    (v, RuleCase(lhs, rhs, [])) ↦
+      Instantiate.forward(rhs, MatchPat.forward(v, lhs))
+  }
+
+  // =====================================================
+  // Strategy Execution  
+  // =====================================================
+  //
+  // RunStrategy : Strat × Val ⇄ Val
+
+  xform RunStrategy : Strat × Val ⇄ Val
+
+  // Identity: return unchanged
+  rule RunStrategy.id {
+    (SId, v) ↦ v
+  }
+
+  // Sequence: run first, then second on result
+  rule RunStrategy.seq {
+    (SSeq(s1, s2), v) ↦
+      RunStrategy.forward(s2, RunStrategy.forward(s1, v))
+  }
+
+  // =====================================================
+  // Unification (for logic programming)
+  // =====================================================
+
+  xform Unify : Val × Val × Binding* ⇄ Binding*
+
+  // Same nullary constructor: success
+  rule Unify.atom {
+    (VCon(n, []), VCon(n, []), subst) ↦ subst
+  }
+
+  // Same constructor with args: unify args pairwise
+  rule Unify.con {
+    (VCon(n, [a1 | as1]), VCon(n, [a2 | as2]), subst) ↦
+      Unify.forward(VCon(n, as1), VCon(n, as2), Unify.forward(a1, a2, subst))
+  }
+
+  // Logic variable on left: bind it (lowercase = var)
+  rule Unify.varL {
+    (VCon(x, []), t, subst) ↦ [Bind(x, t) | subst]
+  }
+
+  // Logic variable on right: bind it  
+  rule Unify.varR {
+    (t, VCon(x, []), subst) ↦ [Bind(x, t) | subst]
+  }
+
+  // =====================================================
+  // Non-deterministic Execution
+  // =====================================================
+  //
+  // Returns a list of all possible results (for backtracking).
+  // Result* represents a lazy stream of values.
+
+  sort Result
+  constructor Result : Val → Result
+
+  // =====================================================
+  // Apply Rule - All Results
+  // =====================================================
+  //
+  // ApplyRuleAll : Val × RuleCase* ⇄ Result*
+  // Returns all matching rule applications
+
+  xform ApplyRuleAll : Val × RuleCase* ⇄ Result*
+
+  // No rules: empty result
+  rule ApplyRuleAll.nil {
+    (_, []) ↦ []
+  }
+
+  // Try rule case, collect result if matches, continue with rest
+  rule ApplyRuleAll.cons {
+    (v, [RuleCase(lhs, rhs, guards) | rest]) ↦
+      concat(TryRuleAll.forward(v, RuleCase(lhs, rhs, guards)),
+             ApplyRuleAll.forward(v, rest))
+  }
+
+  // Try single rule, return singleton or empty
+  xform TryRuleAll : Val × RuleCase ⇄ Result*
+
+  rule TryRuleAll.match {
+    (v, RuleCase(lhs, rhs, _)) ↦
+      [Result(Instantiate.forward(rhs, MatchPat.forward(v, lhs)))]
+  }
+
+  // =====================================================
+  // Run Strategy - All Results  
+  // =====================================================
+  //
+  // RunStrategyAll : Strat × Val ⇄ Result*
+
+  xform RunStrategyAll : Strat × Val ⇄ Result*
+
+  // Identity: single result
+  rule RunStrategyAll.id {
+    (SId, v) ↦ [Result(v)]
+  }
+
+  // Fail: no results
+  rule RunStrategyAll.fail {
+    (SFail, _) ↦ []
+  }
+
+  // Sequence: flatMap over results
+  rule RunStrategyAll.seq {
+    (SSeq(s1, s2), v) ↦
+      FlatMapResults.forward(RunStrategyAll.forward(s1, v), s2)
+  }
+
+  // Choice: concat both results
+  rule RunStrategyAll.choice {
+    (SChoice(s1, s2), v) ↦
+      concat(RunStrategyAll.forward(s1, v), RunStrategyAll.forward(s2, v))
+  }
+
+  // All: identity in non-det context
+  rule RunStrategyAll.all {
+    (SAll(s), v) ↦ RunStrategyAll.forward(s, v)
+  }
+
+  // Unify: built-in unification
+  rule RunStrategyAll.unify {
+    (SUnify(p1, p2), v) ↦
+      UnifyToResults.forward(Instantiate.forward(p1, []), Instantiate.forward(p2, []), v)
+  }
+
+  // Helper: flatMap over result list
+  xform FlatMapResults : Result* × Strat ⇄ Result*
+
+  rule FlatMapResults.nil {
+    ([], _) ↦ []
+  }
+
+  rule FlatMapResults.cons {
+    ([Result(v) | rest], s) ↦
+      concat(RunStrategyAll.forward(s, v), FlatMapResults.forward(rest, s))
+  }
+
+  // Helper: unify and return result
+  xform UnifyToResults : Val × Val × Val ⇄ Result*
+
+  rule UnifyToResults.success {
+    (v1, v2, orig) ↦ [Result(ApplySubst.forward(orig, Unify.forward(v1, v2, [])))]
+  }
+
+  // =====================================================
+  // Goal Solving (λProlog-style)
+  // =====================================================
+  //
+  // SolveGoal : Val × RuleCase* × Binding* ⇄ Result*
+  // Solve a goal using unification-based matching with backtracking.
+
+  xform SolveGoal : Val × RuleCase* × Binding* ⇄ Result*
+
+  // Built-in True succeeds
+  rule SolveGoal.true {
+    (VCon(True, []), _, _) ↦ [Result(VCon(True, []))]
+  }
+
+  // Built-in False fails
+  rule SolveGoal.false {
+    (VCon(False, []), _, _) ↦ []
+  }
+
+  // Conjunction: solve both
+  rule SolveGoal.and {
+    (VCon(And, [g1, g2]), cases, subst) ↦
+      FlatMapGoals.forward(SolveGoal.forward(g1, cases, subst), g2, cases)
+  }
+
+  // Disjunction: concat results
+  rule SolveGoal.or {
+    (VCon(Or, [g1, g2]), cases, subst) ↦
+      concat(SolveGoal.forward(g1, cases, subst), SolveGoal.forward(g2, cases, subst))
+  }
+
+  // Try to unify with each rule's LHS
+  rule SolveGoal.rules {
+    (goal, cases, subst) ↦
+      TryUnifyRules.forward(goal, cases, subst)
+  }
+
+  // Helper: try unifying goal with each rule
+  xform TryUnifyRules : Val × RuleCase* × Binding* ⇄ Result*
+
+  rule TryUnifyRules.nil {
+    (_, [], _) ↦ []
+  }
+
+  rule TryUnifyRules.cons {
+    (goal, [RuleCase(lhs, rhs, _) | rest], subst) ↦
+      concat(TryUnifyOne.forward(goal, lhs, rhs, subst),
+             TryUnifyRules.forward(goal, rest, subst))
+  }
+
+  // Try to unify goal with one rule's LHS
+  xform TryUnifyOne : Val × Pat × Pat × Binding* ⇄ Result*
+
+  rule TryUnifyOne.match {
+    (goal, lhs, rhs, subst) ↦
+      [Result(ApplySubst.forward(PatToVal.forward(rhs), 
+                                  Unify.forward(goal, PatToVal.forward(lhs), subst)))]
+  }
+
+  // =====================================================
+  // Pattern to Value Conversion
+  // =====================================================
+
+  xform PatToVal : Pat ⇄ Val
+
+  rule PatToVal.var {
+    PVar(x) ↦ VCon(x, [])
+  }
+
+  rule PatToVal.con0 {
+    PCon(name, []) ↦ VCon(name, [])
+  }
+
+  rule PatToVal.con {
+    PCon(name, [p | ps]) ↦ VCon(name, [PatToVal.forward(p) | PatToValList.forward(ps)])
+  }
+
+  rule PatToVal.app {
+    PApp(f, a) ↦ VCon(app, [PatToVal.forward(f), PatToVal.forward(a)])
+  }
+
+  xform PatToValList : Pat* ⇄ Val*
+
+  rule PatToValList.nil {
+    [] ↦ []
+  }
+
+  rule PatToValList.cons {
+    [p | ps] ↦ [PatToVal.forward(p) | PatToValList.forward(ps)]
+  }
+
+  // =====================================================
+  // Apply Substitution to Value
+  // =====================================================
+
+  xform ApplySubst : Val × Binding* ⇄ Val
+
+  rule ApplySubst.var {
+    (VCon(x, []), subst) ↦ Lookup.forward(x, subst)
+  }
+
+  rule ApplySubst.con0 {
+    (VCon(name, []), []) ↦ VCon(name, [])
+  }
+
+  rule ApplySubst.con {
+    (VCon(name, [a | as]), subst) ↦
+      VCon(name, [ApplySubst.forward(a, subst) | ApplySubstList.forward(as, subst)])
+  }
+
+  xform ApplySubstList : Val* × Binding* ⇄ Val*
+
+  rule ApplySubstList.nil {
+    ([], _) ↦ []
+  }
+
+  rule ApplySubstList.cons {
+    ([v | vs], subst) ↦ [ApplySubst.forward(v, subst) | ApplySubstList.forward(vs, subst)]
+  }
+
+  // Helper for conjunction goals
+  xform FlatMapGoals : Result* × Val × RuleCase* ⇄ Result*
+
+  rule FlatMapGoals.nil {
+    ([], _, _) ↦ []
+  }
+
+  rule FlatMapGoals.cons {
+    ([Result(_) | rest], g2, cases) ↦
+      concat(SolveGoal.forward(g2, cases, []), FlatMapGoals.forward(rest, g2, cases))
+  }
+
+  // =====================================================
+  // Attributed Values
+  // =====================================================
+  //
+  // An attributed value pairs a Val with its computed attributes.
+  // Inherited attrs flow down, synthesized attrs flow up.
+
+  sort AttrVal
+  constructor AttrVal : Val → Binding* → Binding* → AttrVal  // value, inherited, synthesized
+
+  // =====================================================
+  // Attribute Evaluation
+  // =====================================================
+  //
+  // EvalAttrs : Val × Binding* × AttrEquation* ⇄ AttrVal
+  // Evaluate all attributes on a term tree.
+  // - value: the term to evaluate
+  // - inherited: attributes passed down from parent
+  // - equations: list of attribute equations
+
+  xform EvalAttrs : Val × Binding* × AttrEquation* ⇄ AttrVal
+
+  // Leaf node (nullary constructor): just check for matching equations
+  rule EvalAttrs.leaf {
+    (VCon(name, []), inh, eqs) ↦ 
+      AttrVal(VCon(name, []), inh, EvalSynthAttrs.forward(VCon(name, []), inh, eqs))
+  }
+
+  // Node with children: evaluate children first, then synthesized attrs
+  rule EvalAttrs.node {
+    (VCon(name, [c | cs]), inh, eqs) ↦
+      AttrVal(VCon(name, EvalChildren.forward([c | cs], inh, eqs)),
+              inh,
+              EvalSynthAttrs.forward(VCon(name, [c | cs]), inh, eqs))
+  }
+
+  // =====================================================
+  // Evaluate Children with Inherited Attributes
+  // =====================================================
+
+  xform EvalChildren : Val* × Binding* × AttrEquation* ⇄ Val*
+
+  rule EvalChildren.nil {
+    ([], _, _) ↦ []
+  }
+
+  rule EvalChildren.cons {
+    ([c | cs], inh, eqs) ↦
+      [ExtractVal.forward(EvalAttrs.forward(c, inh, eqs)) | EvalChildren.forward(cs, inh, eqs)]
+  }
+
+  // Extract the Val from an AttrVal
+  xform ExtractVal : AttrVal ⇄ Val
+
+  rule ExtractVal.get {
+    AttrVal(v, _, _) ↦ v
+  }
+
+  // =====================================================
+  // Evaluate Synthesized Attributes
+  // =====================================================
+  //
+  // Find equations that match the current node and compute them.
+
+  xform EvalSynthAttrs : Val × Binding* × AttrEquation* ⇄ Binding*
+
+  // No more equations: empty result
+  rule EvalSynthAttrs.nil {
+    (_, _, []) ↦ []
+  }
+
+  // Try to apply equation (synthesized - no forChild)
+  rule EvalSynthAttrs.synth {
+    (v, inh, [AttrEq(attrName, pat, _, comp) | rest]) ↦
+      [Bind(attrName, EvalAttrComp.forward(comp, concat(MatchPat.forward(v, pat), inh))) 
+       | EvalSynthAttrs.forward(v, inh, rest)]
+  }
+
+  // Skip inherited equations (have forChild)
+  rule EvalSynthAttrs.skip {
+    (v, inh, [AttrEq(_, _, forChild, _) | rest]) ↦
+      EvalSynthAttrs.forward(v, inh, rest) where forChild ≠ emptyStr
+  }
+
+  // =====================================================
+  // Evaluate Attribute Computation
+  // =====================================================
+  //
+  // Evaluate a computation pattern in the context of bindings.
+  // This handles attribute references like type(f), lookup(x, env), etc.
+
+  xform EvalAttrComp : Pat × Binding* ⇄ Val
+
+  // Variable: look up in environment
+  rule EvalAttrComp.var {
+    (PVar(x), env) ↦ Lookup.forward(x, env)
+  }
+
+  // Constructor: evaluate args
+  rule EvalAttrComp.con0 {
+    (PCon(name, []), _) ↦ VCon(name, [])
+  }
+
+  rule EvalAttrComp.con {
+    (PCon(name, [a | as]), env) ↦
+      VCon(name, [EvalAttrComp.forward(a, env) | EvalAttrCompList.forward(as, env)])
+  }
+
+  // Helper for list
+  xform EvalAttrCompList : Pat* × Binding* ⇄ Val*
+
+  rule EvalAttrCompList.nil {
+    ([], _) ↦ []
+  }
+
+  rule EvalAttrCompList.cons {
+    ([p | ps], env) ↦ [EvalAttrComp.forward(p, env) | EvalAttrCompList.forward(ps, env)]
+  }
+
+  // =====================================================
+  // Compute Inherited Attributes for Child
+  // =====================================================
+  //
+  // Find equations that provide inherited attributes for a specific child.
+
+  xform ComputeChildInherited : String × Val × Binding* × AttrEquation* ⇄ Binding*
+
+  // No more equations: return parent's inherited
+  rule ComputeChildInherited.nil {
+    (_, _, parentInh, []) ↦ parentInh
+  }
+
+  // Equation targets this child: compute and add to inherited
+  rule ComputeChildInherited.match {
+    (childVar, v, parentInh, [AttrEq(attrName, pat, childVar, comp) | rest]) ↦
+      [Bind(attrName, EvalAttrComp.forward(comp, concat(MatchPat.forward(v, pat), parentInh)))
+       | ComputeChildInherited.forward(childVar, v, parentInh, rest)]
+  }
+
+  // Equation targets different child: skip
+  rule ComputeChildInherited.skip {
+    (childVar, v, parentInh, [AttrEq(_, _, otherChild, _) | rest]) ↦
+      ComputeChildInherited.forward(childVar, v, parentInh, rest) where childVar ≠ otherChild
+  }
+
+  // =====================================================
+  // Get Attribute from AttrVal
+  // =====================================================
+
+  xform GetAttr : String × AttrVal ⇄ Val
+
+  // Try synthesized first
+  rule GetAttr.synth {
+    (name, AttrVal(_, _, syn)) ↦ Lookup.forward(name, syn)
+  }
+
+  // Fall back to inherited  
+  rule GetAttr.inh {
+    (name, AttrVal(_, inh, _)) ↦ Lookup.forward(name, inh)
+  }
+
+  // =====================================================
   // Normalization strategy
   // =====================================================
 
   strategy normalize := repeat (
     Parse.sortDecl | Parse.constructorDecl | Parse.ruleDecl | Parse.defDecl | 
-    Parse.strategyDecl | Parse.empty |
+    Parse.strategyDecl | Parse.emptyNil | Parse.emptyEOF |
     ParseType.name | ParseType.arrow |
     ParsePat.var | ParsePat.num | ParsePat.con |
     ParseStrat.idStrat | ParseStrat.apply | ParseStrat.repeatStrat |
     Subst.var.match | Subst.var.other | Subst.con | Subst.app |
-    Subst.lam.capture | Subst.lam.other
+    Subst.lam.capture | Subst.lam.other |
+    MatchPat.var | MatchPat.con | MatchPat.app |
+    MatchArgs.nil | MatchArgs.cons |
+    Instantiate.var | Instantiate.con0 | Instantiate.con | Instantiate.app | Instantiate.subst |
+    InstantiateList.nil | InstantiateList.cons |
+    Lookup.found | Lookup.skip |
+    SubstVal.match | SubstVal.other | SubstVal.lam.capture | SubstVal.lam.other | SubstVal.con |
+    SubstValList.nil | SubstValList.cons |
+    TryRule.match |
+    RunStrategy.id | RunStrategy.seq |
+    Unify.atom | Unify.con | Unify.varL | Unify.varR |
+    ApplyRuleAll.nil | ApplyRuleAll.cons | TryRuleAll.match |
+    RunStrategyAll.id | RunStrategyAll.fail | RunStrategyAll.seq | 
+    RunStrategyAll.choice | RunStrategyAll.all | RunStrategyAll.unify |
+    FlatMapResults.nil | FlatMapResults.cons |
+    UnifyToResults.success |
+    SolveGoal.true | SolveGoal.false | SolveGoal.and | SolveGoal.or | SolveGoal.rules |
+    TryUnifyRules.nil | TryUnifyRules.cons | TryUnifyOne.match |
+    PatToVal.var | PatToVal.con0 | PatToVal.con | PatToVal.app |
+    PatToValList.nil | PatToValList.cons |
+    ApplySubst.var | ApplySubst.con0 | ApplySubst.con |
+    ApplySubstList.nil | ApplySubstList.cons |
+    FlatMapGoals.nil | FlatMapGoals.cons |
+    EvalAttrs.leaf | EvalAttrs.node |
+    EvalChildren.nil | EvalChildren.cons |
+    ExtractVal.get |
+    EvalSynthAttrs.nil | EvalSynthAttrs.synth | EvalSynthAttrs.skip |
+    EvalAttrComp.var | EvalAttrComp.con0 | EvalAttrComp.con |
+    EvalAttrCompList.nil | EvalAttrCompList.cons |
+    ComputeChildInherited.nil | ComputeChildInherited.match | ComputeChildInherited.skip |
+    GetAttr.synth | GetAttr.inh
   )
 }

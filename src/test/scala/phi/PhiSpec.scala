@@ -1692,7 +1692,17 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
     import java.io.File
     
     val examplesDir = new File("examples")
-    val testFiles = List("stlc-nat.phi", "minimal.phi", "calculus.phi")
+    // Note: cubical.phi uses unsupported syntax (Hom[A,B])
+    // Note: λProlog.phi uses ML-style patterns (Var x) instead of (Var(x))
+    val testFiles = List(
+      "stlc-nat.phi", 
+      "minimal.phi", 
+      "calculus.phi",
+      "phi.phi",
+      "cat.phi",
+      "hkt.phi",
+      "abella.phi"
+    )
     
     testFiles.foreach { fileName =>
       val f = new File(examplesDir, fileName)
@@ -1707,5 +1717,7 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
           info(s"$fileName: ${result.summary}")
           if result.errors.nonEmpty then
             result.errors.foreach(e => info(s"  Error: ${e.message}"))
+          if result.warnings.nonEmpty then
+            result.warnings.foreach(w => info(s"  Warning: ${w.message}${w.location.map(l => s" @ $l").getOrElse("")}"))
     }
   }

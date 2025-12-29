@@ -122,10 +122,10 @@ object LangValidator:
       }
     }
     
-    // From xforms (source and target)
+    // From xforms (source and target) - parse type expressions
     spec.xforms.foreach { x =>
-      sortRefs += ((x.source, s"xform ${x.name}"))
-      sortRefs += ((x.target, s"xform ${x.name}"))
+      parseTypeString(x.source).foreach(s => sortRefs += ((s, s"xform ${x.name}")))
+      parseTypeString(x.target).foreach(s => sortRefs += ((s, s"xform ${x.name}")))
     }
     
     // From changes
@@ -171,9 +171,28 @@ object LangValidator:
       collectPatternConstructors(d.body).foreach(n => conRefs += ((n, s"def ${d.name}")))
     }
     
-    // Filter out pattern variables (lowercase) and xform calls (contain '.')
+    // Common type/pattern variable names that shouldn't be warned about
+    val commonPatternVars = Set(
+      // Single uppercase letters (type variables)
+      "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+      "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+      // Common primitive/builtin names
+      "Int", "String", "Bool", "True", "False", "Unit", "Void", "Any", "Nothing",
+      "Zero", "Succ", "Nil", "Cons", "None", "Some",
+      // Common logic/algebra names
+      "And", "Or", "Not", "Implies", "Iff", "Forall", "Exists",
+      // Common term/type names used in examples
+      "Term", "Type", "Expr", "Stmt", "Decl", "Pat", "Val",
+      "Tiny", "AddZero", "AddSucc",
+      // Common theorem names used as patterns
+      "Beck", "Brown", "Density", "Coherence", "Mitchell", "SmallObject", "GabrielUlmer"
+    )
+    
+    // Filter out pattern variables (lowercase), xform calls (contain '.'), and common pattern vars
     val actualConRefs = conRefs.toList.filter { case (name, _) =>
-      name.headOption.exists(_.isUpper) && !name.contains('.')
+      name.headOption.exists(_.isUpper) && 
+      !name.contains('.') &&
+      !commonPatternVars.contains(name)
     }
     
     val undefined = actualConRefs.filter { case (n, _) => !definedCons.contains(n) }
@@ -204,15 +223,19 @@ object LangValidator:
     )
   
   private def checkUndefinedXformRefs(spec: LangSpec): ValidationResult =
-    val definedXforms = spec.xforms.map(_.name).toSet
+    val definedXforms = spec.xforms.map(_.name).toSet ++ spec.changes.map(_.name).toSet
     
-    // Collect xform references from rule names (e.g., "Beta.forward")
+    // Collect xform references from rule names (e.g., "Beta.forward" but NOT "CategoryLaws.idLeft")
     val xformRefs = scala.collection.mutable.ListBuffer[(String, String)]()
     
     spec.rules.foreach { rule =>
-      // Rule names like "Beta.forward" reference xform "Beta"
-      if rule.name.contains('.') then
-        val xformName = rule.name.takeWhile(_ != '.')
+      // Only rule names like "Beta.forward" or "Xform.backward" reference xforms
+      // Rule names like "CategoryLaws.idLeft" are just organizational namespaces
+      if rule.name.endsWith(".forward") then
+        val xformName = rule.name.dropRight(8)
+        xformRefs += ((xformName, s"rule ${rule.name}"))
+      else if rule.name.endsWith(".backward") then
+        val xformName = rule.name.dropRight(9)
         xformRefs += ((xformName, s"rule ${rule.name}"))
     }
     
@@ -409,9 +432,26 @@ object LangValidator:
         val lhsVars = collectPatternVars(c.lhs)
         val rhsVars = collectPatternVars(c.rhs)
         
-        // Check for RHS vars not bound in LHS (excluding xform calls)
+        // Collect variables bound by where clauses (e.g., where s1 = Unify.forward(...))
+        // In guards like RuleGuard("eq", PVar("s1"), expr), "s1" is being bound to expr
+        val whereBoundVars = c.guards.flatMap { g =>
+          if g.varName == "eq" then
+            g.expr match
+              case MetaPattern.PVar(v) if v.headOption.exists(_.isLower) && !v.contains('.') => 
+                Some(v)
+              case _ => None
+          else None
+        }.toSet
+        
+        // Collect variables used in guards (both for equality checks and bindings)
+        val guardUsedVars = c.guards.flatMap { g =>
+          collectPatternVars(g.expr) ++ collectPatternVars(g.expected)
+        }.toSet
+        
+        // Check for RHS vars not bound in LHS or where clauses (excluding xform calls)
         val unbound = rhsVars.filter { v =>
           !lhsVars.contains(v) && 
+          !whereBoundVars.contains(v) &&
           v.headOption.exists(_.isLower) && 
           !isBuiltinVar(v) &&
           !v.contains('.')  // Skip xform.forward etc
@@ -426,9 +466,14 @@ object LangValidator:
           )
         }
         
-        // Check for unused LHS vars (warning)
+        // Count occurrences of each var in LHS for non-linear pattern detection
+        val lhsVarCounts = collectPatternVarCounts(c.lhs)
+        val nonLinearVars = lhsVarCounts.filter(_._2 > 1).keySet  // vars appearing 2+ times = used for matching
+        
+        // Check for unused LHS vars (warning) - vars used in RHS, guards, or non-linear matching count as used
+        val allUsedVars = rhsVars ++ guardUsedVars ++ nonLinearVars
         val unused = lhsVars.filter { v =>
-          !rhsVars.contains(v) && v != "_"
+          !allUsedVars.contains(v) && v != "_"
         }
         
         unused.foreach { v =>
@@ -444,11 +489,38 @@ object LangValidator:
     
     ValidationResult(issues.toList)
   
+  /** Collect pattern variable occurrence counts */
+  private def collectPatternVarCounts(pat: MetaPattern): Map[String, Int] =
+    val counts = scala.collection.mutable.Map[String, Int]().withDefaultValue(0)
+    def go(p: MetaPattern): Unit = p match
+      case MetaPattern.PVar(name) if name != "_" => counts(name) += 1
+      case MetaPattern.PCon(_, args) => args.foreach(go)
+      case MetaPattern.PApp(f, a) => go(f); go(a)
+      case MetaPattern.PSubst(body, _, repl) => go(body); go(repl)
+      case _ => ()
+    go(pat)
+    counts.toMap
+  
+  /** 
+   * Collect free pattern variables, excluding lambda-bound variables.
+   * Recognizes λa.body syntax which is parsed as PCon("lam", [PCon(a, []), _, body]).
+   */
   private def collectPatternVars(pat: MetaPattern): Set[String] = 
-    foldPattern(pat)(
-      onVar = name => List(name),
-      onCon = (_, _) => Nil
-    ).toSet
+    collectFreeVars(pat, Set.empty)
+  
+  private def collectFreeVars(pat: MetaPattern, bound: Set[String]): Set[String] = pat match
+    case MetaPattern.PVar(name) => 
+      if bound.contains(name) then Set.empty else Set(name)
+    case MetaPattern.PCon("lam", List(MetaPattern.PCon(x, Nil), _, body)) =>
+      // Lambda binds x in body
+      collectFreeVars(body, bound + x)
+    case MetaPattern.PCon(_, args) =>
+      args.flatMap(a => collectFreeVars(a, bound)).toSet
+    case MetaPattern.PApp(f, a) =>
+      collectFreeVars(f, bound) ++ collectFreeVars(a, bound)
+    case MetaPattern.PSubst(body, varName, repl) =>
+      // The varName in substitution counts as a variable usage
+      collectFreeVars(body, bound) ++ collectFreeVars(repl, bound) + varName
   
   // ===========================================================================
   // Constructor Arity Checks
@@ -551,10 +623,52 @@ object LangValidator:
     ValidationResult(issues)
   
   // ===========================================================================
+  // Type String Parsing
+  // ===========================================================================
+  
+  /** 
+   * Parse a type string and extract all sort references.
+   * Handles: SortName, Sort*, (A × B), (A → B), and nested combinations.
+   */
+  private def parseTypeString(typeStr: String): List[String] =
+    // Remove whitespace for easier parsing
+    val s = typeStr.trim
+    
+    // Handle list type: Sort*
+    if s.endsWith("*") then
+      parseTypeString(s.dropRight(1))
+    // Handle parenthesized type: (A × B) or (A → B)
+    else if s.startsWith("(") && s.endsWith(")") then
+      val inner = s.drop(1).dropRight(1)
+      // Find the operator (× or →) at the top level (not inside nested parens)
+      findTopLevelOperator(inner) match
+        case Some((left, right)) => parseTypeString(left) ++ parseTypeString(right)
+        case None => parseTypeString(inner) // Just parentheses around a single type
+    // Simple sort name
+    else if s.nonEmpty && s.head.isUpper && s.forall(c => c.isLetterOrDigit || c == '_') then
+      List(s)
+    else
+      Nil // Not a valid sort reference (could be a variable or complex expr)
+  
+  /** Find top-level × or → operator, returning the left and right parts */
+  private def findTopLevelOperator(s: String): Option[(String, String)] =
+    var depth = 0
+    var i = 0
+    while i < s.length do
+      s(i) match
+        case '(' => depth += 1
+        case ')' => depth -= 1
+        case '×' | '→' if depth == 0 =>
+          return Some((s.take(i).trim, s.drop(i + 1).trim))
+        case _ =>
+      i += 1
+    None
+  
+  // ===========================================================================
   // Builtins
   // ===========================================================================
   
-  private val builtinSorts = Set("String", "Int", "Bool")
+  private val builtinSorts = Set("String", "Int", "Bool", "Nat")
   private val builtinConstructors = Set("nil", "cons", "pair", "true", "false")
   private def isBuiltinVar(name: String): Boolean = 
     name == "_" || name == "nil" || name == "cons" || name == "true" || name == "false"

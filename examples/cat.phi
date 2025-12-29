@@ -24,11 +24,11 @@ language PhiCategoryTheory {
   constructor Comp   : Morphism → Morphism → Morphism
 
   rule CategoryLaws.idLeft {
-    Comp(Id(A), f) ↦ f
+    Comp(Id(_), f) ↦ f
   }
   
   rule CategoryLaws.idRight {
-    Comp(f, Id(B)) ↦ f
+    Comp(f, Id(_)) ↦ f
   }
   
   rule CategoryLaws.assoc {
@@ -59,7 +59,7 @@ language PhiCategoryTheory {
   constructor Component : NatTrans → Object → Morphism
 
   rule NatNaturality {
-    Comp(MapMor(G, f), Component(α, A))
+    Comp(MapMor(_, f), Component(α, _))
       ↦ Comp(Component(α, B), MapMor(F, f))
   }
 
@@ -148,7 +148,7 @@ language PhiCategoryTheory {
   theorem Density : Functor → Proof
 
   rule DensityRule {
-    F ↦ Colim(HomF(A))
+    _ ↦ Colim(HomF(A))
   }
 
   def DensityExample : Proof =
@@ -178,7 +178,7 @@ language PhiCategoryTheory {
   theorem Brown : Functor → Proof
 
   rule BrownRule {
-    F ↦ HomF(X)
+    _ ↦ HomF(X)
   }
 
   def CohomologyRep : Proof =
@@ -203,11 +203,13 @@ language PhiCategoryTheory {
   // =========================================================
 
   constructor Factor : Morphism → Morphism → Morphism
+  constructor Cofibration : Morphism  // Cofibration part of factorization
+  constructor Fibration : Morphism    // Fibration part of factorization
 
   theorem SmallObject : Morphism → Proof
 
   rule SmallObjectRule {
-    f ↦ Factor(cofibration, fibration)
+    _ ↦ Factor(Cofibration, Fibration)
   }
 
   def ModelStructure : Proof =

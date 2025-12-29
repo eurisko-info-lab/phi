@@ -35,8 +35,8 @@ rule Beta.forward {
 xform Subst : (String × Term) × Term ⇄ Term
 rule Subst.forward {
   ((x,v), Var(x)) ↦ v
-  ((x,v), Var(y)) ↦ Var(y) where x ≠ y
-  ((x,v), Lam(y,t)) ↦ Lam(y, t) where x = y
+  ((x,_), Var(y)) ↦ Var(y) where x ≠ y
+  ((x,_), Lam(y,t)) ↦ Lam(y, t) where x = y
   ((x,v), Lam(y,t)) ↦ Lam(y, Subst.forward((x,v), t)) where x ≠ y
   ((x,v), App(f,a)) ↦ App(Subst.forward((x,v), f), Subst.forward((x,v), a))
 }
@@ -49,13 +49,13 @@ strategy normalizeIC := repeat (Interact.forward | Subst.forward) // For IC nets
 // Interaction Calculus (IC) + Typed
 // =====================================================
 constructor Node   : String × Term* → Net
-constructor Link   : Term × Term → Net
-constructor Active : Net → Net
+constructor Link   : Term → Term → Net
+constructor Active : Term → Term → Net
 
 xform Interact : Net ⇄ Net
 rule Interact.forward {
   Active(Node("lam", Var(x), t), Link(v1,v2)) ↦
-    Active(Subst.forward((x,v1), t))
+    Active(LamToNet.forward(Subst.forward((x,v1), NetToLam.forward(t))), Link(v1,v2))
 }
 
 // =====================================================
@@ -84,6 +84,10 @@ constructor TypeAx     : Term → Type → Axes  // type dependencies
 constructor PolyAx     : Term → Axes          // polymorphism
 constructor DepAx      : Term → Type → Axes  // dependent types
 
+// Xforms for creating axes
+xform MkTermAx : Term ⇄ Axes
+xform MkPolyAx : Term ⇄ Axes
+
 // =====================================================
 // Lambda Cube Corners + Types
 // =====================================================
@@ -96,10 +100,15 @@ constructor LC_λPω    : Term → Type → Type → Corner
 constructor LC_λω2    : Term → Type → Corner
 constructor LC_λC     : Term → Type → Type → Type → Corner
 
+// Xform for creating corners
+xform MkCorner : Term × Type ⇄ Corner
+
 // =====================================================
 // Functoriality: Translating terms preserves composition
 // =====================================================
-constructor F_LamToNet : Functor
+constructor F_LamToNet : Functor  // Type tag for the functor
+
+xform F_LamToNet : Term ⇄ Net     // The functor as a transform
 rule F_LamToNet.forward {
   App(f,g) ↦ App(LamToNet.forward(f), LamToNet.forward(g))
   Lam(x,t) ↦ LamToNet.forward(Lam(x,t))
@@ -109,9 +118,11 @@ rule F_LamToNet.forward {
 // =====================================================
 // Naturality: translation commutes with substitution
 // =====================================================
-constructor Nat_LamToNet : NatTrans
+constructor Nat_LamToNet : NatTrans  // Type tag for the natural transformation
+
+xform Nat_LamToNet : Net ⇄ Net       // The nat trans as a transform
 rule Nat_LamToNet.forward {
-  LamToNet.forward(Subst.forward((x,v), t)) ↦
+  LamToNet.forward(Subst.forward((_,v), t)) ↦
     Interact.forward(Link(LamToNet.forward(v), LamToNet.forward(t)))
 }
 
@@ -128,9 +139,9 @@ def example_back_to_ulc : Term = NetToLam.forward(example_ic)
 // =====================================================
 // Example axes and corners
 // =====================================================
-def example_axis : Axes = TermAx.forward(example_ulc)
-def example_poly_axis : Axes = PolyAx.forward(example_ulc)
-def example_corner : Corner = LC_λ.forward(example_ulc, TyVar("A"))
+def example_axis : Axes = TermAx(example_ulc)
+def example_poly_axis : Axes = PolyAx(example_ulc)
+def example_corner : Corner = LC_λ(example_ulc, TyVar("A"))
 
 // =====================================================
 // Proof: β-reduction preserved by translation

@@ -49,12 +49,12 @@ language HKT {
   
   // Type variables have kind * by default (simplified)
   rule KindOf.forward {
-    TVar(x) ↦ Star
+    TVar(_) ↦ Star
   }
   
   // Function types have kind *
   rule KindOf.arrow {
-    TArrow(a, b) ↦ Star
+    TArrow(_, _) ↦ Star
   }
   
   // List : * → *
@@ -85,7 +85,7 @@ language HKT {
   // Type application: if F : k₁ → k₂ and A : k₁, then F A : k₂
   // This would need dependent matching, simplified here
   rule KindOf.app {
-    TApp(f, a) ↦ Star  // simplified: assume result is *
+    TApp(_, _) ↦ Star  // simplified: assume result is *
   }
   
   // =========================================================================
