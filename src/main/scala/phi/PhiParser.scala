@@ -445,6 +445,7 @@ object PhiParser extends RegexParsers:
   def knownCons(s: String) = Set(
     // STLC
     "zero", "succ", "unit", "lam", "app", "pair", "fst", "snd", "NatRec", "true", "false",
+    // Prolog
     "bob", "alice",
     // List
     "nil", "cons",
