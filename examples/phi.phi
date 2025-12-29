@@ -17,6 +17,19 @@ language Phi {
   sort Strat      // Rewriting strategy
   sort Type       // Type expressions
   sort Token      // Lexical tokens
+  sort Env        // Type environment for attributes
+
+  // =====================================================
+  // Attributes (semantic analysis)
+  // =====================================================
+  //
+  // Attributes propagate information through the AST:
+  // - inherited: flow from parent to children (e.g., env)
+  // - synthesized: flow from children to parent (e.g., type)
+
+  attr env : Env inherited           // Type environment (flows down)
+  attr type : Type synthesized       // Inferred type (flows up)
+  attr freeVars : String* synthesized // Free variables (flows up)
 
   // =====================================================
   // Language specification
@@ -33,6 +46,7 @@ language Phi {
   constructor DRule : String → Pat → Pat → Decl
   constructor DDef : String → Pat → Decl
   constructor DStrat : String → Strat → Decl
+  constructor DAttr : String → Type → String → Decl  // name, type, "inherited"|"synthesized"
 
   // =====================================================
   // Types

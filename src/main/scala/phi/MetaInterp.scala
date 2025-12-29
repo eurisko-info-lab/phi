@@ -22,6 +22,7 @@ case class LangSpec(
   defs: List[Def],
   strategies: Map[String, RewriteStrategy],
   theorems: List[Theorem] = Nil,
+  attributes: List[AttrSpec] = Nil,  // Attribute declarations
   parent: Option[String] = None  // For "extends" - parent language name
 )
 
@@ -41,6 +42,19 @@ enum LangType:
 
 case class XformSpec(name: String, source: String, target: String)
 case class ChangeSpec(name: String, sort: String)
+
+/** Attribute specification */
+case class AttrSpec(
+  name: String,
+  attrType: LangType,
+  flow: AttrFlow,
+  defaultValue: Option[MetaPattern] = None
+)
+
+/** Attribute flow direction */
+enum AttrFlow:
+  case Inherited   // Flows from parent to children (down)
+  case Synthesized // Flows from children to parent (up)
 
 case class Rule(
   name: String,

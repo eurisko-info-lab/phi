@@ -59,9 +59,13 @@ object PhiParser extends RegexParsers:
   def PARSE = "parse"
   def STRATEGY = "strategy"
   def THEOREM = "theorem"
+  def ATTR = "attr"
+  def INHERITED = "inherited"
+  def SYNTHESIZED = "synthesized"
   
   val keywords = Set("language", "sort", "constructor", "xform", "change", "rule", "def", 
-                     "repeat", "id", "where", "and", "token", "syntax", "grammar", "parse", "strategy", "theorem")
+                     "repeat", "id", "where", "and", "token", "syntax", "grammar", "parse", "strategy", "theorem",
+                     "attr", "inherited", "synthesized")
   
   def ARROW: Parser[String] = "→" | "->"
   def BIARROW: Parser[String] = "⇄" | "<->"
@@ -92,6 +96,7 @@ object PhiParser extends RegexParsers:
           flat.collect { case d: Def => d },
           flat.collect { case (n: String, s: RewriteStrategy) => (n, s) }.toMap,
           flat.collect { case t: Theorem => t },
+          flat.collect { case a: AttrSpec => a },
           parent  // Store the parent language name
         )
     }
@@ -99,6 +104,7 @@ object PhiParser extends RegexParsers:
   def declaration: Parser[List[Any]] =
     sortDecl ^^ (List(_)) | 
     constructorBlock | 
+    attrDecl ^^ (List(_)) |        // Attribute declarations
     xformDecl ^^ (List(_)) | 
     changeDecl ^^ (List(_)) | 
     ruleDecl ^^ (List(_)) | 
@@ -110,6 +116,15 @@ object PhiParser extends RegexParsers:
     grammarBlock ^^ (_ => Nil)     // Parse but ignore grammar blocks
   
   def sortDecl: Parser[Sort] = SORT ~> ident ^^ Sort.apply
+  
+  // Attribute declaration: attr name : Type inherited|synthesized
+  def attrDecl: Parser[AttrSpec] =
+    ATTR ~> ident ~ (":" ~> typeExpr) ~ attrFlow ~ opt(EQUALS ~> pattern) ^^ {
+      case name ~ ty ~ flow ~ default => AttrSpec(name, ty, flow, default)
+    }
+  
+  def attrFlow: Parser[AttrFlow] =
+    INHERITED ^^^ AttrFlow.Inherited | SYNTHESIZED ^^^ AttrFlow.Synthesized
   
   // Constructor declaration: either single line or block
   // Single: constructor Foo : A -> B

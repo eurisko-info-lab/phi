@@ -75,7 +75,8 @@ object LangValidator:
       checkUnusedRules(spec),
       checkRulePatternVariables(spec),
       checkConstructorArity(spec),
-      checkStrategyRefs(spec)
+      checkStrategyRefs(spec),
+      checkAttributeRefs(spec)
     ).foldLeft(ValidationResult.empty)(_ ++ _)
   
   // ===========================================================================
@@ -88,13 +89,15 @@ object LangValidator:
     val xformDups = findDuplicates(spec.xforms.map(_.name))
     val defDups = findDuplicates(spec.defs.map(_.name))
     val ruleDups = findDuplicates(spec.rules.map(_.name))
+    val attrDups = findDuplicates(spec.attributes.map(_.name))
     
     val issues = 
       sortDups.map(n => ValidationIssue(ValidationSeverity.Error, "duplicate", s"Duplicate sort: $n")) ++
       conDups.map(n => ValidationIssue(ValidationSeverity.Error, "duplicate", s"Duplicate constructor: $n")) ++
       xformDups.map(n => ValidationIssue(ValidationSeverity.Error, "duplicate", s"Duplicate xform: $n")) ++
       defDups.map(n => ValidationIssue(ValidationSeverity.Error, "duplicate", s"Duplicate definition: $n")) ++
-      ruleDups.map(n => ValidationIssue(ValidationSeverity.Error, "duplicate", s"Duplicate rule: $n"))
+      ruleDups.map(n => ValidationIssue(ValidationSeverity.Error, "duplicate", s"Duplicate rule: $n")) ++
+      attrDups.map(n => ValidationIssue(ValidationSeverity.Error, "duplicate", s"Duplicate attribute: $n"))
     
     ValidationResult(issues)
   
@@ -524,6 +527,23 @@ object LangValidator:
     }
     
     ValidationResult(issues.toList)
+  
+  // ===========================================================================
+  // Attribute Checks
+  // ===========================================================================
+  
+  private def checkAttributeRefs(spec: LangSpec): ValidationResult =
+    val definedSorts = spec.sorts.map(_.name).toSet ++ builtinSorts
+    
+    // Check that attribute types reference valid sorts
+    val issues = spec.attributes.flatMap { attr =>
+      collectSortRefs(attr.attrType).filterNot(definedSorts.contains).map { sortName =>
+        ValidationIssue(ValidationSeverity.Error, "undefined",
+          s"Attribute '${attr.name}' references undefined sort: $sortName")
+      }
+    }
+    
+    ValidationResult(issues)
   
   // ===========================================================================
   // Builtins

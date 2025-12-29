@@ -528,6 +528,22 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
     filled.ty shouldBe Term.Hole(Some("type"))
   }
 
+  test("Parser should parse attribute declarations") {
+    val input = """language Test {
+      sort Env
+      sort Type
+      attr env : Env inherited
+      attr ty : Type synthesized
+    }"""
+    PhiParser.parse(input) match
+      case Right(spec) =>
+        spec.attributes.size shouldBe 2
+        spec.attributes.find(_.name == "env").map(_.flow) shouldBe Some(AttrFlow.Inherited)
+        spec.attributes.find(_.name == "ty").map(_.flow) shouldBe Some(AttrFlow.Synthesized)
+      case Left(err) =>
+        fail(s"Parse failed: $err")
+  }
+
   // ===========================================================================
   // 17. Grammar Parser Tests
   // ===========================================================================

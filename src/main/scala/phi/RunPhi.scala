@@ -103,6 +103,7 @@ def mergeSpecs(parent: LangSpec, child: LangSpec): LangSpec =
   val childDefNames = child.defs.map(_.name).toSet
   val childConstructorNames = child.constructors.map(_.name).toSet
   val childSortNames = child.sorts.map(_.name).toSet
+  val childAttrNames = child.attributes.map(_.name).toSet
   
   LangSpec(
     name = child.name,
@@ -114,5 +115,6 @@ def mergeSpecs(parent: LangSpec, child: LangSpec): LangSpec =
     defs = parent.defs.filterNot(d => childDefNames.contains(d.name)) ++ child.defs,
     strategies = parent.strategies ++ child.strategies,  // Child strategies override
     theorems = parent.theorems ++ child.theorems,
+    attributes = parent.attributes.filterNot(a => childAttrNames.contains(a.name)) ++ child.attributes,
     parent = child.parent  // Keep the original parent reference
   )
