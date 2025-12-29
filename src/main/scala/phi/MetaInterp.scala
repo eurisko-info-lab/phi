@@ -27,7 +27,7 @@ case class LangSpec(
   parent: Option[String] = None  // For "extends" - parent language name
 )
 
-case class Sort(name: String)
+case class Sort(name: String, typeParams: List[String] = Nil)
 
 case class Constructor(
   name: String,
@@ -37,6 +37,8 @@ case class Constructor(
 
 enum LangType:
   case SortRef(name: String)
+  case TypeApp(base: String, args: List[LangType])  // Polymorphic type application: List[A], Map[K,V]
+  case TypeVar(name: String)  // Type variable reference: A, B
   case Arrow(from: LangType, to: LangType)
   case Product(left: LangType, right: LangType)
   case ListOf(elem: LangType)

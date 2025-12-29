@@ -1,0 +1,65 @@
+// =======================================================
+// Polymorphic Sorts Test
+// Tests parametric polymorphism in Phi
+// =======================================================
+
+language Poly {
+
+  // =====================================================
+  // Basic polymorphic sorts
+  // =====================================================
+  
+  sort Term
+  sort Type
+  
+  // Option type: Option[A] = None | Some(A)
+  sort Option[A]
+  
+  constructor None[A]  : Option[A]
+  constructor Some[A]  : A → Option[A]
+  
+  // List type: List[A] = Nil | Cons(A, List[A])
+  sort List[A]
+  
+  constructor Nil[A]   : List[A]
+  constructor Cons[A]  : A → List[A] → List[A]
+  
+  // Pair type: Pair[A,B]
+  sort Pair[A,B]
+  
+  constructor MkPair[A,B] : A → B → Pair[A,B]
+  
+  // Either type: Either[A,B] = Left(A) | Right(B)
+  sort Either[A,B]
+  
+  constructor Left[A,B]  : A → Either[A,B]
+  constructor Right[A,B] : B → Either[A,B]
+  
+  // =====================================================
+  // Higher-kinded: Functor[F]
+  // =====================================================
+  
+  sort Functor[F]
+  
+  // A functor instance provides fmap
+  constructor ListFunctor : Functor[List]
+  constructor OptionFunctor : Functor[Option]
+  
+  // =====================================================
+  // Example: map over lists
+  // =====================================================
+  
+  xform Map[A,B] : (A → B) × List[A] ⇄ List[B]
+  
+  rule Map.forward[A,B] {
+    (_, Nil)        ↦ Nil
+    (f, Cons(x,xs)) ↦ Cons(f(x), Map.forward(f, xs))
+  }
+  
+  // =====================================================
+  // Example definitions using polymorphic types
+  // =====================================================
+  
+  def empty_list : List[Term] = Nil
+  def none_term : Option[Term] = None
+}

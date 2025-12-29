@@ -117,7 +117,11 @@ object PhiParser extends RegexParsers:
     syntaxDecl ^^ (_ => Nil) |     // Parse but ignore syntax decls
     grammarBlock ^^ (_ => Nil)     // Parse but ignore grammar blocks
   
-  def sortDecl: Parser[Sort] = SORT ~> ident ^^ Sort.apply
+  def sortDecl: Parser[Sort] = 
+    SORT ~> ident ~ opt("[" ~> rep1sep(ident, ",") <~ "]") ^^ {
+      case name ~ Some(params) => Sort(name, params)
+      case name ~ None => Sort(name)
+    }
   
   // Attribute declaration: attr name : Type inherited|synthesized
   def attrDecl: Parser[AttrSpec] =
@@ -167,6 +171,7 @@ object PhiParser extends RegexParsers:
   // Block: constructor
   //          Foo : A -> B
   //          Bar : C -> D
+  // Polymorphic: constructor None[A] : Option[A]
   def constructorBlock: Parser[List[Constructor]] =
     CONSTRUCTOR ~> (
       rep1(constructorLine) |  // Block: constructor followed by indented lines
@@ -174,12 +179,25 @@ object PhiParser extends RegexParsers:
     )
   
   def constructorLine: Parser[Constructor] =
-    ident ~ (":" ~> constructorType) ^^ {
-      case name ~ ((params, ret)) => Constructor(name, params, ret)
+    ident ~ opt("[" ~> rep1sep(ident, ",") <~ "]") ~ (":" ~> constructorType) ^^ {
+      case name ~ typeParams ~ ((params, ret)) => 
+        // For now, we store type params in the constructor name for simplicity
+        // A more complete impl would add a typeParams field to Constructor
+        val fullName = typeParams match
+          case Some(ps) => s"$name[${ps.mkString(",")}]"
+          case None => name
+        Constructor(fullName, params, ret)
     }
   
   def constructorType: Parser[(List[(Option[String], LangType)], String)] =
-    rep(typeArg <~ ARROW) ~ ident ^^ { case params ~ ret => (params, ret) }
+    rep(typeArg <~ ARROW) ~ returnType ^^ { case params ~ ret => (params, ret) }
+  
+  // Return type can be a polymorphic type like Option[A] or just Term
+  def returnType: Parser[String] =
+    ident ~ opt("[" ~> rep1sep(typeExpr, ",") <~ "]") ^^ {
+      case name ~ Some(args) => s"$name[${args.map(t => PhiParser.typeToString(t)).mkString(",")}]"
+      case name ~ None => name
+    }
   
   // Type arg in constructor signature - non-arrow to avoid greedy consumption
   def typeArg: Parser[(Option[String], LangType)] =
@@ -210,11 +228,18 @@ object PhiParser extends RegexParsers:
     
   def atomType: Parser[LangType] =
     "(" ~> typeExpr <~ ")" |
-    ident ^^ LangType.SortRef.apply
+    ident ~ opt("[" ~> rep1sep(typeExpr, ",") <~ "]") ^^ {
+      case name ~ Some(args) => LangType.TypeApp(name, args)
+      case name ~ None => LangType.SortRef(name)
+    }
   
   def xformDecl: Parser[XformSpec] =
-    XFORM ~> ident ~ (":" ~> typeExpr) ~ (BIARROW ~> typeExpr) ^^ {
-      case name ~ src ~ tgt => XformSpec(name, typeToString(src), typeToString(tgt))
+    XFORM ~> ident ~ opt("[" ~> rep1sep(ident, ",") <~ "]") ~ (":" ~> typeExpr) ~ (BIARROW ~> typeExpr) ^^ {
+      case name ~ typeParams ~ src ~ tgt => 
+        val fullName = typeParams match
+          case Some(ps) => s"$name[${ps.mkString(",")}]"
+          case None => name
+        XformSpec(fullName, typeToString(src), typeToString(tgt))
     }
   
   def changeDecl: Parser[ChangeSpec] =
@@ -230,9 +255,14 @@ object PhiParser extends RegexParsers:
     }
   
   // Rules can have qualified names: rule Subst.forward { ... }
+  // Also supports type params: rule Map.forward[A,B] { ... }
   def ruleDecl: Parser[Rule] =
-    RULE ~> qualifiedIdent ~ ("{" ~> rep1(ruleCase) <~ "}") ^^ {
-      case name ~ cases => Rule(name, RuleDir.Both, cases)
+    RULE ~> qualifiedIdent ~ opt("[" ~> rep1sep(ident, ",") <~ "]") ~ ("{" ~> rep1(ruleCase) <~ "}") ^^ {
+      case name ~ typeParams ~ cases => 
+        val fullName = typeParams match
+          case Some(ps) => s"$name[${ps.mkString(",")}]"
+          case None => name
+        Rule(fullName, RuleDir.Both, cases)
     }
   
   def ruleCase: Parser[RuleCase] =
@@ -304,10 +334,20 @@ object PhiParser extends RegexParsers:
     nonParenAtom ~ ("=" ~> nonParenAtom) ^^ { case l ~ r => RuleGuard("eq", l, r) } |
     nonParenAtom ~ (NEQ ~> nonParenAtom) ^^ { case l ~ r => RuleGuard("neq", l, r) }
   
+  // def foo : Type = body
+  // def foo[A,B] : Type = body (polymorphic)
   def defDecl: Parser[Def] =
-    DEF ~> ident ~ opt(":" ~> ident) ~ (EQUALS ~> defBody) ^^ {
-      case name ~ sort ~ body => Def(name, sort, body)
+    DEF ~> ident ~ opt("[" ~> rep1sep(ident, ",") <~ "]") ~ opt(":" ~> defType) ~ (EQUALS ~> defBody) ^^ {
+      case name ~ typeParams ~ sort ~ body => 
+        val fullName = typeParams match
+          case Some(ps) => s"$name[${ps.mkString(",")}]"
+          case None => name
+        Def(fullName, sort.flatten, body)
     }
+  
+  // Type annotation for defs - can be just a sort name or a full type expression
+  def defType: Parser[Option[String]] =
+    typeExpr ^^ { ty => Some(typeToString(ty)) }
   
   // Def body can be a parse expression or a term pattern
   def defBody: Parser[MetaPattern] =
@@ -353,6 +393,8 @@ object PhiParser extends RegexParsers:
   // Convert type to string for compatibility
   def typeToString(t: LangType): String = t match
     case LangType.SortRef(s) => s
+    case LangType.TypeApp(base, args) => s"$base[${args.map(typeToString).mkString(",")}]"
+    case LangType.TypeVar(v) => v
     case LangType.Product(a, b) => s"(${typeToString(a)} × ${typeToString(b)})"
     case LangType.ListOf(a) => s"${typeToString(a)}*"
     case LangType.Arrow(a, b) => s"(${typeToString(a)} → ${typeToString(b)})"

@@ -189,7 +189,9 @@ language λProlog {
   // Written in real λProlog syntax
   // =====================================================
 
-  // Example program:
+  // -------------------------------------------------
+  // Example 1: Simple ancestor relation
+  // -------------------------------------------------
   //
   // parent alice.
   // parent bob.
@@ -205,14 +207,88 @@ language λProlog {
       ancestor X :- parent Y, ancestor Y.
     """
 
-  // Example query:
-  //
-  // ancestor alice.
-  //
-
   def example_query : Goal =
     parse goal "ancestor alice."
 
   def example_result : Goal =
     Solve.forward(example_program, example_query)
+
+  // -------------------------------------------------
+  // Example 2: Higher-order programming - map
+  // -------------------------------------------------
+  // λProlog's key feature: lambdas as first-class data
+  //
+  // This demonstrates higher-order abstract syntax (HOAS)
+  // where object-language binders are represented using
+  // meta-language (λProlog) lambdas.
+
+  def example_map_prog : Program =
+    parse program """
+      map F nil nil.
+      map F (cons X Xs) (cons (F X) Ys) :- map F Xs Ys.
+    """
+
+  // Query: map (\x. succ x) (cons zero (cons zero nil)) Result
+  // Expected: Result = cons (succ zero) (cons (succ zero) nil)
+  
+  def example_map_query : Goal =
+    parse goal "map (\x. succ x) (cons zero (cons zero nil)) Result"
+
+  // -------------------------------------------------
+  // Example 3: Type inference (simply-typed λ-calculus)
+  // -------------------------------------------------
+  // This is the classic λProlog example: implementing
+  // type inference using HOAS.
+
+  def example_typeof_prog : Program =
+    parse program """
+      typeof (app M N) T :- typeof M (arrow S T), typeof N S.
+      typeof c_zero nat.
+      typeof c_succ (arrow nat nat).
+    """
+
+  // Query: typeof (app c_succ c_zero) T
+  // Expected: T = nat
+  
+  def example_typeof_query : Goal =
+    parse goal "typeof (app c_succ c_zero) T"
+
+  // -------------------------------------------------
+  // Example 4: Lambda term evaluation (call-by-value)
+  // -------------------------------------------------
+
+  def example_eval_prog : Program =
+    parse program """
+      eval (app M N) V :- eval M (abs F), eval N V1, eval (F V1) V.
+      eval (abs F) (abs F).
+      eval c_zero c_zero.
+      eval (c_succ N) (c_succ V) :- eval N V.
+    """
+
+  // Query: eval (app (abs \x. c_succ x) c_zero) V
+  // This applies the successor function to zero
+  // Expected: V = c_succ c_zero
+  
+  def example_eval_query : Goal =
+    parse goal "eval (app (abs \x. c_succ x) c_zero) V"
+
+  // -------------------------------------------------
+  // Example 5: CPS transformation
+  // -------------------------------------------------
+  // Continuation-passing style transformation of λ-terms
+  // This demonstrates λProlog's ability to manipulate
+  // higher-order syntax transformations.
+
+  def example_cps_prog : Program =
+    parse program """
+      cps (app M N) K :- cps M (\m. cps N (\n. app (app m n) K)).
+      cps (abs F) K :- app K (abs \x. abs \k. cps (F x) k).
+      cps (var X) K :- app K (var X).
+    """
+
+  // Query: cps (abs \x. var x) Result
+  // CPS transform the identity function
+  
+  def example_cps_query : Goal =
+    parse goal "cps (abs \x. var x) Result"
 }

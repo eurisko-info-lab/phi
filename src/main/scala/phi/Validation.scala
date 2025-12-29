@@ -108,8 +108,18 @@ object LangValidator:
   // Undefined Reference Checks
   // ===========================================================================
   
+  // Extract base sort name from a potentially parameterized sort like "Option[A]" -> "Option"
+  private def baseSortName(s: String): String =
+    val bracketIdx = s.indexOf('[')
+    if bracketIdx > 0 then s.substring(0, bracketIdx) else s
+  
+  // Collect all type parameter names defined in the spec
+  private def collectTypeParams(spec: LangSpec): Set[String] =
+    spec.sorts.flatMap(_.typeParams).toSet
+  
   private def checkUndefinedSortRefs(spec: LangSpec): ValidationResult =
     val definedSorts = spec.sorts.map(_.name).toSet ++ builtinSorts
+    val typeParams = collectTypeParams(spec)
     
     // Collect all sort references
     val sortRefs = scala.collection.mutable.ListBuffer[(String, String)]() // (sort, location)
@@ -138,7 +148,13 @@ object LangValidator:
       d.sort.foreach(s => sortRefs += ((s, s"def ${d.name}")))
     }
     
-    val undefined = sortRefs.toList.filter { case (s, _) => !definedSorts.contains(s) }
+    // Filter: only report undefined if:
+    // 1. Base sort name is not defined
+    // 2. AND it's not a type parameter
+    val undefined = sortRefs.toList.filter { case (s, _) => 
+      val base = baseSortName(s)
+      !definedSorts.contains(base) && !typeParams.contains(s)
+    }
     val issues = undefined.map { case (s, loc) =>
       ValidationIssue(ValidationSeverity.Error, "undefined-sort", s"Undefined sort: $s", Some(loc))
     }
@@ -150,6 +166,12 @@ object LangValidator:
       // Skip complex expressions that look like types but aren't sort names
       if name.contains("(") || name.contains("×") || name.contains("→") then Nil
       else List(name)
+    case LangType.TypeApp(base, args) => 
+      // Collect the base sort and all argument sorts
+      base :: args.flatMap(collectSortRefs)
+    case LangType.TypeVar(name) => 
+      // Type variables are not sort references (they're parameters)
+      Nil
     case LangType.Arrow(from, to) => collectSortRefs(from) ++ collectSortRefs(to)
     case LangType.Product(l, r) => collectSortRefs(l) ++ collectSortRefs(r)
     case LangType.ListOf(elem) => collectSortRefs(elem)
@@ -223,7 +245,9 @@ object LangValidator:
     )
   
   private def checkUndefinedXformRefs(spec: LangSpec): ValidationResult =
-    val definedXforms = spec.xforms.map(_.name).toSet ++ spec.changes.map(_.name).toSet
+    // Use base names (strip type params) for matching
+    val definedXforms = spec.xforms.map(x => baseSortName(x.name)).toSet ++ 
+                        spec.changes.map(_.name).toSet
     
     // Collect xform references from rule names (e.g., "Beta.forward" but NOT "CategoryLaws.idLeft")
     val xformRefs = scala.collection.mutable.ListBuffer[(String, String)]()
@@ -231,11 +255,13 @@ object LangValidator:
     spec.rules.foreach { rule =>
       // Only rule names like "Beta.forward" or "Xform.backward" reference xforms
       // Rule names like "CategoryLaws.idLeft" are just organizational namespaces
-      if rule.name.endsWith(".forward") then
-        val xformName = rule.name.dropRight(8)
+      // Strip type params from rule name too: "Map.forward[A,B]" -> "Map"
+      val baseName = baseSortName(rule.name)
+      if baseName.endsWith(".forward") then
+        val xformName = baseName.dropRight(8)
         xformRefs += ((xformName, s"rule ${rule.name}"))
-      else if rule.name.endsWith(".backward") then
-        val xformName = rule.name.dropRight(9)
+      else if baseName.endsWith(".backward") then
+        val xformName = baseName.dropRight(9)
         xformRefs += ((xformName, s"rule ${rule.name}"))
     }
     
@@ -628,7 +654,7 @@ object LangValidator:
   
   /** 
    * Parse a type string and extract all sort references.
-   * Handles: SortName, Sort*, (A × B), (A → B), and nested combinations.
+   * Handles: SortName, Sort*, (A × B), (A → B), Sort[A,B], and nested combinations.
    */
   private def parseTypeString(typeStr: String): List[String] =
     // Remove whitespace for easier parsing
@@ -644,11 +670,35 @@ object LangValidator:
       findTopLevelOperator(inner) match
         case Some((left, right)) => parseTypeString(left) ++ parseTypeString(right)
         case None => parseTypeString(inner) // Just parentheses around a single type
-    // Simple sort name
+    // Handle parameterized type: Sort[A, B]
+    else if s.contains("[") && s.endsWith("]") then
+      val bracketIdx = s.indexOf('[')
+      val baseName = s.substring(0, bracketIdx)
+      val argsStr = s.substring(bracketIdx + 1, s.length - 1)
+      // Parse args (split by comma at top level)
+      val args = splitTypeArgs(argsStr)
+      baseName :: args.flatMap(parseTypeString)
+    // Simple sort name (uppercase starting, alphanumeric)
     else if s.nonEmpty && s.head.isUpper && s.forall(c => c.isLetterOrDigit || c == '_') then
       List(s)
     else
       Nil // Not a valid sort reference (could be a variable or complex expr)
+  
+  /** Split type arguments by comma, respecting nested brackets */
+  private def splitTypeArgs(s: String): List[String] =
+    val result = scala.collection.mutable.ListBuffer[String]()
+    var depth = 0
+    var current = new StringBuilder
+    for c <- s do
+      c match
+        case '[' => depth += 1; current += c
+        case ']' => depth -= 1; current += c
+        case ',' if depth == 0 => 
+          result += current.toString.trim
+          current = new StringBuilder
+        case _ => current += c
+    if current.nonEmpty then result += current.toString.trim
+    result.toList
   
   /** Find top-level × or → operator, returning the left and right parts */
   private def findTopLevelOperator(s: String): Option[(String, String)] =

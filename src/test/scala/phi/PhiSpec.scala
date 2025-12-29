@@ -1691,8 +1691,14 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
   test("Validator should work on example files") {
     import java.io.File
     
+    // ANSI color codes
+    val RED = "\u001b[31m"
+    val YELLOW = "\u001b[33m"
+    val GREEN = "\u001b[32m"
+    val RESET = "\u001b[0m"
+    
     val examplesDir = new File("examples")
-    val testFiles = examplesDir.listFiles.filter(_.getName.endsWith(".phi")).map(_.getName).toList
+    val testFiles = examplesDir.listFiles.filter(_.getName.endsWith(".phi")).map(_.getName).toList.sorted
     
     testFiles.foreach { fileName =>
       val f = new File(examplesDir, fileName)
@@ -1703,11 +1709,19 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
           val spec = parseResult.get
           val result = LangValidator.validate(spec)
           
-          // Report validation results
-          info(s"$fileName: ${result.summary}")
+          // Report validation results with colors
+          val statusColor = if result.errors.nonEmpty then RED else GREEN
+          info(s"$statusColor$fileName: ${result.summary}$RESET")
           if result.errors.nonEmpty then
-            result.errors.foreach(e => info(s"  Error: ${e.message}"))
+            result.errors.foreach(e => info(s"  ${RED}Error: ${e.message}$RESET"))
           if result.warnings.nonEmpty then
-            result.warnings.foreach(w => info(s"  Warning: ${w.message}${w.location.map(l => s" @ $l").getOrElse("")}"))
+            result.warnings.foreach(w => info(s"  ${YELLOW}Warning: ${w.message}${w.location.map(l => s" @ $l").getOrElse("")}$RESET"))
+        else
+          // Report parse failures in red
+          val errorMsg = parseResult match
+            case PhiParser.Failure(msg, next) => s"$msg at line ${next.pos.line}, column ${next.pos.column}"
+            case PhiParser.Error(msg, next) => s"$msg at line ${next.pos.line}, column ${next.pos.column}"
+            case _ => parseResult.toString
+          info(s"$RED$fileName: ✗ Parse error: $errorMsg$RESET")
     }
   }
