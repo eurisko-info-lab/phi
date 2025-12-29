@@ -20,7 +20,7 @@ case class LangSpec(
   changes: List[ChangeSpec],
   rules: List[Rule],
   defs: List[Def],
-  strategies: Map[String, Strat],
+  strategies: Map[String, RewriteStrategy],
   theorems: List[Theorem] = Nil,
   parent: Option[String] = None  // For "extends" - parent language name
 )
@@ -52,43 +52,43 @@ enum RuleDir:
   case Forward, Backward, Both
 
 case class RuleCase(
-  lhs: Pat,
-  rhs: Pat,
+  lhs: MetaPattern,
+  rhs: MetaPattern,
   guards: List[RuleGuard]
 )
 
 case class RuleGuard(
   varName: String,
-  expr: Pat,
-  expected: Pat
+  expr: MetaPattern,
+  expected: MetaPattern
 )
 
 /** Pattern language */
-enum Pat:
+enum MetaPattern:
   case PVar(name: String)
-  case PCon(name: String, args: List[Pat])
-  case PApp(func: Pat, arg: Pat)
-  case PSubst(body: Pat, varName: String, replacement: Pat) // body[varName := replacement]
+  case PCon(name: String, args: List[MetaPattern])
+  case PApp(func: MetaPattern, arg: MetaPattern)
+  case PSubst(body: MetaPattern, varName: String, replacement: MetaPattern) // body[varName := replacement]
 
 case class Def(
   name: String,
   sort: Option[String],
-  body: Pat
+  body: MetaPattern
 )
 
 /** Theorem declaration (Abella-style) */
 case class Theorem(
   name: String,
   signature: LangType,    // The proposition type
-  proof: Option[Pat] = None  // Optional proof term
+  proof: Option[MetaPattern] = None  // Optional proof term
 )
 
 /** Rewriting strategies */
-enum Strat:
+enum RewriteStrategy:
   case Apply(ruleName: String)
-  case Seq(first: Strat, second: Strat)
-  case Choice(left: Strat, right: Strat)
-  case Repeat(inner: Strat)
+  case Seq(first: RewriteStrategy, second: RewriteStrategy)
+  case Choice(left: RewriteStrategy, right: RewriteStrategy)
+  case Repeat(inner: RewriteStrategy)
   case Id
 
 // =============================================================================
@@ -117,17 +117,17 @@ enum Val:
 
 class LangInterpreter(spec: LangSpec):
   import Val.*
-  import Pat.*
+  import MetaPattern.*
   
   // Index definitions by name
-  private val defs: Map[String, Pat] = spec.defs.map(d => d.name -> d.body).toMap
+  private val defs: Map[String, MetaPattern] = spec.defs.map(d => d.name -> d.body).toMap
   
   // Index rules by name  
   private val rules: Map[String, List[RuleCase]] = 
     spec.rules.map(r => r.name -> r.cases).toMap
   
   /** Instantiate a pattern with an environment to get a value */
-  def instantiate(p: Pat, env: Map[String, Val]): Val = p match
+  def instantiate(p: MetaPattern, env: Map[String, Val]): Val = p match
     case PVar(name) =>
       env.getOrElse(name, defs.get(name).map(instantiate(_, env)).getOrElse(
         throw RuntimeException(s"Unbound: $name")))
@@ -180,7 +180,7 @@ class LangInterpreter(spec: LangSpec):
       VCon(name, args.map(substitute(_, varName, replacement)))
   
   /** Match a value against a pattern, returning bindings if successful */
-  def matchPat(value: Val, pattern: Pat): Option[Map[String, Val]] = (value, pattern) match
+  def matchPat(value: Val, pattern: MetaPattern): Option[Map[String, Val]] = (value, pattern) match
     case (_, PVar(name)) =>
       Some(Map(name -> value))
     
@@ -306,7 +306,7 @@ class LangInterpreter(spec: LangSpec):
         }
   
   /** Convert a pattern to a value, treating unbound variables as logic variables */
-  def patternToVal(p: Pat): Val = p match
+  def patternToVal(p: MetaPattern): Val = p match
     case PVar(name) => VCon(name, Nil)  // Variables become nullary constructors (logic vars)
     case PCon(name, args) => VCon(name, args.map(patternToVal))
     case PApp(f, a) => VCon("app", List(patternToVal(f), patternToVal(a)))
@@ -321,7 +321,7 @@ class LangInterpreter(spec: LangSpec):
     freshCounter += 1
     val suffix = s"_$freshCounter"
     
-    def freshenPat(p: Pat): Pat = p match
+    def freshenPat(p: MetaPattern): MetaPattern = p match
       case PVar(name) => PVar(name + suffix)
       case PCon(name, args) => PCon(name, args.map(freshenPat))
       case PApp(f, a) => PApp(freshenPat(f), freshenPat(a))
@@ -413,22 +413,22 @@ class LangInterpreter(spec: LangSpec):
   case class NormResult(value: Val, steps: Int)
   
   /** Run a strategy on a value */
-  def runStrategy(strat: Strat, value: Val, maxSteps: Int = 100000): NormResult =
+  def runStrategy(strat: RewriteStrategy, value: Val, maxSteps: Int = 100000): NormResult =
     var steps = 0
     
-    def go(s: Strat, v: Val): Option[Val] = s match
-      case Strat.Id => Some(v)
+    def go(s: RewriteStrategy, v: Val): Option[Val] = s match
+      case RewriteStrategy.Id => Some(v)
       
-      case Strat.Apply(ruleName) =>
+      case RewriteStrategy.Apply(ruleName) =>
         rules.get(ruleName).flatMap(applyAnywhere(v, _))
       
-      case Strat.Seq(first, second) =>
+      case RewriteStrategy.Seq(first, second) =>
         go(first, v).flatMap(go(second, _))
       
-      case Strat.Choice(left, right) =>
+      case RewriteStrategy.Choice(left, right) =>
         go(left, v).orElse(go(right, v))
       
-      case Strat.Repeat(inner) =>
+      case RewriteStrategy.Repeat(inner) =>
         var cur = v
         var changed = true
         while changed && steps < maxSteps do
@@ -572,8 +572,8 @@ class LangInterpreter(spec: LangSpec):
 // =============================================================================
 
 object LangDSL:
-  import Pat.*
-  import Strat.*
+  import MetaPattern.*
+  import RewriteStrategy.*
   
   class Builder(name: String):
     private var sorts = List.empty[Sort]
@@ -582,7 +582,7 @@ object LangDSL:
     private var changes = List.empty[ChangeSpec]
     private var rules = List.empty[Rule]
     private var defs = List.empty[Def]
-    private var strategies = Map.empty[String, Strat]
+    private var strategies = Map.empty[String, RewriteStrategy]
     
     def sort(n: String): this.type = { sorts :+= Sort(n); this }
     
@@ -601,10 +601,10 @@ object LangDSL:
     def rule(n: String, cases: RuleCase*): this.type =
       { rules :+= Rule(n, RuleDir.Both, cases.toList); this }
     
-    def defn(n: String, body: Pat): this.type =
+    def defn(n: String, body: MetaPattern): this.type =
       { defs :+= Def(n, None, body); this }
     
-    def strategy(n: String, s: Strat): this.type =
+    def strategy(n: String, s: RewriteStrategy): this.type =
       { strategies += (n -> s); this }
     
     def build(): LangSpec = 
@@ -613,18 +613,18 @@ object LangDSL:
   def language(name: String): Builder = Builder(name)
   
   // Pattern helpers
-  def v(n: String): Pat = PVar(n)
-  def c(n: String, args: Pat*): Pat = PCon(n, args.toList)
-  def app(f: Pat, a: Pat): Pat = PApp(f, a)
-  def subst(body: Pat, varName: String, repl: Pat): Pat = PSubst(body, varName, repl)
+  def v(n: String): MetaPattern = PVar(n)
+  def c(n: String, args: MetaPattern*): MetaPattern = PCon(n, args.toList)
+  def app(f: MetaPattern, a: MetaPattern): MetaPattern = PApp(f, a)
+  def subst(body: MetaPattern, varName: String, repl: MetaPattern): MetaPattern = PSubst(body, varName, repl)
   
   // Rule case helper
-  def cas(lhs: Pat, rhs: Pat, guards: RuleGuard*): RuleCase = 
+  def cas(lhs: MetaPattern, rhs: MetaPattern, guards: RuleGuard*): RuleCase = 
     RuleCase(lhs, rhs, guards.toList)
   
   // Strategy helpers  
-  def apply(n: String): Strat = Apply(n)
-  def seq(a: Strat, b: Strat): Strat = Seq(a, b)
-  def choice(a: Strat, b: Strat): Strat = Choice(a, b)
-  def repeat(s: Strat): Strat = Repeat(s)
-  def oneOf(ss: Strat*): Strat = ss.reduceLeft(Choice(_, _))
+  def apply(n: String): RewriteStrategy = Apply(n)
+  def seq(a: RewriteStrategy, b: RewriteStrategy): RewriteStrategy = Seq(a, b)
+  def choice(a: RewriteStrategy, b: RewriteStrategy): RewriteStrategy = Choice(a, b)
+  def repeat(s: RewriteStrategy): RewriteStrategy = Repeat(s)
+  def oneOf(ss: RewriteStrategy*): RewriteStrategy = ss.reduceLeft(Choice(_, _))

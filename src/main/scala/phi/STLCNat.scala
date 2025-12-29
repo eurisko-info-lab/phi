@@ -1,8 +1,8 @@
 package phi
 
 import LangDSL.*
-import Pat.*
-import Strat.*
+import MetaPattern.*
+import RewriteStrategy.*
 
 /**
  * STLC + Nat defined in Phi's meta-language.

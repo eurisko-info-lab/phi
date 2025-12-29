@@ -181,11 +181,11 @@ object LangValidator:
     
     ValidationResult(issues)
   
-  private def collectPatternConstructors(pat: Pat): List[String] = pat match
-    case Pat.PVar(_) => Nil
-    case Pat.PCon(name, args) => name :: args.flatMap(collectPatternConstructors)
-    case Pat.PApp(f, a) => collectPatternConstructors(f) ++ collectPatternConstructors(a)
-    case Pat.PSubst(body, _, repl) => collectPatternConstructors(body) ++ collectPatternConstructors(repl)
+  private def collectPatternConstructors(pat: MetaPattern): List[String] = pat match
+    case MetaPattern.PVar(_) => Nil
+    case MetaPattern.PCon(name, args) => name :: args.flatMap(collectPatternConstructors)
+    case MetaPattern.PApp(f, a) => collectPatternConstructors(f) ++ collectPatternConstructors(a)
+    case MetaPattern.PSubst(body, _, repl) => collectPatternConstructors(body) ++ collectPatternConstructors(repl)
   
   private def checkUndefinedXformRefs(spec: LangSpec): ValidationResult =
     val definedXforms = spec.xforms.map(_.name).toSet
@@ -218,17 +218,17 @@ object LangValidator:
     
     ValidationResult(issues)
   
-  private def collectXformCalls(pat: Pat): List[String] = pat match
-    case Pat.PVar(_) => Nil
-    case Pat.PCon(name, args) =>
+  private def collectXformCalls(pat: MetaPattern): List[String] = pat match
+    case MetaPattern.PVar(_) => Nil
+    case MetaPattern.PCon(name, args) =>
       // Xform calls look like "Xform.forward(...)" or "Xform.backward(...)"
       val xformName = 
         if name.endsWith(".forward") || name.endsWith(".backward") then
           Some(name.dropRight(if name.endsWith(".forward") then 8 else 9))
         else None
       xformName.toList ++ args.flatMap(collectXformCalls)
-    case Pat.PApp(f, a) => collectXformCalls(f) ++ collectXformCalls(a)
-    case Pat.PSubst(body, _, repl) => collectXformCalls(body) ++ collectXformCalls(repl)
+    case MetaPattern.PApp(f, a) => collectXformCalls(f) ++ collectXformCalls(a)
+    case MetaPattern.PSubst(body, _, repl) => collectXformCalls(body) ++ collectXformCalls(repl)
   
   private def checkUndefinedRuleRefs(spec: LangSpec): ValidationResult =
     val definedRules = spec.rules.map(_.name).toSet
@@ -243,12 +243,12 @@ object LangValidator:
     
     ValidationResult(issues)
   
-  private def collectStrategyRuleRefs(strat: Strat): List[String] = strat match
-    case Strat.Apply(name) => List(name)
-    case Strat.Seq(a, b) => collectStrategyRuleRefs(a) ++ collectStrategyRuleRefs(b)
-    case Strat.Choice(a, b) => collectStrategyRuleRefs(a) ++ collectStrategyRuleRefs(b)
-    case Strat.Repeat(s) => collectStrategyRuleRefs(s)
-    case Strat.Id => Nil
+  private def collectStrategyRuleRefs(strat: RewriteStrategy): List[String] = strat match
+    case RewriteStrategy.Apply(name) => List(name)
+    case RewriteStrategy.Seq(a, b) => collectStrategyRuleRefs(a) ++ collectStrategyRuleRefs(b)
+    case RewriteStrategy.Choice(a, b) => collectStrategyRuleRefs(a) ++ collectStrategyRuleRefs(b)
+    case RewriteStrategy.Repeat(s) => collectStrategyRuleRefs(s)
+    case RewriteStrategy.Id => Nil
   
   private def checkUndefinedDefRefs(spec: LangSpec): ValidationResult =
     val definedDefs = spec.defs.map(_.name).toSet
@@ -270,11 +270,11 @@ object LangValidator:
     // This should be a warning, not an error
     ValidationResult.empty // Skip for now - pattern vars make this complex
   
-  private def collectDefRefs(pat: Pat): List[String] = pat match
-    case Pat.PVar(name) => List(name)
-    case Pat.PCon(_, args) => args.flatMap(collectDefRefs)
-    case Pat.PApp(f, a) => collectDefRefs(f) ++ collectDefRefs(a)
-    case Pat.PSubst(body, _, repl) => collectDefRefs(body) ++ collectDefRefs(repl)
+  private def collectDefRefs(pat: MetaPattern): List[String] = pat match
+    case MetaPattern.PVar(name) => List(name)
+    case MetaPattern.PCon(_, args) => args.flatMap(collectDefRefs)
+    case MetaPattern.PApp(f, a) => collectDefRefs(f) ++ collectDefRefs(a)
+    case MetaPattern.PSubst(body, _, repl) => collectDefRefs(body) ++ collectDefRefs(repl)
   
   // ===========================================================================
   // Unused Item Checks (Warnings)
@@ -427,11 +427,11 @@ object LangValidator:
     
     ValidationResult(issues.toList)
   
-  private def collectPatternVars(pat: Pat): Set[String] = pat match
-    case Pat.PVar(name) => Set(name)
-    case Pat.PCon(_, args) => args.flatMap(collectPatternVars).toSet
-    case Pat.PApp(f, a) => collectPatternVars(f) ++ collectPatternVars(a)
-    case Pat.PSubst(body, varName, repl) => 
+  private def collectPatternVars(pat: MetaPattern): Set[String] = pat match
+    case MetaPattern.PVar(name) => Set(name)
+    case MetaPattern.PCon(_, args) => args.flatMap(collectPatternVars).toSet
+    case MetaPattern.PApp(f, a) => collectPatternVars(f) ++ collectPatternVars(a)
+    case MetaPattern.PSubst(body, varName, repl) => 
       collectPatternVars(body) ++ collectPatternVars(repl) - varName
   
   // ===========================================================================
@@ -447,9 +447,9 @@ object LangValidator:
     
     val issues = scala.collection.mutable.ListBuffer[ValidationIssue]()
     
-    def checkPat(pat: Pat, location: String): Unit = pat match
-      case Pat.PVar(_) => ()
-      case Pat.PCon(name, args) =>
+    def checkPat(pat: MetaPattern, location: String): Unit = pat match
+      case MetaPattern.PVar(_) => ()
+      case MetaPattern.PCon(name, args) =>
         conArity.get(name).foreach { expected =>
           // Skip variadic constructors (expected == -1)
           if expected >= 0 && args.length != expected then
@@ -461,10 +461,10 @@ object LangValidator:
             )
         }
         args.foreach(checkPat(_, location))
-      case Pat.PApp(f, a) =>
+      case MetaPattern.PApp(f, a) =>
         checkPat(f, location)
         checkPat(a, location)
-      case Pat.PSubst(body, _, repl) =>
+      case MetaPattern.PSubst(body, _, repl) =>
         checkPat(body, location)
         checkPat(repl, location)
     
@@ -489,8 +489,8 @@ object LangValidator:
     val definedRules = spec.rules.map(_.name).toSet
     val issues = scala.collection.mutable.ListBuffer[ValidationIssue]()
     
-    def checkStrat(strat: Strat, stratName: String): Unit = strat match
-      case Strat.Apply(ruleName) =>
+    def checkStrat(strat: RewriteStrategy, stratName: String): Unit = strat match
+      case RewriteStrategy.Apply(ruleName) =>
         if !definedRules.contains(ruleName) then
           issues += ValidationIssue(
             ValidationSeverity.Error,
@@ -498,15 +498,15 @@ object LangValidator:
             s"Strategy references undefined rule: $ruleName",
             Some(s"strategy $stratName")
           )
-      case Strat.Seq(a, b) =>
+      case RewriteStrategy.Seq(a, b) =>
         checkStrat(a, stratName)
         checkStrat(b, stratName)
-      case Strat.Choice(a, b) =>
+      case RewriteStrategy.Choice(a, b) =>
         checkStrat(a, stratName)
         checkStrat(b, stratName)
-      case Strat.Repeat(s) =>
+      case RewriteStrategy.Repeat(s) =>
         checkStrat(s, stratName)
-      case Strat.Id => ()
+      case RewriteStrategy.Id => ()
     
     spec.strategies.foreach { case (name, strat) =>
       checkStrat(strat, name)

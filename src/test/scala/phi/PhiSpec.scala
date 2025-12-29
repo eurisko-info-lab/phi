@@ -865,10 +865,10 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
 
   test("mergeSpecs should combine rules") {
     val parentRule = Rule("ParentRule", RuleDir.Forward, List(
-      RuleCase(Pat.PVar("x"), Pat.PVar("x"), Nil)
+      RuleCase(MetaPattern.PVar("x"), MetaPattern.PVar("x"), Nil)
     ))
     val childRule = Rule("ChildRule", RuleDir.Forward, List(
-      RuleCase(Pat.PVar("y"), Pat.PVar("y"), Nil)
+      RuleCase(MetaPattern.PVar("y"), MetaPattern.PVar("y"), Nil)
     ))
     
     val parent = LangSpec(
@@ -890,10 +890,10 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
 
   test("mergeSpecs should allow child to override parent rules") {
     val parentRule = Rule("SharedRule", RuleDir.Forward, List(
-      RuleCase(Pat.PVar("x"), Pat.PCon("ParentResult", Nil), Nil)
+      RuleCase(MetaPattern.PVar("x"), MetaPattern.PCon("ParentResult", Nil), Nil)
     ))
     val childRule = Rule("SharedRule", RuleDir.Forward, List(
-      RuleCase(Pat.PVar("x"), Pat.PCon("ChildResult", Nil), Nil)
+      RuleCase(MetaPattern.PVar("x"), MetaPattern.PCon("ChildResult", Nil), Nil)
     ))
     
     val parent = LangSpec(
@@ -912,12 +912,12 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
     val merged = mergeSpecs(parent, child)
     merged.rules.count(_.name == "SharedRule") shouldBe 1
     // Child rule should win
-    merged.rules.find(_.name == "SharedRule").get.cases.head.rhs shouldBe Pat.PCon("ChildResult", Nil)
+    merged.rules.find(_.name == "SharedRule").get.cases.head.rhs shouldBe MetaPattern.PCon("ChildResult", Nil)
   }
 
   test("mergeSpecs should combine definitions") {
-    val parentDef = Def("parentDef", None, Pat.PCon("A", Nil))
-    val childDef = Def("childDef", None, Pat.PCon("B", Nil))
+    val parentDef = Def("parentDef", None, MetaPattern.PCon("A", Nil))
+    val childDef = Def("childDef", None, MetaPattern.PCon("B", Nil))
     
     val parent = LangSpec(
       name = "Parent",
@@ -937,8 +937,8 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
   }
 
   test("mergeSpecs should allow child to override parent definitions") {
-    val parentDef = Def("sharedDef", None, Pat.PCon("ParentValue", Nil))
-    val childDef = Def("sharedDef", None, Pat.PCon("ChildValue", Nil))
+    val parentDef = Def("sharedDef", None, MetaPattern.PCon("ParentValue", Nil))
+    val childDef = Def("sharedDef", None, MetaPattern.PCon("ChildValue", Nil))
     
     val parent = LangSpec(
       name = "Parent",
@@ -955,27 +955,27 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
     
     val merged = mergeSpecs(parent, child)
     merged.defs.count(_.name == "sharedDef") shouldBe 1
-    merged.defs.find(_.name == "sharedDef").get.body shouldBe Pat.PCon("ChildValue", Nil)
+    merged.defs.find(_.name == "sharedDef").get.body shouldBe MetaPattern.PCon("ChildValue", Nil)
   }
 
   test("mergeSpecs should combine strategies with child overriding") {
     val parent = LangSpec(
       name = "Parent",
       sorts = Nil, constructors = Nil, xforms = Nil, changes = Nil, rules = Nil, defs = Nil,
-      strategies = Map("normalize" -> Strat.Id, "parentOnly" -> Strat.Id),
+      strategies = Map("normalize" -> RewriteStrategy.Id, "parentOnly" -> RewriteStrategy.Id),
       theorems = Nil, parent = None
     )
     val child = LangSpec(
       name = "Child",
       sorts = Nil, constructors = Nil, xforms = Nil, changes = Nil, rules = Nil, defs = Nil,
-      strategies = Map("normalize" -> Strat.Apply("ChildRule"), "childOnly" -> Strat.Id),
+      strategies = Map("normalize" -> RewriteStrategy.Apply("ChildRule"), "childOnly" -> RewriteStrategy.Id),
       theorems = Nil, parent = Some("Parent")
     )
     
     val merged = mergeSpecs(parent, child)
     merged.strategies.keys should contain allOf ("normalize", "parentOnly", "childOnly")
     // Child's normalize should override parent's
-    merged.strategies("normalize") shouldBe Strat.Apply("ChildRule")
+    merged.strategies("normalize") shouldBe RewriteStrategy.Apply("ChildRule")
   }
 
   test("mergeSpecs should combine xforms") {
@@ -1471,7 +1471,7 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
       xforms = Nil,
       changes = Nil,
       rules = List(Rule("NonExistent.forward", RuleDir.Forward, List(
-        RuleCase(Pat.PVar("x"), Pat.PVar("x"), Nil)
+        RuleCase(MetaPattern.PVar("x"), MetaPattern.PVar("x"), Nil)
       ))),
       defs = Nil,
       strategies = Map.empty, theorems = Nil, parent = None
@@ -1487,7 +1487,7 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
       constructors = List(Constructor("Foo", Nil, "A")),
       xforms = Nil, changes = Nil,
       rules = List(Rule("BadRule", RuleDir.Forward, List(
-        RuleCase(Pat.PVar("x"), Pat.PVar("unbound"), Nil)  // 'unbound' not in LHS
+        RuleCase(MetaPattern.PVar("x"), MetaPattern.PVar("unbound"), Nil)  // 'unbound' not in LHS
       ))),
       defs = Nil,
       strategies = Map.empty, theorems = Nil, parent = None
@@ -1502,10 +1502,10 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
       sorts = List(Sort("A")),
       constructors = Nil, xforms = Nil, changes = Nil,
       rules = List(Rule("ExistingRule", RuleDir.Forward, List(
-        RuleCase(Pat.PVar("x"), Pat.PVar("x"), Nil)
+        RuleCase(MetaPattern.PVar("x"), MetaPattern.PVar("x"), Nil)
       ))),
       defs = Nil,
-      strategies = Map("normalize" -> Strat.Apply("NonExistentRule")),
+      strategies = Map("normalize" -> RewriteStrategy.Apply("NonExistentRule")),
       theorems = Nil, parent = None
     )
     val result = LangValidator.validate(spec)
@@ -1523,8 +1523,8 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
       xforms = Nil, changes = Nil,
       rules = List(Rule("BadArity", RuleDir.Forward, List(
         RuleCase(
-          Pat.PCon("Pair", List(Pat.PVar("x"))),  // Only 1 arg, needs 2
-          Pat.PVar("x"),
+          MetaPattern.PCon("Pair", List(MetaPattern.PVar("x"))),  // Only 1 arg, needs 2
+          MetaPattern.PVar("x"),
           Nil
         )
       ))),
@@ -1557,7 +1557,7 @@ class PhiSpec extends AnyFunSuite with Matchers with ScalaCheckPropertyChecks:
       ),
       xforms = Nil, changes = Nil,
       rules = List(Rule("R", RuleDir.Forward, List(
-        RuleCase(Pat.PCon("Used", Nil), Pat.PCon("Used", Nil), Nil)
+        RuleCase(MetaPattern.PCon("Used", Nil), MetaPattern.PCon("Used", Nil), Nil)
       ))),
       defs = Nil,
       strategies = Map.empty, theorems = Nil, parent = None

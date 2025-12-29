@@ -90,7 +90,7 @@ object PhiParser extends RegexParsers:
           flat.collect { case c: ChangeSpec => c },
           flat.collect { case r: Rule => r },
           flat.collect { case d: Def => d },
-          flat.collect { case (n: String, s: Strat) => (n, s) }.toMap,
+          flat.collect { case (n: String, s: RewriteStrategy) => (n, s) }.toMap,
           flat.collect { case t: Theorem => t },
           parent  // Store the parent language name
         )
@@ -191,24 +191,24 @@ object PhiParser extends RegexParsers:
   
   // RHS of a rule - single atom, or constructor with parens args, or application of atoms
   // Also handles ++ (list concat) and other binary ops
-  def ruleRhs: Parser[Pat] =
+  def ruleRhs: Parser[MetaPattern] =
     rhsConcat
   
-  def rhsConcat: Parser[Pat] =
+  def rhsConcat: Parser[MetaPattern] =
     rhsApp ~ opt("++" ~> rhsApp) ^^ {
-      case l ~ Some(r) => Pat.PCon("concat", List(l, r))
+      case l ~ Some(r) => MetaPattern.PCon("concat", List(l, r))
       case l ~ None => l
     }
   
-  def rhsApp: Parser[Pat] =
+  def rhsApp: Parser[MetaPattern] =
     constructorPat |  // Con(a, b, c) - explicit args in parens
     qualifiedPat |    // Xform.forward(args)
     rep1(rhsAtom) ~ opt("[" ~> ident ~ (ASSIGN ~> pattern) <~ "]") ^^ {
       case atoms ~ None => 
-        atoms.reduceLeft((f, a) => Pat.PCon("app", List(f, a)))
+        atoms.reduceLeft((f, a) => MetaPattern.PCon("app", List(f, a)))
       case atoms ~ Some(v ~ repl) =>
-        val base = atoms.reduceLeft((f, a) => Pat.PCon("app", List(f, a)))
-        Pat.PSubst(base, v, repl)
+        val base = atoms.reduceLeft((f, a) => MetaPattern.PCon("app", List(f, a)))
+        MetaPattern.PSubst(base, v, repl)
     }
   
   // Atom allowed in RHS - includes parenthesized expressions that aren't tuple LHS patterns
@@ -218,7 +218,7 @@ object PhiParser extends RegexParsers:
   // the next rule's LHS pattern like Baz(y) when parsing RHS of previous rule.
   // If you need Con(args) on RHS, rhsApp handles it at the top level.
   // Identifiers must not be immediately followed by '(' (use possessive quantifier + negative lookahead)
-  def rhsAtom: Parser[Pat] =
+  def rhsAtom: Parser[MetaPattern] =
     listPat |
     number ^^ numeral |
     qualifiedPat |
@@ -229,19 +229,19 @@ object PhiParser extends RegexParsers:
       // Uppercase identifiers > 1 char are constructors (e.g., True, Foo)
       // Single uppercase letters are variables (e.g., X, A, B)
       // Indexed variables like X_1, A_n are also variables
-      if knownCons(name) || (name.length > 1 && name.headOption.exists(_.isUpper) && !isIndexedVar(name)) then Pat.PCon(name, Nil)
-      else Pat.PVar(name)
+      if knownCons(name) || (name.length > 1 && name.headOption.exists(_.isUpper) && !isIndexedVar(name)) then MetaPattern.PCon(name, Nil)
+      else MetaPattern.PVar(name)
     }
   
   // Atom that's not a parenthesized expression (for guards)
-  def nonParenAtom: Parser[Pat] =
+  def nonParenAtom: Parser[MetaPattern] =
     listPat |
     number ^^ numeral |
     constructorPat |
     qualifiedPat |
     nonKeywordIdent ^^ { name =>
-      if knownCons(name) || (name.length > 1 && name.headOption.exists(_.isUpper) && !isIndexedVar(name)) then Pat.PCon(name, Nil)
-      else Pat.PVar(name)
+      if knownCons(name) || (name.length > 1 && name.headOption.exists(_.isUpper) && !isIndexedVar(name)) then MetaPattern.PCon(name, Nil)
+      else MetaPattern.PVar(name)
     }
   
   // where x = y and a ≠ b
@@ -259,13 +259,13 @@ object PhiParser extends RegexParsers:
     }
   
   // Def body can be a parse expression or a term pattern
-  def defBody: Parser[Pat] =
+  def defBody: Parser[MetaPattern] =
     parseExpr | termPattern
   
   // parse <grammar> """<text>""" or parse <grammar> "<text>" - returns a placeholder for now
-  def parseExpr: Parser[Pat] =
+  def parseExpr: Parser[MetaPattern] =
     PARSE ~> ident ~ (tripleQuotedString | stringLit) ^^ {
-      case grammar ~ text => Pat.PCon("parse", List(Pat.PCon(grammar, Nil), Pat.PCon(text, Nil)))
+      case grammar ~ text => MetaPattern.PCon("parse", List(MetaPattern.PCon(grammar, Nil), MetaPattern.PCon(text, Nil)))
     }
   
   def tripleQuotedString: Parser[String] =
@@ -307,96 +307,96 @@ object PhiParser extends RegexParsers:
     case LangType.Arrow(a, b) => s"(${typeToString(a)} → ${typeToString(b)})"
   
   // Term patterns for definitions - all idents become constructors (no metavars)
-  def termPattern: Parser[Pat] = termPairPat
+  def termPattern: Parser[MetaPattern] = termPairPat
   
   // Top-level comma creates pairs in term patterns too
-  def termPairPat: Parser[Pat] =
+  def termPairPat: Parser[MetaPattern] =
     termSubst ~ rep("," ~> termSubst) ^^ {
       case first ~ Nil => first
-      case first ~ rest => (first :: rest).reduceRight((a, b) => Pat.PCon("pair", List(a, b)))
+      case first ~ rest => (first :: rest).reduceRight((a, b) => MetaPattern.PCon("pair", List(a, b)))
     }
   
-  def termSubst: Parser[Pat] =
+  def termSubst: Parser[MetaPattern] =
     termApp ~ opt("[" ~> ident ~ (ASSIGN ~> termPattern) <~ "]") ^^ {
-      case body ~ Some(v ~ repl) => Pat.PSubst(body, v, repl)
+      case body ~ Some(v ~ repl) => MetaPattern.PSubst(body, v, repl)
       case body ~ None => body
     }
   
-  def termApp: Parser[Pat] =
+  def termApp: Parser[MetaPattern] =
     rep1(termAtom) ^^ { atoms =>
-      atoms.reduceLeft((f, a) => Pat.PCon("app", List(f, a)))
+      atoms.reduceLeft((f, a) => MetaPattern.PCon("app", List(f, a)))
     }
   
-  def termAtom: Parser[Pat] =
+  def termAtom: Parser[MetaPattern] =
     "(" ~> termPattern <~ ")" |
     termListLit |
     number ^^ numeral |
-    stringLit ^^ { s => Pat.PCon(s, Nil) } |  // String literals become constructors
+    stringLit ^^ { s => MetaPattern.PCon(s, Nil) } |  // String literals become constructors
     LAMBDA ~> rep1(nonKeywordIdent) ~ ("." ~> termPattern) ^^ { case params ~ body =>
-      params.foldRight(body)((p, b) => Pat.PCon("lam", List(Pat.PCon(p, Nil), Pat.PVar("_"), b)))
+      params.foldRight(body)((p, b) => MetaPattern.PCon("lam", List(MetaPattern.PCon(p, Nil), MetaPattern.PVar("_"), b)))
     } |
     termConstructorPat |
     termQualifiedPat |
-    nonKeywordIdent ^^ { name => Pat.PCon(name, Nil) }  // Always constructor, never metavar
+    nonKeywordIdent ^^ { name => MetaPattern.PCon(name, Nil) }  // Always constructor, never metavar
   
   // List literals in term position: [a, b, c] -> cons(a, cons(b, nil))
   // Use termSubst (not termPattern) to avoid comma being treated as pair
-  def termListLit: Parser[Pat] =
-    "[" ~ "]" ^^^ Pat.PCon("nil", Nil) |
+  def termListLit: Parser[MetaPattern] =
+    "[" ~ "]" ^^^ MetaPattern.PCon("nil", Nil) |
     "[" ~> rep1sep(termSubst, ",") <~ "]" ^^ { elems =>
-      elems.foldRight(Pat.PCon("nil", Nil): Pat)((e, acc) => Pat.PCon("cons", List(e, acc)))
+      elems.foldRight(MetaPattern.PCon("nil", Nil): MetaPattern)((e, acc) => MetaPattern.PCon("cons", List(e, acc)))
     }
   
-  def termConstructorPat: Parser[Pat] =
+  def termConstructorPat: Parser[MetaPattern] =
     ident ~ ("(" ~> repsep(termSubst, ",") <~ ")") ^^ {
-      case name ~ args => Pat.PCon(name, args)
+      case name ~ args => MetaPattern.PCon(name, args)
     }
   
   // Qualified constructor: Xform.forward(args)
-  def termQualifiedPat: Parser[Pat] =
+  def termQualifiedPat: Parser[MetaPattern] =
     qualifiedIdent ~ ("(" ~> repsep(termSubst, ",") <~ ")") ^^ {
-      case name ~ args => Pat.PCon(name, args)
+      case name ~ args => MetaPattern.PCon(name, args)
     }
   
-  def strategyDecl: Parser[(String, Strat)] =
+  def strategyDecl: Parser[(String, RewriteStrategy)] =
     STRATEGY ~> ident ~ (ASSIGN ~> strategy) ^^ { case n ~ s => (n, s) }
   
   // =========================================================================
   // Patterns - Key difference: constructor application
   // =========================================================================
   
-  def pattern: Parser[Pat] = pairPat
+  def pattern: Parser[MetaPattern] = pairPat
   
   // Top-level comma creates pairs: a, b, c -> pair(a, pair(b, c))
-  def pairPat: Parser[Pat] =
+  def pairPat: Parser[MetaPattern] =
     substitutionPat ~ rep("," ~> substitutionPat) ^^ {
       case first ~ Nil => first
-      case first ~ rest => (first :: rest).reduceRight((a, b) => Pat.PCon("pair", List(a, b)))
+      case first ~ rest => (first :: rest).reduceRight((a, b) => MetaPattern.PCon("pair", List(a, b)))
     }
   
   // Pattern without top-level comma (for inside parentheses where comma means tuple)
-  def patternNoComma: Parser[Pat] = consPat
+  def patternNoComma: Parser[MetaPattern] = consPat
   
   // Cons pattern: head::tail (right-associative) - list cons at pattern level
-  def consPat: Parser[Pat] =
+  def consPat: Parser[MetaPattern] =
     substitutionPat ~ opt("::" ~> consPat) ^^ {
-      case head ~ Some(tail) => Pat.PCon("cons", List(head, tail))
+      case head ~ Some(tail) => MetaPattern.PCon("cons", List(head, tail))
       case head ~ None => head
     }
   
-  def substitutionPat: Parser[Pat] =
+  def substitutionPat: Parser[MetaPattern] =
     applicationPat ~ opt("[" ~> ident ~ (ASSIGN ~> pattern) <~ "]") ^^ {
-      case body ~ Some(v ~ repl) => Pat.PSubst(body, v, repl)
+      case body ~ Some(v ~ repl) => MetaPattern.PSubst(body, v, repl)
       case body ~ None => body
     }
   
   // Application is left-associative: f a b = (f a) b
-  def applicationPat: Parser[Pat] =
+  def applicationPat: Parser[MetaPattern] =
     rep1(atomPat) ^^ { atoms =>
-      atoms.reduceLeft((f, a) => Pat.PCon("app", List(f, a)))
+      atoms.reduceLeft((f, a) => MetaPattern.PCon("app", List(f, a)))
     }
   
-  def atomPat: Parser[Pat] =
+  def atomPat: Parser[MetaPattern] =
     // List patterns: [], [h | t], [a, b, c]
     listPat |
     // Tuple pattern: (a, b) or parenthesized: (expr)
@@ -405,34 +405,34 @@ object PhiParser extends RegexParsers:
       case first ~ None => first  // Just parenthesized
       case first ~ Some(rest) => 
         // Build right-nested pairs: (a, b, c) -> pair(a, pair(b, c))
-        (first :: rest).reduceRight((a, b) => Pat.PCon("pair", List(a, b)))
+        (first :: rest).reduceRight((a, b) => MetaPattern.PCon("pair", List(a, b)))
     } |
     number ^^ numeral |
-    stringLit ^^ { s => Pat.PCon(s, Nil) } |  // String literals become nullary constructors
+    stringLit ^^ { s => MetaPattern.PCon(s, Nil) } |  // String literals become nullary constructors
     LAMBDA ~> rep1(nonKeywordIdent) ~ ("." ~> patternNoComma) ^^ { case params ~ body =>
-      params.foldRight(body)((p, b) => Pat.PCon("lam", List(Pat.PCon(p, Nil), Pat.PVar("_"), b)))
+      params.foldRight(body)((p, b) => MetaPattern.PCon("lam", List(MetaPattern.PCon(p, Nil), MetaPattern.PVar("_"), b)))
     } |
     constructorPat |
     qualifiedPat |
     nonKeywordIdent ^^ { name =>
       // In rule patterns, identifiers are metavariables unless they're known constructors
       // or uppercase with length > 1 (e.g., True, Foo are constructors; X, A, X_1 are variables)
-      if knownCons(name) || (name.length > 1 && name.headOption.exists(_.isUpper) && !isIndexedVar(name)) then Pat.PCon(name, Nil)
-      else Pat.PVar(name)
+      if knownCons(name) || (name.length > 1 && name.headOption.exists(_.isUpper) && !isIndexedVar(name)) then MetaPattern.PCon(name, Nil)
+      else MetaPattern.PVar(name)
     }
   
   // List patterns: [], [h | t], [a, b, c], [a, b | t]
-  def listPat: Parser[Pat] =
+  def listPat: Parser[MetaPattern] =
     // Empty list
-    "[" ~ "]" ^^^ Pat.PCon("nil", Nil) |
+    "[" ~ "]" ^^^ MetaPattern.PCon("nil", Nil) |
     // Cons pattern with explicit tail: [a, b | t] or [h | t]
     "[" ~> rep1sep(patternNoComma, ",") ~ (CONS ~> patternNoComma) <~ "]" ^^ {
       case elems ~ tail => 
-        elems.foldRight(tail)((e, acc) => Pat.PCon("cons", List(e, acc)))
+        elems.foldRight(tail)((e, acc) => MetaPattern.PCon("cons", List(e, acc)))
     } |
     // List literal: [a, b, c] -> cons(a, cons(b, cons(c, nil)))
     "[" ~> rep1sep(patternNoComma, ",") <~ "]" ^^ { elems =>
-      elems.foldRight(Pat.PCon("nil", Nil): Pat)((e, acc) => Pat.PCon("cons", List(e, acc)))
+      elems.foldRight(MetaPattern.PCon("nil", Nil): MetaPattern)((e, acc) => MetaPattern.PCon("cons", List(e, acc)))
     }
   
   // Identifier that's not a keyword
@@ -440,17 +440,17 @@ object PhiParser extends RegexParsers:
     ident.filter(s => !keywords.contains(s))
   
   // Constructor with explicit args: Con(a, b, c) - NO space before paren
-  def constructorPat: Parser[Pat] =
+  def constructorPat: Parser[MetaPattern] =
     """[\p{L}_][\p{L}\p{N}_]*\(""".r >> { s =>
       val name = s.dropRight(1)  // Remove the (
-      repsep(patternNoComma, ",") <~ ")" ^^ { args => Pat.PCon(name, args) }
+      repsep(patternNoComma, ",") <~ ")" ^^ { args => MetaPattern.PCon(name, args) }
     }
   
   // Qualified pattern: Xform.forward(args) - requires at least one dot, NO space before paren
-  def qualifiedPat: Parser[Pat] =
+  def qualifiedPat: Parser[MetaPattern] =
     """[\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)+\(""".r >> { s =>
       val name = s.dropRight(1)  // Remove the (
-      repsep(patternNoComma, ",") <~ ")" ^^ { args => Pat.PCon(name, args) }
+      repsep(patternNoComma, ",") <~ ")" ^^ { args => MetaPattern.PCon(name, args) }
     }
   
   // Check if name is an indexed variable like X_1, A_n, Foo_123
@@ -485,29 +485,29 @@ object PhiParser extends RegexParsers:
     "TokComma", "TokColon", "TokDot", "TokEOF"
   ).contains(s)
   
-  def numeral(n: Int): Pat =
-    if n == 0 then Pat.PCon("zero", Nil)
-    else Pat.PCon("succ", List(numeral(n - 1)))
+  def numeral(n: Int): MetaPattern =
+    if n == 0 then MetaPattern.PCon("zero", Nil)
+    else MetaPattern.PCon("succ", List(numeral(n - 1)))
   
   // =========================================================================
   // Strategies
   // =========================================================================
   
-  def strategy: Parser[Strat] =
+  def strategy: Parser[RewriteStrategy] =
     strategySeq ~ rep("|" ~> strategySeq) ^^ {
-      case first ~ rest => rest.foldLeft(first)(Strat.Choice.apply)
+      case first ~ rest => rest.foldLeft(first)(RewriteStrategy.Choice.apply)
     }
   
-  def strategySeq: Parser[Strat] =
+  def strategySeq: Parser[RewriteStrategy] =
     strategyAtom ~ rep(";" ~> strategyAtom) ^^ {
-      case first ~ rest => rest.foldLeft(first)(Strat.Seq.apply)
+      case first ~ rest => rest.foldLeft(first)(RewriteStrategy.Seq.apply)
     }
   
-  def strategyAtom: Parser[Strat] =
+  def strategyAtom: Parser[RewriteStrategy] =
     "(" ~> strategy <~ ")" |
-    "repeat" ~> strategyAtom ^^ Strat.Repeat.apply |
-    "id" ^^^ Strat.Id |
-    qualifiedIdent ^^ Strat.Apply.apply  // Support Xform.forward as strategy
+    "repeat" ~> strategyAtom ^^ RewriteStrategy.Repeat.apply |
+    "id" ^^^ RewriteStrategy.Id |
+    qualifiedIdent ^^ RewriteStrategy.Apply.apply  // Support Xform.forward as strategy
   
   def parse(input: String): Either[String, LangSpec] =
     parseAll(spec, input) match
