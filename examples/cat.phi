@@ -106,6 +106,8 @@ language PhiCategoryTheory {
   constructor Adj : Functor → Functor → Proof
   constructor UnitNat : Functor → Functor → NatTrans
   constructor CounitNat : Functor → Functor → NatTrans
+  constructor Free   : Functor
+  constructor Forget : Functor
 
   rule Adjunction {
     Adj(F, G) ↦ pair(UnitNat(F, G), CounitNat(F, G))
@@ -130,6 +132,7 @@ language PhiCategoryTheory {
   // =========================================================
 
   constructor Monad : Functor → Proof
+  constructor ForgetMonoid : Functor
 
   theorem Beck : Functor → Monad
 
@@ -144,6 +147,8 @@ language PhiCategoryTheory {
   // =========================================================
 
   constructor Colim : Functor → Object
+  constructor Presheaf : Functor
+  constructor YonedaF : Functor
 
   theorem Density : Functor → Proof
 
@@ -164,6 +169,8 @@ language PhiCategoryTheory {
   sort Theory
   sort ModelCategory
 
+  constructor AlgebraicCategory : Category
+
   constructor Models : Theory → Category
 
   theorem GabrielUlmer : Category → Theory
@@ -174,6 +181,8 @@ language PhiCategoryTheory {
   // =========================================================
   // Brown Representability
   // =========================================================
+
+  constructor CohomologyFunctor : Functor
 
   theorem Brown : Functor → Proof
 
@@ -192,6 +201,7 @@ language PhiCategoryTheory {
   sort Module
 
   constructor Mod : Ring → Category
+  constructor AbelianCategory : Category
 
   theorem Mitchell : Category → Proof
 
@@ -222,6 +232,7 @@ language PhiCategoryTheory {
   sort MonoidalCategory
 
   constructor Tensor : Object → Object → Object
+  constructor MonoidalCat : Category
 
   theorem Coherence : MonoidalCategory → Proof
 
@@ -235,6 +246,16 @@ language PhiCategoryTheory {
   // =========================================================
   // Examples in Phi
   // =========================================================
+
+  // Example categories, objects, functors for demonstrations
+  constructor CatA   : Category
+  constructor CatB   : Category
+  constructor ObjA   : Object
+  constructor ObjB   : Object
+  constructor ObjC   : Object
+  constructor Obj1   : Object
+  constructor Functor1 : Functor
+  constructor Functor2 : Functor
 
   def example_hom : Morphism =
     Hom(Obj(CatA), Obj(CatB))
