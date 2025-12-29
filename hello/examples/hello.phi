@@ -1,0 +1,19 @@
+// =============================================================================
+// Hello World: Minimal Phi Language Spec
+// =============================================================================
+// Demonstrates: sorts, constructors, grammar rules, and transforms
+
+language Hello {
+  // ----- Sorts (types) -----
+  sort Greeting
+  sort Name
+
+  // ----- Constructors -----
+  constructor Hello : Name → Greeting
+  constructor SimpleName : String → Name
+
+  // ----- Grammar: Parse "Hello <name>" -----
+  grammar greeting {
+    "Hello" IDENT => Hello(SimpleName(IDENT))
+  }
+}

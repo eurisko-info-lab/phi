@@ -1,0 +1,43 @@
+// =============================================================================
+// Scala: Target language spec (subset for Hello demo)
+// =============================================================================
+
+language Scala {
+  // ----- Sorts -----
+  sort ScalaExpr
+  sort ScalaStmt
+  sort ScalaDecl
+  sort ScalaFile
+  
+  // ----- Constructors -----
+  // File level
+  constructor ScalaObject : String → ScalaDecl → ScalaFile
+  
+  // Declarations
+  constructor MainDef : ScalaStmt → ScalaDecl
+  
+  // Statements
+  constructor PrintLn : ScalaExpr → ScalaStmt
+  
+  // Expressions
+  constructor StringLit : String → ScalaExpr
+  constructor StringConcat : ScalaExpr → ScalaExpr → ScalaExpr
+  
+  // ----- Grammar: Render Scala code -----
+  grammar scalaFile {
+    "object" IDENT ":" scalaDecl => ScalaObject(IDENT, scalaDecl)
+  }
+  
+  grammar scalaDecl {
+    "def" "main" "(" "args" ":" "Array" "[" "String" "]" ")" ":" "Unit" "=" scalaStmt => MainDef(scalaStmt)
+  }
+  
+  grammar scalaStmt {
+    "println" "(" scalaExpr ")" => PrintLn(scalaExpr)
+  }
+  
+  grammar scalaExpr {
+    STRING => StringLit(STRING)
+    scalaExpr "+" scalaExpr => StringConcat(scalaExpr, scalaExpr)
+  }
+}

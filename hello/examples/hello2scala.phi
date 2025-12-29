@@ -1,0 +1,43 @@
+// =============================================================================
+// Hello2Scala: Transform Hello language to Scala
+// =============================================================================
+
+language Hello2Scala {
+  // Input sorts (from Hello)
+  sort Greeting
+  sort Name
+  
+  // Output sorts (from Scala)
+  sort ScalaExpr
+  sort ScalaStmt
+  sort ScalaDecl
+  sort ScalaFile
+  
+  // Input constructors
+  constructor Hello : Name → Greeting
+  constructor SimpleName : String → Name
+  
+  // Output constructors (from Scala)
+  constructor ScalaObject : String → ScalaDecl → ScalaFile
+  constructor MainDef : ScalaStmt → ScalaDecl
+  constructor PrintLn : ScalaExpr → ScalaStmt
+  constructor StringLit : String → ScalaExpr
+  constructor StringConcat : ScalaExpr → ScalaExpr → ScalaExpr
+  
+  // ----- Transforms -----
+  xform Greeting2Scala : Greeting ⇄ ScalaFile
+  xform Name2Scala : Name ⇄ ScalaExpr
+
+  // Hello(name) → object Hello { def main(...) = println("Hi, " + name + "!") }
+  rule Greeting2Scala.hello {
+    Hello(name) ↦ ScalaObject(StringLit("Hello"), 
+                    MainDef(PrintLn(StringConcat(StringLit("Hi, "), 
+                            StringConcat(Name2Scala.forward(name), 
+                                         StringLit("!"))))))
+  }
+
+  // SimpleName(s) → StringLit(s)
+  rule Name2Scala.simple {
+    SimpleName(s) ↦ StringLit(s)
+  }
+}
