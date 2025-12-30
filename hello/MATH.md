@@ -628,7 +628,186 @@ Validated.map3(
 
 ---
 
-## 12. Why This Matters
+## 12. Advanced Structures (Next Level)
+
+### Free Monad: Explicit Effect Sequencing
+
+The **Free Monad** over F makes effect sequencing inspectable:
+
+```
+Free[F, A] ≅ A + F[Free[F, A]]
+```
+
+```scala
+enum Free[F[_], A]:
+  case Pure(a: A)                    // Finished
+  case Suspend(fa: F[Free[F, A]])    // One step, then continue
+
+// Interpret into ANY monad with F ~> M
+def foldMap[M[_]](nat: F ~> M): M[A]
+```
+
+**Use case**: Build a DSL of term operations, then choose interpreter:
+```scala
+enum TermOp[A]:
+  case GetNode(path: List[Int], k: Val => A)
+  case SetNode(path: List[Int], value: Val, k: Unit => A)
+  case Transform(name: String, k: Val => A)
+
+// Same program, different interpreters
+val program: Free[TermOp, Val] = for
+  node <- getNode(List(0))
+  _    <- setNode(List(0), modified)
+  out  <- transform("Greeting2Scala")
+yield out
+
+program.foldMap(realInterpreter)   // Actually run
+program.foldMap(mockInterpreter)   // Test
+program.foldMap(loggingInterpreter) // Debug
+```
+
+### Cofree Comonad: Annotated Terms
+
+The **Cofree Comonad** over F is an F-branching tree with annotations:
+
+```
+Cofree[F, A] ≅ A × F[Cofree[F, A]]
+```
+
+```scala
+case class Cofree[F[_], A](head: A, tail: F[Cofree[F, A]]):
+  def extract: A                                    // Get annotation
+  def extend[B](f: Cofree[F, A] => B): Cofree[F, B] // Apply everywhere
+```
+
+**Use case**: Type-annotated AST where every node has its type:
+```scala
+val typed: Cofree[ValF, Type] = Cofree.annotate(term)(inferType)
+// Now every position has its computed type!
+```
+
+**Duality**:
+- Free = build up effects (sequence)
+- Cofree = tear down with context (annotate)
+
+### Yoneda Lemma: Fused Maps
+
+The **Yoneda lemma** says: `Yoneda[F, A] ≅ F[A]`
+
+But Yoneda representation fuses multiple maps:
+
+```scala
+trait Yoneda[F[_], A]:
+  def apply[B](f: A => B): F[B]
+  def map[B](g: A => B): Yoneda[F, B]  // Just compose!
+  def lower: F[A]                       // Run once
+
+// Many maps → ONE traversal
+Yoneda.lift(bigStructure)
+  .map(f1).map(f2).map(f3).map(f4)
+  .lower  // Only traverses ONCE with f4∘f3∘f2∘f1
+```
+
+### Kan Extensions: Universal Constructions
+
+**Right Kan Extension**: `Ran[G, H, A] = ∀B. (A → G[B]) → H[B]`
+
+```scala
+// Continuation-passing style is a Ran!
+type Cont[R, A] = Ran[[X] =>> X, [X] =>> R, A]
+// = ∀B. (A → B) → R
+// = (A → R) → R  (when B = R)
+```
+
+**Left Kan Extension**: `Lan[G, H, A] = ∃B. G[B] × (B → H[A])`
+
+```scala
+// Coyoneda is a left Kan extension!
+type Coyoneda[F[_], A] = Lan[[X] =>> X, F, A]
+// = ∃B. B × (B → F[A])
+// Makes ANY type constructor a Functor
+```
+
+### Natural Transformations
+
+A **natural transformation** `F ~> G` is a polymorphic function:
+
+```scala
+trait ~>[F[_], G[_]]:
+  def apply[A](fa: F[A]): G[A]
+
+// Laws (naturality): For all f: A → B
+// nat[B] ∘ F.map(f) = G.map(f) ∘ nat[A]
+```
+
+**Key use**: Interpret Free[F, A] into any monad via F ~> M
+
+### Fix Point: Explicit Recursion
+
+The **fixed point** `Fix[F]` captures recursion:
+
+```scala
+case class Fix[F[_]](unfix: F[Fix[F]])
+
+// Val ≅ Fix[ValF] - recursive data as fixed point of functor
+```
+
+**Benefit**: Generic algorithms work on ANY recursive type:
+```scala
+def cata[F[_], A](alg: F[A] => A)(fix: Fix[F]): A  // Works for ANY F!
+```
+
+---
+
+## 13. The Full Picture
+
+```
+                          ┌─────────────────────────────────────┐
+                          │           SPECIFICATION             │
+                          │   Σ = (Sorts, Constructors)         │
+                          └──────────────┬──────────────────────┘
+                                         │
+                          ┌──────────────▼──────────────────────┐
+                          │         TERM ALGEBRA T(Σ)           │
+                          │   Val = Fix[ValF]                   │
+                          │   Free algebra over signature       │
+                          └──────────────┬──────────────────────┘
+                                         │
+         ┌───────────────────────────────┼───────────────────────────────┐
+         │                               │                               │
+         ▼                               ▼                               ▼
+┌─────────────────┐            ┌─────────────────┐            ┌─────────────────┐
+│   RECURSION     │            │   TRANSFORMS    │            │   ANNOTATIONS   │
+│   SCHEMES       │            │   Xform[A,B]    │            │   Cofree[F,A]   │
+│                 │            │                 │            │                 │
+│ cata: fold      │            │ forward/backward│            │ Typed AST       │
+│ ana: unfold     │            │ Profunctor ops  │            │ Comonadic       │
+│ hylo: refold    │            │ Registry        │            │ extend/extract  │
+│ para: + orig    │            └────────┬────────┘            └────────┬────────┘
+└────────┬────────┘                     │                               │
+         │                              │                               │
+         └──────────────────────────────┼───────────────────────────────┘
+                                        │
+                          ┌─────────────▼─────────────────────┐
+                          │         EFFECTS & DSL             │
+                          │   Free[TermOp, A]                 │
+                          │   Inspectable, interpretable      │
+                          └─────────────┬─────────────────────┘
+                                        │
+         ┌──────────────────────────────┼──────────────────────────────┐
+         │                              │                              │
+         ▼                              ▼                              ▼
+┌─────────────────┐           ┌─────────────────┐           ┌─────────────────┐
+│   NAVIGATION    │           │   VERSIONING    │           │   VALIDATION    │
+│   Zipper        │           │   Repo/Patch    │           │   Validated     │
+│   Comonad       │           │   Group action  │           │   Applicative   │
+│   Lens/Prism    │           │   Hash-consed   │           │   Error accum   │
+└─────────────────┘           └─────────────────┘           └─────────────────┘
+```
+
+---
+
+## 14. Why This Matters
 
 ### Correctness Guarantees
 
