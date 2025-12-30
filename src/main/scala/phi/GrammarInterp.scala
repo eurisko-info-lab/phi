@@ -88,8 +88,8 @@ object GrammarInterp:
             }
           result.toList
         case v => 
-          // Fallback - shouldn't match
-          List.fill(tokenSyntaxes.length)(VCon("unit", Nil))
+          // Constructor doesn't match - signal to try next alternative
+          throw new Syntax.RenderMismatch
       }
     ))
   
@@ -419,7 +419,7 @@ object GrammarInterp:
                 case _ => ()
               }
             result.toList
-          case v => List.fill(tokenSyntaxes.length)(VCon("unit", Nil))
+          case v => throw new Syntax.RenderMismatch
         }
       ))
     

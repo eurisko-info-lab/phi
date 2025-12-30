@@ -184,6 +184,71 @@ enum Val:
       s"$name(${args.map(_.show).mkString(", ")})"
 
 // =============================================================================
+// LangSpec → Val encoding (for use with phi2scala transforms)
+// =============================================================================
+
+import Val.VCon
+
+/** Build a cons-list from a Scala List */
+private def toConsList(items: List[Val]): Val =
+  items.foldRight(VCon("nil", Nil): Val) { (item, acc) =>
+    VCon("cons", List(item, acc))
+  }
+
+extension (spec: LangSpec)
+  def toVal: Val = VCon("LangSpec", List(
+    VCon(spec.name, Nil),
+    toConsList(
+      spec.sorts.map(_.toVal) ++
+      spec.constructors.map(_.toVal) ++
+      spec.xforms.map(_.toVal) ++
+      spec.rules.map(_.toVal))
+  ))
+
+extension (s: Sort)
+  def toVal: Val = VCon("DSort", List(VCon(s.name, Nil)))
+
+extension (c: Constructor)
+  def toVal: Val = VCon("DCon", List(VCon(c.name, Nil), typeToVal(c.params, c.returnSort)))
+
+private def typeToVal(params: List[(Option[String], LangType)], ret: String): Val =
+  params.foldRight(VCon("TName", List(VCon(ret, Nil))): Val) { case ((_, ty), acc) =>
+    VCon("TArrow", List(ty.toVal, acc))
+  }
+
+extension (ty: LangType)
+  def toVal: Val = ty match
+    case LangType.SortRef(n) => VCon("TName", List(VCon(n, Nil)))
+    case LangType.ListOf(e) => VCon("TList", List(e.toVal))
+    case LangType.Arrow(a, b) => VCon("TArrow", List(a.toVal, b.toVal))
+    case LangType.Product(a, b) => VCon("TProd", List(a.toVal, b.toVal))
+    case LangType.TypeApp(n, args) => VCon("TApp", List(VCon(n, Nil), toConsList(args.map(_.toVal))))
+    case LangType.TypeVar(n) => VCon("TVar", List(VCon(n, Nil)))
+
+extension (x: XformSpec)
+  def toVal: Val = VCon("DXform", List(VCon(x.name, Nil), VCon(x.source, Nil), VCon(x.target, Nil)))
+
+extension (r: Rule)
+  def toVal: Val = VCon("DRule", List(
+    VCon(r.name, Nil),
+    VCon(r.direction match { case RuleDir.Both => "bidir"; case _ => "forward" }, Nil),
+    toConsList(r.cases.map(_.toVal))
+  ))
+
+extension (rc: RuleCase)
+  def toVal: Val = VCon("RuleCase", List(rc.lhs.toVal, rc.rhs.toVal, toConsList(rc.guards.map(_.toVal))))
+
+extension (p: MetaPattern)
+  def toVal: Val = p match
+    case MetaPattern.PVar(n) => VCon("PVar", List(VCon(n, Nil)))
+    case MetaPattern.PCon(n, args) => VCon("PCon", List(VCon(n, Nil), toConsList(args.map(_.toVal))))
+    case MetaPattern.PApp(f, a) => VCon("PApp", List(f.toVal, a.toVal))
+    case MetaPattern.PSubst(b, v, r) => VCon("PSubst", List(b.toVal, VCon(v, Nil), r.toVal))
+
+extension (g: RuleGuard)
+  def toVal: Val = VCon("Guard", List(VCon(g.varName, Nil), g.expr.toVal, g.expected.toVal))
+
+// =============================================================================
 // Meta-Interpreter
 // =============================================================================
 
@@ -227,6 +292,34 @@ class LangInterpreter(spec: LangSpec):
             tokens
         case _ =>
           VCon("parse", List(grammarVal, textVal))
+    
+    case PCon(name, args) if name.endsWith(".forward") || name.endsWith(".backward") =>
+      // Evaluate transform calls by applying the corresponding rules
+      val instantiatedArgs = args.map(instantiate(_, env))
+      val argsAsTuple = instantiatedArgs match
+        case List(a) => a
+        case List(a, b) => VCon("pair", List(a, b))
+        case List(a, b, c) => VCon("pair", List(a, VCon("pair", List(b, c))))
+        case _ => VCon("tuple", instantiatedArgs)
+      
+      // Find all rules matching this transform (e.g., "Decls2Scala.forward" -> all "Decls2Scala.*" rules)
+      val prefix = name.dropRight(8) // drop ".forward" or ".backward"
+      val xformCases = rules.toList.collect {
+        case (ruleName, cases) if ruleName.startsWith(prefix + ".") => cases
+      }.flatten
+      
+      if xformCases.nonEmpty then
+        val result = applyRule(argsAsTuple, xformCases)
+        if result.isEmpty then
+          println(s"instantiate forward FAILED: name=$name, prefix=$prefix, found ${xformCases.length} cases, arg=${argsAsTuple.show.take(100)}")
+          for (c, i) <- xformCases.zipWithIndex.take(5) do
+            println(s"  case[$i] lhs: ${c.lhs}, guards: ${c.guards.length}")
+        else
+          // println(s"instantiate forward: name=$name => ${result.get.show.take(100)}")
+          ()
+        result.getOrElse(VCon(name, instantiatedArgs))
+      else
+        VCon(name, instantiatedArgs)
     
     case PCon(name, args) =>
       VCon(name, args.map(instantiate(_, env)))
@@ -304,12 +397,17 @@ class LangInterpreter(spec: LangSpec):
     cases.view.flatMap { rc =>
       val matched = matchPat(value, rc.lhs)
       matched.flatMap { bindings =>
-        // Check guards
+        // Check guards - varName is "eq" or "neq"
+        // Guards use pattern matching, not equality
         val guardsOk = rc.guards.forall { g =>
           try
             val exprVal = instantiate(g.expr, bindings)
-            val expectedVal = instantiate(g.expected, bindings)
-            exprVal == expectedVal
+            // expectedVal is a pattern to match against
+            val matchResult = matchPat(exprVal, g.expected)
+            g.varName match
+              case "eq" => matchResult.isDefined
+              case "neq" => matchResult.isEmpty
+              case _ => matchResult.isDefined
           catch case _: Exception => false
         }
         if guardsOk then

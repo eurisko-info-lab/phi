@@ -346,6 +346,9 @@ object Syntax:
       case Term.Done((a, b)) => left.render(Term.Done(a)) ++ right.render(Term.Done(b))
       case Term.Hole(l)      => Vector(Lex.HoleTok(l))
 
+  /** Exception thrown when an Iso's reverse function doesn't match the value */
+  class RenderMismatch extends RuntimeException("render mismatch")
+  
   private case class Choice[A](first: Syntax[A], second: Syntax[A]) extends Syntax[A]:
     def parse(stream: TokenStream): ParseResult[A] =
       val r1 = first.parse(stream)
@@ -356,8 +359,9 @@ object Syntax:
         else r1 // Return first failure
 
     def render(term: Term[A]): Vector[Lex] =
-      // Try first syntax for rendering
-      first.render(term)
+      // Try first syntax for rendering, if it throws RenderMismatch, try second
+      try first.render(term)
+      catch case _: RenderMismatch => second.render(term)
 
   private case class Opt[A](inner: Syntax[A]) extends Syntax[Option[A]]:
     def parse(stream: TokenStream): ParseResult[Option[A]] =

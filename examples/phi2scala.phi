@@ -5,10 +5,14 @@
 // Transforms Phi language specs to Scala 3 code.
 // Uses scala.phi for the target AST - pretty-printing is automatic.
 //
-// This file defines the xform rules that GenScala.scala interprets.
+// This is the ONLY place transforms are defined. GenScala.scala
+// is a thin driver that:
+// 1. Parses the .phi file
+// 2. Runs these transforms via MetaInterpreter
+// 3. Prints the result via scala.phi grammar (backwards)
 //
 // Extended to generate:
-// - Named parameters (extracted from comments or type context)
+// - Named parameters (inferred from type context)
 // - Scala List/tuple syntax instead of cons/nil/pair
 // - Scala 3 enum syntax for sum types
 // - Class definitions with methods
@@ -17,6 +21,216 @@ language Phi2Scala {
 
   import "phi.phi"
   import "scala.phi"
+  
+  // =============================================================
+  // LangType representation (mirrors GenScala's LangType enum)
+  // =============================================================
+  //
+  // These sorts model the internal type representation used during
+  // parsing. They're transformed to scala.phi's TypeRef.
+  
+  sort LangType
+  constructor SortRef : String → LangType
+  constructor TypeApp : String → LangType* → LangType
+  constructor TypeVar : String → LangType
+  constructor Arrow : LangType → LangType → LangType
+  constructor Product : LangType → LangType → LangType
+  constructor ListOf : LangType → LangType
+  
+  // =============================================================
+  // Transform: LangType → Scala TypeRef
+  // =============================================================
+  
+  xform LangType2Scala : LangType ⇄ TypeRef
+  
+  rule LangType2Scala.sortRef {
+    SortRef(name) ↦ TyName(SimpleName(name))
+  }
+  
+  rule LangType2Scala.typeApp {
+    TypeApp(base, args) ↦ TyApp(SimpleName(base), LangTypes2Scala.forward(args))
+  }
+  
+  rule LangType2Scala.typeVar {
+    TypeVar(name) ↦ TyName(SimpleName(name))
+  }
+  
+  rule LangType2Scala.arrow {
+    Arrow(from, to) ↦ TyFunc(LangType2Scala.forward(from), LangType2Scala.forward(to))
+  }
+  
+  rule LangType2Scala.product {
+    Product(a, b) ↦ TyTuple([LangType2Scala.forward(a), LangType2Scala.forward(b)])
+  }
+  
+  rule LangType2Scala.listOf {
+    ListOf(elem) ↦ TyApp(SimpleName("List"), [LangType2Scala.forward(elem)])
+  }
+  
+  xform LangTypes2Scala : LangType* ⇄ TypeRef*
+  
+  rule LangTypes2Scala.nil {
+    [] ↦ []
+  }
+  
+  rule LangTypes2Scala.cons {
+    [t | ts] ↦ [LangType2Scala.forward(t) | LangTypes2Scala.forward(ts)]
+  }
+  
+  // =============================================================
+  // Transform: Sort → SealedTrait
+  // =============================================================
+  
+  xform Sort2Scala : Sort ⇄ Defn
+  
+  rule Sort2Scala.sort {
+    Sort(name, tps) ↦ SealedTrait(name, tps)
+  }
+  
+  // =============================================================
+  // Transform: Constructor → CaseClass or CaseObject
+  // =============================================================
+  //
+  // Nullary constructors become case objects.
+  // Constructors with params become case classes extending the return sort.
+  // Standalone constructors (where ctor name = sort name) don't extend.
+  
+  xform Ctor2Scala : Constructor × Bool ⇄ Defn
+  
+  // Nullary constructor → case object
+  rule Ctor2Scala.object {
+    (Constructor(name, [], ret), _) ↦ 
+      CaseObject(name, TyName(SimpleName(ret)))
+  }
+  
+  // Constructor with params, standalone (no extends)
+  rule Ctor2Scala.standalone {
+    (Constructor(name, params, ret), true) ↦
+      CaseClass(name, [], Params2Scala.forward(params, zero))
+  }
+  
+  // Constructor with params, extends parent trait
+  rule Ctor2Scala.extends {
+    (Constructor(name, params, ret), false) ↦
+      CaseClassExtends(name, [], Params2Scala.forward(params, zero), TyName(SimpleName(ret)))
+      where params ≠ []
+  }
+  
+  // =============================================================
+  // Transform: Param list with inferred names
+  // =============================================================
+  //
+  // (Option[String] × LangType)* × Nat → Param*
+  // If name is None, infer from type. Nat tracks position for uniqueness.
+  
+  xform Params2Scala : (Option[String] × LangType)* × Nat ⇄ Param*
+  
+  rule Params2Scala.nil {
+    ([], _) ↦ []
+  }
+  
+  rule Params2Scala.consNamed {
+    ([(some(name), ty) | rest], n) ↦
+      [Param(name, LangType2Scala.forward(ty)) | Params2Scala.forward(rest, succ(n))]
+  }
+  
+  rule Params2Scala.consInfer {
+    ([(none, ty) | rest], n) ↦
+      [Param(InferParamName.forward(ty, n), LangType2Scala.forward(ty)) | Params2Scala.forward(rest, succ(n))]
+  }
+  
+  // =============================================================
+  // Transform: Infer parameter name from type
+  // =============================================================
+  //
+  // InferParamName : LangType × Nat → String
+  // Maps type names to conventional parameter names.
+  // 
+  // NOTE: This transform requires built-in string primitives that
+  // are not expressible in pure phi patterns. The rules below show
+  // the intended mapping; actual implementation is in Scala.
+  //
+  // Mapping (implemented as Scala code, not phi rules):
+  //   SortRef("String") → "name"
+  //   SortRef("Type") → "ty"  
+  //   SortRef("Pat") → "pat"
+  //   SortRef("Decl") → "decl"
+  //   SortRef("Expr") → "expr"
+  //   ListOf(t) → inferParamName(t) + "s"
+  //   Arrow(_, _) → "f"
+  //   Product(_, _) → "pair"
+  //   default → first letter lowercase
+  
+  xform InferParamName : LangType × Nat ⇄ String
+  // Built-in: cannot express string manipulation in phi patterns
+  
+  // =============================================================
+  // Transform: XformSpec → MethodDef stub
+  // =============================================================
+  
+  xform Xform2Scala : XformSpec ⇄ Defn
+  
+  rule Xform2Scala.xform {
+    XformSpec(name, src, tgt) ↦
+      MethodDef(
+        concat(toCamelCase(name), "Forward"),
+        [],
+        [Param("input", LangType2Scala.forward(src))],
+        LangType2Scala.forward(tgt),
+        EVar("???"))
+  }
+  
+  // =============================================================
+  // Transform: Build interpreter class wrapper
+  // =============================================================
+  
+  xform BuildInterpreterClass : Spec × Xform* ⇄ Defn
+  
+  rule BuildInterpreterClass.class {
+    (LangSpec(name, _), xforms) ↦
+      Class(
+        concat(name, "Interpreter"),
+        [],
+        [Param("spec", TyName(SimpleName("LangSpec")))],
+        XformsToMethods.forward(xforms))
+  }
+  
+  xform XformsToMethods : Xform* ⇄ Defn*
+  
+  rule XformsToMethods.nil {
+    [] ↦ []
+  }
+  
+  rule XformsToMethods.cons {
+    [x | xs] ↦ [XformToMethod.forward(x) | XformsToMethods.forward(xs)]
+  }
+  
+  xform XformToMethod : Xform ⇄ Defn
+  
+  rule XformToMethod.method {
+    XformSpec(name, src, tgt) ↦
+      MethodDef(
+        toCamelCase(name),
+        [],
+        [Param("input", LangType2Scala.forward(src))],
+        TyApp(SimpleName("Option"), [LangType2Scala.forward(tgt)]),
+        EApp(EVar(concat(toCamelCase(name), "Forward")), [EVar("input")]))
+  }
+  
+  // =============================================================
+  // Helper: toCamelCase - convert "Parse.forward" to "parseForward"
+  // =============================================================
+  // This is a built-in primitive (string manipulation)
+  
+  // =============================================================
+  // Helper: toLower - lowercase first character
+  // =============================================================
+  // This is a built-in primitive
+  
+  // =============================================================
+  // Helper: take - take first n characters
+  // =============================================================
+  // This is a built-in primitive
 
   // =============================================================
   // Transform: Phi Spec → Scala Source
@@ -198,21 +412,13 @@ language Phi2Scala {
   
   xform Pat2ScalaPat : Pat ⇄ Pattern
   
+  // Wildcard pattern
+  rule Pat2ScalaPat.wildcard {
+    PVar("_") ↦ PWildcard
+  }
+  
   rule Pat2ScalaPat.var {
     PVar(x) ↦ PVar(x)
-  }
-  
-  rule Pat2ScalaPat.wildcard {
-    PVar(_) ↦ PWildcard
-  }
-  
-  rule Pat2ScalaPat.con0 {
-    PCon(name, []) ↦ PVar(name)
-  }
-  
-  // cons pattern → :: infix pattern
-  rule Pat2ScalaPat.cons {
-    PCon(cons, [h, t]) ↦ PInfix(Pat2ScalaPat.forward(h), "::", Pat2ScalaPat.forward(t))
   }
   
   // nil pattern → Nil
@@ -220,14 +426,63 @@ language Phi2Scala {
     PCon(nil, []) ↦ PVar("Nil")
   }
   
+  // true/false → literals
+  rule Pat2ScalaPat.true {
+    PCon(true, []) ↦ PLit(LitTrue)
+  }
+  
+  rule Pat2ScalaPat.false {
+    PCon(false, []) ↦ PLit(LitFalse)
+  }
+  
+  // None → None
+  rule Pat2ScalaPat.none {
+    PCon(none, []) ↦ PVar("None")
+  }
+  
+  rule Pat2ScalaPat.None {
+    PCon(None, []) ↦ PVar("None")
+  }
+  
+  // Some(x) → Some(x)
+  rule Pat2ScalaPat.some {
+    PCon(some, [x]) ↦ PCon(SimpleName("Some"), [Pat2ScalaPat.forward(x)])
+  }
+  
+  rule Pat2ScalaPat.Some {
+    PCon(Some, [x]) ↦ PCon(SimpleName("Some"), [Pat2ScalaPat.forward(x)])
+  }
+  
+  // Nullary constructor → variable (after special cases)
+  rule Pat2ScalaPat.con0 {
+    PCon(name, []) ↦ PVar(name)
+      where name ≠ nil and name ≠ true and name ≠ false and name ≠ none and name ≠ None
+  }
+  
+  // cons pattern → :: infix pattern
+  rule Pat2ScalaPat.cons {
+    PCon(cons, [h, t]) ↦ PInfix(Pat2ScalaPat.forward(h), "::", Pat2ScalaPat.forward(t))
+  }
+  
   // pair pattern → tuple pattern
   rule Pat2ScalaPat.pair {
     PCon(pair, [a, b]) ↦ PTuple([Pat2ScalaPat.forward(a), Pat2ScalaPat.forward(b)])
   }
   
+  // General constructor pattern
   rule Pat2ScalaPat.con {
     PCon(name, args) ↦ PCon(SimpleName(name), Pats2ScalaPats.forward(args))
-      where name ≠ cons and name ≠ nil and name ≠ pair and args ≠ []
+      where name ≠ cons and name ≠ nil and name ≠ pair and name ≠ some and name ≠ Some and args ≠ []
+  }
+  
+  // Application pattern → App constructor
+  rule Pat2ScalaPat.app {
+    PApp(f, a) ↦ PCon(SimpleName("App"), [Pat2ScalaPat.forward(f), Pat2ScalaPat.forward(a)])
+  }
+  
+  // Substitution pattern → just the body (special handling needed)
+  rule Pat2ScalaPat.subst {
+    PSubst(body, v, repl) ↦ Pat2ScalaPat.forward(body)
   }
   
   xform Pats2ScalaPats : Pat* ⇄ Pattern*
@@ -250,18 +505,52 @@ language Phi2Scala {
     PVar(x) ↦ EVar(x)
   }
   
-  rule Pat2ScalaExpr.con0 {
-    PCon(name, []) ↦ EVar(name)
-  }
-  
-  // cons expression → :: infix or List(...)
-  rule Pat2ScalaExpr.cons {
-    PCon(cons, [h, t]) ↦ EInfix(Pat2ScalaExpr.forward(h), "::", Pat2ScalaExpr.forward(t))
-  }
-  
   // nil expression → Nil
   rule Pat2ScalaExpr.nil {
     PCon(nil, []) ↦ EVar("Nil")
+  }
+  
+  // true/false → literals
+  rule Pat2ScalaExpr.true {
+    PCon(true, []) ↦ ELit(LitTrue)
+  }
+  
+  rule Pat2ScalaExpr.false {
+    PCon(false, []) ↦ ELit(LitFalse)
+  }
+  
+  // None → None
+  rule Pat2ScalaExpr.none {
+    PCon(none, []) ↦ EVar("None")
+  }
+  
+  rule Pat2ScalaExpr.None {
+    PCon(None, []) ↦ EVar("None")
+  }
+  
+  // Some(x) → Some(x)
+  rule Pat2ScalaExpr.some {
+    PCon(some, [x]) ↦ EApp(EVar("Some"), [Pat2ScalaExpr.forward(x)])
+  }
+  
+  rule Pat2ScalaExpr.Some {
+    PCon(Some, [x]) ↦ EApp(EVar("Some"), [Pat2ScalaExpr.forward(x)])
+  }
+  
+  // Nullary constructor → variable
+  rule Pat2ScalaExpr.con0 {
+    PCon(name, []) ↦ EVar(name)
+      where name ≠ nil and name ≠ true and name ≠ false and name ≠ none and name ≠ None
+  }
+  
+  // concat expression → ++
+  rule Pat2ScalaExpr.concat {
+    PCon(concat, [a, b]) ↦ EInfix(Pat2ScalaExpr.forward(a), "++", Pat2ScalaExpr.forward(b))
+  }
+  
+  // cons expression → :: infix
+  rule Pat2ScalaExpr.cons {
+    PCon(cons, [h, t]) ↦ EInfix(Pat2ScalaExpr.forward(h), "::", Pat2ScalaExpr.forward(t))
   }
   
   // pair expression → tuple
@@ -269,16 +558,25 @@ language Phi2Scala {
     PCon(pair, [a, b]) ↦ ETuple([Pat2ScalaExpr.forward(a), Pat2ScalaExpr.forward(b)])
   }
   
+  // General constructor → function application
   rule Pat2ScalaExpr.con {
     PCon(name, args) ↦ EApp(EVar(name), Pats2ScalaExprs.forward(args))
-      where name ≠ cons and name ≠ nil and name ≠ pair and args ≠ []
+      where name ≠ cons and name ≠ nil and name ≠ pair and name ≠ concat 
+        and name ≠ some and name ≠ Some and args ≠ []
   }
   
+  // Application → nested application
   rule Pat2ScalaExpr.app {
     PApp(f, a) ↦ EApp(Pat2ScalaExpr.forward(f), [Pat2ScalaExpr.forward(a)])
   }
   
-  // xform forward call → method call
+  // Substitution → subst function call
+  rule Pat2ScalaExpr.subst {
+    PSubst(body, v, repl) ↦ 
+      EApp(EVar("subst"), [Pat2ScalaExpr.forward(body), ELit(LitString(v)), Pat2ScalaExpr.forward(repl)])
+  }
+  
+  // xform forward call → method call (Xform.forward(arg) → xformForward(arg))
   rule Pat2ScalaExpr.xformCall {
     PApp(PApp(PCon(name, []), PCon(forward, [])), arg) ↦
       EApp(ESelect(EVar(name), "forward"), [Pat2ScalaExpr.forward(arg)])
