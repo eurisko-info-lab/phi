@@ -1,0 +1,134 @@
+// CoC (Calculus of Constructions) Tests
+// Tests for the apex of the Lambda Cube
+
+sort Term
+sort Context
+
+// Universes
+Term = Star | Box
+
+// Core terms
+Term = Var(name: String)
+     | Pi(param: String, domain: Term, codomain: Term)
+     | Lam(param: String, type: Term, body: Term)
+     | App(func: Term, arg: Term)
+
+// Contexts  
+Context = Empty
+        | Extend(ctx: Context, name: String, type: Term)
+
+// =========================================================
+// Universe Tests
+// =========================================================
+
+xform test_star_is_term : Term -> Term {
+  Star => Star
+}
+
+xform test_box_is_term : Term -> Term {
+  Box => Box
+}
+
+// =========================================================
+// Pi Type Tests (Dependent Function Types)
+// =========================================================
+
+xform test_pi_formation : Term -> Term {
+  Pi(x, Star, Var(x)) => Pi(x, Star, Var(x))
+}
+
+xform test_arrow_is_pi : Term -> Term {
+  Pi("_", a, b) => Pi("_", a, b)
+}
+
+// =========================================================
+// Lambda Tests
+// =========================================================
+
+xform test_lambda_id : Term -> Term {
+  Lam("x", Star, Var("x")) => Lam("x", Star, Var("x"))
+}
+
+xform test_polymorphic_id : Term -> Term {
+  Lam("A", Star, Lam("x", Var("A"), Var("x"))) => Lam("A", Star, Lam("x", Var("A"), Var("x")))
+}
+
+// =========================================================
+// Application Tests  
+// =========================================================
+
+xform test_app_formation : Term -> Term {
+  App(f, x) => App(f, x)
+}
+
+xform test_app_id : Term -> Term {
+  App(Lam("x", t, Var("x")), v) => App(Lam("x", t, Var("x")), v)
+}
+
+// =========================================================
+// Church Numerals
+// =========================================================
+
+// zero = λX:*. λz:X. λs:X→X. z
+xform test_church_zero : Term -> Term {
+  Lam("X", Star, Lam("z", Var("X"), Lam("s", Pi("_", Var("X"), Var("X")), Var("z")))) =>
+  Lam("X", Star, Lam("z", Var("X"), Lam("s", Pi("_", Var("X"), Var("X")), Var("z"))))
+}
+
+// succ = λn. λX:*. λz:X. λs:X→X. s (n X z s)
+xform test_church_succ : Term -> Term {
+  Lam("n", nat, Lam("X", Star, Lam("z", Var("X"), Lam("s", arr, App(Var("s"), App(App(App(Var("n"), Var("X")), Var("z")), Var("s"))))))) =>
+  Lam("n", nat, Lam("X", Star, Lam("z", Var("X"), Lam("s", arr, App(Var("s"), App(App(App(Var("n"), Var("X")), Var("z")), Var("s")))))))
+}
+
+// =========================================================
+// Logical Connectives (Curry-Howard)
+// =========================================================
+
+// False = ∀P:*. P (uninhabited type)
+xform test_false_encoding : Term -> Term {
+  Pi("P", Star, Var("P")) => Pi("P", Star, Var("P"))
+}
+
+// True = ∀P:*. P → P (has proof: λP. λp. p)
+xform test_true_encoding : Term -> Term {
+  Pi("P", Star, Pi("_", Var("P"), Var("P"))) => Pi("P", Star, Pi("_", Var("P"), Var("P")))
+}
+
+// And A B = ∀P:*. (A → B → P) → P
+xform test_and_encoding : Term -> Term {
+  Pi("P", Star, Pi("_", Pi("_", a, Pi("_", b, Var("P"))), Var("P"))) =>
+  Pi("P", Star, Pi("_", Pi("_", a, Pi("_", b, Var("P"))), Var("P")))
+}
+
+// =========================================================
+// Leibniz Equality
+// =========================================================
+
+// Eq A x y = ∀P:(A→*). P x → P y
+xform test_eq_encoding : Term -> Term {
+  Pi("P", Pi("_", a, Star), Pi("_", App(Var("P"), x), App(Var("P"), y))) =>
+  Pi("P", Pi("_", a, Star), Pi("_", App(Var("P"), x), App(Var("P"), y)))
+}
+
+// refl : ∀A:*. ∀x:A. Eq A x x
+xform test_refl_type : Term -> Term {
+  Pi("A", Star, Pi("x", Var("A"), eq)) => Pi("A", Star, Pi("x", Var("A"), eq))
+}
+
+// =========================================================
+// Context Tests
+// =========================================================
+
+xform test_empty_ctx : Context -> Context {
+  Empty => Empty
+}
+
+xform test_extend_ctx : Context -> Context {
+  Extend(Empty, "x", Star) => Extend(Empty, "x", Star)
+}
+
+xform test_nested_ctx : Context -> Context {
+  Extend(Extend(Empty, "A", Star), "x", Var("A")) => 
+  Extend(Extend(Empty, "A", Star), "x", Var("A"))
+}
