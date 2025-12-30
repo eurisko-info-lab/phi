@@ -1,4 +1,4 @@
-# φ-hello: The 172-Line Metaprogramming Core
+# Φ-hello: The 172-Line Metaprogramming Core
 
 **One file. Complete algebraic infrastructure. 90% less code.**
 
@@ -27,7 +27,7 @@ One structure: `Cofree[F, A]` — a tree where every node carries an annotation 
 
 ## The Solution
 
-φ-hello derives everything from three algebraic structures:
+Φ-hello derives everything from three algebraic structures:
 
 ```
 μ[F]        = Fix point      (recursive data)
@@ -68,11 +68,11 @@ In 172 lines:
 - **Hashing** `H`, `Sto` — content addressing
 - **Yoneda** `Yo` — automatic map fusion
 
-All with clean exports via `φ`.
+All with clean exports via `Φ`.
 
 ## The Vision
 
-**φ** is a meta-language where programs manipulate programs.
+**Φ** is a meta-language where programs manipulate programs.
 
 This core proves the thesis: *algebraic structure eliminates accidental complexity*.
 
