@@ -31,10 +31,10 @@ class LangInterpreter(spec: LangSpec):
   /** Try to apply a single rule to a value */
   def applyRule(rule: Rule, value: Val): Option[Val] =
     rule.cases.foldLeft[Option[Val]](None) { (acc, c) =>
-      acc.orElse(tryCase(c, value))
+      acc.orElse(tryCase(rule.name, c, value))
     }
   
-  private def tryCase(c: RuleCase, value: Val): Option[Val] =
+  private def tryCase(ruleName: String, c: RuleCase, value: Val): Option[Val] =
     // Try to match the pattern
     matchPattern(c.pattern, value).flatMap { bindings =>
       // Check guard if present
@@ -44,6 +44,12 @@ class LangInterpreter(spec: LangSpec):
         Some(substitute(c.body, bindings))
       else None
     }
+  
+  private def showVal(v: Val): String = v match
+    case VStr(s) => s"\"$s\""
+    case VCon(n, Nil) => n
+    case VCon(n, args) => s"$n(${args.map(showVal).take(2).mkString(", ")}${if args.size > 2 then ", ..." else ""})"
+    case _ => v.toString.take(50)
   
   private def matchPattern(pattern: MetaPattern, value: Val): Option[Map[String, Val]] =
     pattern match
@@ -58,6 +64,9 @@ class LangInterpreter(spec: LangSpec):
                 matchPattern(pat, v).map(bindings ++ _)
               case (None, _) => None
             }
+          // String literal pattern matches VStr
+          case VStr(s) if args.isEmpty && name == s =>
+            Some(Map.empty)
           case _ => None
       
       case MetaPattern.PApp(func, arg) =>
@@ -92,6 +101,23 @@ class LangInterpreter(spec: LangSpec):
             case List(arg) =>
               applyXform(xformName, arg).getOrElse(VCon(name, transformedArgs))
             case _ => VCon(name, transformedArgs)
+        // Handle rule references like GenEval.members(rules) or GenEval.cases(rules)
+        else if name.contains(".") then
+          // This looks like a rule reference (e.g., GenEval.members)
+          // Try to find and apply the rule
+          val maybeRules = spec.rules.filter(_.name == name)
+          if maybeRules.nonEmpty then
+            transformedArgs match
+              case List(arg) =>
+                applyRules(maybeRules, arg).getOrElse(VCon(name, transformedArgs))
+              case _ =>
+                // Multiple args - wrap in tuple-like structure for matching
+                val argTuple = transformedArgs match
+                  case Nil => VCon("Unit", Nil)
+                  case _ => VCon("Args", transformedArgs)
+                applyRules(maybeRules, argTuple).getOrElse(VCon(name, transformedArgs))
+          else
+            VCon(name, transformedArgs)
         else
           spec.xforms.find(_.name == name) match
             case Some(xform) if transformedArgs.length == 1 =>

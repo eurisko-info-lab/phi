@@ -82,9 +82,14 @@ object PhiParser extends RegexParsers:
     }
   
   def xformDecl: Parser[DeclFn] =
-    "xform" ~> ident ~ (":" ~> ident) ~ (biArrow ~> ident) ^^ { case name ~ src ~ tgt =>
-      s => s.copy(xforms = s.xforms :+ Xform(name, src, tgt))
+    "xform" ~> ident ~ opt("(" ~> repsep(paramDecl, ",") <~ ")") ~ (":" ~> ident) ~ (biArrow ~> ident) ^^ { 
+      case name ~ paramsOpt ~ src ~ tgt =>
+        val params = paramsOpt.getOrElse(Nil)
+        s => s.copy(xforms = s.xforms :+ Xform(name, params, src, tgt))
     }
+  
+  def paramDecl: Parser[(String, String)] =
+    ident ~ (":" ~> ident) ^^ { case name ~ typ => (name, typ) }
   
   def ruleDecl: Parser[DeclFn] =
     "rule" ~> qualifiedName ~ ("{" ~> ruleCase <~ "}") ^^ { case name ~ rc =>

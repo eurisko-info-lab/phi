@@ -17,7 +17,7 @@ case class LangSpec(
 case class Sort(name: String)
 case class Constructor(name: String, argTypes: List[LangType], returnType: String)
 case class Rule(name: String, cases: List[RuleCase])
-case class Xform(name: String, srcType: String, tgtType: String, rules: List[Rule] = Nil)
+case class Xform(name: String, params: List[(String, String)], srcType: String, tgtType: String, rules: List[Rule] = Nil)
 
 enum LangType:
   case SortRef(name: String)

@@ -2,6 +2,11 @@
 // Scala: Target language spec for code generation
 // =============================================================================
 // Constructors define the AST. Grammars enable bidirectional rendering.
+// 
+// Attribute grammar tokens:
+//   \n   - newline at current indent level
+//   \n+  - newline and increase indent
+//   \n-  - newline and decrease indent
 
 language Scala {
   // ----- Sorts -----
@@ -9,72 +14,77 @@ language Scala {
   sort ScalaDecl
   sort ScalaMember
   sort ScalaExpr
-  sort ScalaStmt
-  sort ScalaType
   sort ScalaCase
+  sort ScalaParam
+  sort ScalaType
   
   // ----- File-level constructs -----
   constructor ScalaPackage : String → List[ScalaDecl] → ScalaFile
   
-  // ----- Declarations -----
+  // ----- Declarations -----  
   constructor ScalaImport : String → ScalaDecl
   constructor ScalaObject : String → List[ScalaMember] → ScalaDecl
   
-  // ----- Members (inside object/class) -----
-  constructor Comment : String → ScalaMember
-  constructor BlankLine : ScalaMember
+  // ----- Members (inside object) -----
   constructor ExtensionOn : String → String → List[ScalaMember] → ScalaMember
-  constructor DefMethod : String → List[ScalaParam] → ScalaType → ScalaExpr → ScalaMember
-  constructor ValDef : String → ScalaExpr → ScalaMember
+  constructor DefMethod : String → ScalaParam → ScalaType → ScalaExpr → ScalaMember
+  constructor DefMethod0 : String → ScalaType → ScalaExpr → ScalaMember  // Method with no params
+  constructor DispatchDef : String → ScalaParam → ScalaType → String → List[ScalaCase] → ScalaMember
   
   // ----- Parameters -----
-  sort ScalaParam
-  constructor Param : String → ScalaType → ScalaParam
+  constructor Param : String → String → ScalaParam
   
   // ----- Types -----
   constructor TypeName : String → ScalaType
-  constructor TypeApp : String → List[ScalaType] → ScalaType
   
   // ----- Expressions -----
   constructor Ident : String → ScalaExpr
-  constructor StringLit : String → ScalaExpr
-  constructor IntLit : Int → ScalaExpr
-  constructor App : ScalaExpr → List[ScalaExpr] → ScalaExpr
+  constructor FieldAccess : String → String → ScalaExpr
   constructor MethodCall : ScalaExpr → String → List[ScalaExpr] → ScalaExpr
-  constructor MatchOn : ScalaExpr → List[ScalaCase] → ScalaExpr
-  constructor Lambda : String → ScalaExpr → ScalaExpr
-  constructor Block : List[ScalaExpr] → ScalaExpr
-  constructor Infix : ScalaExpr → String → ScalaExpr → ScalaExpr
+  constructor Call : String → List[ScalaExpr] → ScalaExpr
+  constructor Placeholder : ScalaExpr
   
-  // ----- Pattern matching -----
-  constructor CaseOf : String → List[String] → ScalaExpr → ScalaCase
-  constructor CaseWild : ScalaExpr → ScalaCase
-  
-  // ----- Statements -----
-  constructor PrintLn : ScalaExpr → ScalaStmt
+  // ----- Pattern matching cases -----
+  constructor TypeCase : String → String → ScalaExpr → ScalaCase
   
   // ----- Grammars for rendering -----
-  // Keywords must be quoted, identifiers are lowercase names
+  // Attribute grammar tokens:
+//   NL     - newline at current indent level  
+//   INDENT - increase indent for following tokens
+//   DEDENT - decrease indent for following tokens
+// Members/cases start with NL themselves
   grammar scalaFile {
-    "package" pkgName scalaDecl* => ScalaPackage(pkgName, scalaDecl)
+    "package" pkgName NL scalaDecl* => ScalaPackage(pkgName, scalaDecl)
   }
   
   grammar scalaDecl {
-    "import" importPath => ScalaImport(importPath)
-    "object" objName ":" scalaMember* => ScalaObject(objName, scalaMember)
+    NL "import" importPath => ScalaImport(importPath)
+    NL "object" objName ":" INDENT scalaMember* DEDENT => ScalaObject(objName, scalaMember)
   }
   
   grammar scalaMember {
-    "extension" "(" paramName ":" typeName ")" scalaMember* => ExtensionOn(paramName, typeName, scalaMember)
+    NL "extension" "(" pName ":" tName ")" INDENT scalaMember* DEDENT => ExtensionOn(pName, tName, scalaMember)
+    NL "def" mName "(" scalaParam ")" ":" scalaType "=" scalaExpr => DefMethod(mName, scalaParam, scalaType, scalaExpr)
+    NL "def" mName ":" scalaType "=" scalaExpr => DefMethod0(mName, scalaType, scalaExpr)
+    NL "def" mName "(" scalaParam ")" ":" scalaType "=" exprName "match" INDENT scalaCase* DEDENT => DispatchDef(mName, scalaParam, scalaType, exprName, scalaCase)
+  }
+  
+  grammar scalaParam {
+    pName ":" tName => Param(pName, tName)
   }
   
   grammar scalaType {
-    typeName => TypeName(typeName)
+    tName => TypeName(tName)
   }
   
   grammar scalaExpr {
-    varName => Ident(varName)
-    STRING => StringLit(STRING)
-    INT => IntLit(INT)
+    vName => Ident(vName)
+    objName "." fieldName => FieldAccess(objName, fieldName)
+    fName "(" scalaExpr* ")" => Call(fName, scalaExpr)
+    "_" => Placeholder
+  }
+  
+  grammar scalaCase {
+    NL "case" varName ":" typeName "=>" scalaExpr => TypeCase(varName, typeName, scalaExpr)
   }
 }

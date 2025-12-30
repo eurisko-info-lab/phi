@@ -102,11 +102,11 @@ language Meta {
   
   // Pattern matching: (Pat, Val, Env) → Result
   // → gen/Match.scala: extension (pat: Pat) def matchWith(value: Val, env: Env): Result
-  xform Match : Pat ⇄ Result
+  xform Match(value: Val, env: Env) : Pat ⇄ Result
   
   // Evaluation: (Expr, Env) → Val  
   // → gen/Eval.scala: extension (expr: Expr) def eval(env: Env): Val
-  xform Eval : Expr ⇄ Val
+  xform Eval(env: Env) : Expr ⇄ Val
   
   // Pretty printing: Val|Pat|Expr → String
   // → gen/Show.scala: extension (v: Val) def show: String, etc.
@@ -117,7 +117,7 @@ language Meta {
   
   // Substitution: (Expr, Env) → Expr
   // → gen/Subst.scala (future)
-  xform Subst : Expr ⇄ Expr
+  xform Subst(env: Env) : Expr ⇄ Expr
   
   // ==========================================================================
   // Match Rules
@@ -206,5 +206,230 @@ language Meta {
   
   rule Show.fail {
     RFail ↦ "RFail"
+  }
+  
+  // ==========================================================================
+  // Code Generation: Xform → ScalaFile (per-file xforms)
+  // ==========================================================================
+  // Each semantic xform (Eval, Match, Show, Subst) has a corresponding
+  // generator xform that builds the Scala AST. GenMeta orchestrates:
+  //   1. Apply GenEval to Eval xform → ScalaFile AST
+  //   2. Render via scala.phi grammar → String
+  //   3. Write to file
+  
+  // GenEval: Eval xform → gen/Eval.scala
+  xform GenEval : Xform ⇄ ScalaFile
+  
+  rule GenEval.file {
+    Xform("Eval", params, srcType, tgtType, rules) ↦ 
+      ScalaPackage("phi.meta.gen", List(
+        ScalaImport("phi.meta.{Val, Env, Pat, Expr, Result}"),
+        ScalaImport("Expr.*"),
+        ScalaObject("Eval", GenEval.members(rules))
+      ))
+  }
+  
+  rule GenEval.members {
+    rules ↦ Cons(
+      GenEval.dispatch(rules),
+      GenEval.extensions(rules)
+    )
+  }
+  
+  rule GenEval.dispatch {
+    rules ↦ ExtensionOn("e", "Expr", List(
+      DispatchDef("eval", Param("env", "Env"), TypeName("Val"), "e", GenEval.cases(rules))
+    ))
+  }
+  
+  rule GenEval.cases {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenEval.oneCase(name, cases),
+      GenEval.cases(rest)
+    )
+  }
+  
+  rule GenEval.cases {
+    Nil ↦ Nil
+  }
+  
+  // oneCase receives Args(name, cases) where cases = Cons(RuleCase(pat, body), Nil)
+  // pat is the pattern like PCon("EVar", Cons(PVar("name"), Nil))
+  // We extract the constructor name from the pattern
+  rule GenEval.oneCase {
+    Args(name, Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      TypeCase("e", conName, Call(GenEval.methodName(name), List(Ident("env"))))
+  }
+  
+  // methodName: "Eval.var" → "evalVar"  
+  rule GenEval.methodName {
+    name ↦ name  // TODO: proper name transformation
+  }
+  
+  rule GenEval.extensions {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenEval.extension(name, cases),
+      GenEval.extensions(rest)
+    )
+  }
+  
+  rule GenEval.extensions {
+    Nil ↦ Nil
+  }
+  
+  // extension receives Args(name, cases)
+  rule GenEval.extension {
+    Args(name, Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      ExtensionOn("e", conName, List(
+        DefMethod(GenEval.methodName(name), Param("env", "Env"), TypeName("Val"),
+                  Placeholder)
+      ))
+  }
+  
+  // GenMatch: Match xform → gen/Match.scala
+  xform GenMatch : Xform ⇄ ScalaFile
+  
+  rule GenMatch.file {
+    Xform("Match", params, srcType, tgtType, rules) ↦ 
+      ScalaPackage("phi.meta.gen", List(
+        ScalaImport("phi.meta.{Val, Env, Pat, Expr, Result}"),
+        ScalaImport("Pat.*"),
+        ScalaObject("Match", GenMatch.members(rules))
+      ))
+  }
+  
+  rule GenMatch.members {
+    rules ↦ Cons(
+      GenMatch.dispatch(rules),
+      GenMatch.extensions(rules)
+    )
+  }
+  
+  rule GenMatch.dispatch {
+    rules ↦ ExtensionOn("p", "Pat", List(
+      DispatchDef("matchWith", Param("value", "Val"), TypeName("Result"), "p", GenMatch.cases(rules))
+    ))
+  }
+  
+  rule GenMatch.cases {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenMatch.oneCase(name, cases),
+      GenMatch.cases(rest)
+    )
+  }
+  
+  rule GenMatch.cases {
+    Nil ↦ Nil
+  }
+  
+  // oneCase extracts constructor name from the pattern
+  rule GenMatch.oneCase {
+    Args(name, Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      TypeCase("p", conName, Call(GenMatch.methodName(name), List(Ident("value"))))
+  }
+  
+  rule GenMatch.methodName {
+    name ↦ name
+  }
+  
+  rule GenMatch.extensions {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenMatch.extension(name, cases),
+      GenMatch.extensions(rest)
+    )
+  }
+  
+  rule GenMatch.extensions {
+    Nil ↦ Nil
+  }
+  
+  // extension for specific pattern type
+  rule GenMatch.extension {
+    Args(name, Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      ExtensionOn("p", conName, List(
+        DefMethod(GenMatch.methodName(name), Param("value", "Val"), TypeName("Result"),
+                  Placeholder)
+      ))
+  }
+  
+  // GenShow: Show xform → gen/Show.scala  
+  xform GenShow : Xform ⇄ ScalaFile
+  
+  rule GenShow.file {
+    Xform("Show", params, srcType, tgtType, rules) ↦ 
+      ScalaPackage("phi.meta.gen", List(
+        ScalaImport("phi.meta.{Val, Env, Pat, Expr, Result}"),
+        ScalaObject("Show", GenShow.members(rules))
+      ))
+  }
+  
+  rule GenShow.members {
+    rules ↦ Cons(
+      GenShow.dispatch(rules),
+      GenShow.extensions(rules)
+    )
+  }
+  
+  rule GenShow.cases {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenShow.oneCase(name, cases),
+      GenShow.cases(rest)
+    )
+  }
+  
+  rule GenShow.cases {
+    Nil ↦ Nil
+  }
+  
+  rule GenShow.extensions {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenShow.extension(name, cases),
+      GenShow.extensions(rest)
+    )
+  }
+  
+  rule GenShow.extensions {
+    Nil ↦ Nil
+  }
+  
+  // GenSubst: Subst xform → gen/Subst.scala
+  xform GenSubst : Xform ⇄ ScalaFile
+  
+  rule GenSubst.file {
+    Xform("Subst", params, srcType, tgtType, rules) ↦ 
+      ScalaPackage("phi.meta.gen", List(
+        ScalaImport("phi.meta.{Val, Env, Pat, Expr, Result}"),
+        ScalaImport("Expr.*"),
+        ScalaObject("Subst", GenSubst.members(rules))
+      ))
+  }
+  
+  rule GenSubst.members {
+    rules ↦ Cons(
+      GenSubst.dispatch(rules),
+      GenSubst.extensions(rules)
+    )
+  }
+  
+  rule GenSubst.cases {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenSubst.oneCase(name, cases),
+      GenSubst.cases(rest)
+    )
+  }
+  
+  rule GenSubst.cases {
+    Nil ↦ Nil
+  }
+  
+  rule GenSubst.extensions {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenSubst.extension(name, cases),
+      GenSubst.extensions(rest)
+    )
+  }
+  
+  rule GenSubst.extensions {
+    Nil ↦ Nil
   }
 }

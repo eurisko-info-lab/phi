@@ -106,24 +106,29 @@ case class GrammarParser(spec: LangSpec):
 
   // ==========================================================================
   // Rendering: Val → String (inverse of parsing)
+  // Uses attribute grammar: indent level is inherited attribute
   // ==========================================================================
+  
+  // Inherited attributes passed during rendering
+  case class RenderCtx(indent: Int = 0):
+    def indented: RenderCtx = copy(indent = indent + 1)
+    def outdented: RenderCtx = copy(indent = math.max(0, indent - 1))
+    def indentStr: String = "  " * indent
   
   /** Render a Val to a String using a named grammar */
   def render(grammarName: String, value: Val): String =
     spec.grammars.get(grammarName) match
       case None => s"/* Unknown grammar: $grammarName */"
       case Some(rules) =>
-        renderWithRules(rules, value).getOrElse(s"/* Cannot render: ${value} */")
+        renderWithRules(rules, value, RenderCtx()).getOrElse(s"/* Cannot render: ${value} */")
   
-  private def renderWithRules(rules: List[SyntaxRule], value: Val): Option[String] =
-    rules.view.flatMap(rule => tryRenderRule(rule, value)).headOption
+  private def renderWithRules(rules: List[SyntaxRule], value: Val, ctx: RenderCtx): Option[String] =
+    rules.view.flatMap(rule => tryRenderRule(rule, value, ctx)).headOption
   
-  private def tryRenderRule(rule: SyntaxRule, value: Val): Option[String] =
-    // Try to match the value against the rule's result template
+  private def tryRenderRule(rule: SyntaxRule, value: Val, ctx: RenderCtx): Option[String] =
     matchTemplate(rule.result, value) match
       case Some(bindings) =>
-        // Render the pattern with bindings
-        Some(renderPattern(rule.pattern, bindings))
+        Some(renderPattern(rule.pattern, bindings, ctx))
       case None => None
   
   /** Match a value against a template, extracting bindings */
@@ -152,42 +157,82 @@ case class GrammarParser(spec: LangSpec):
       
       case _ => None
   
-  /** Render a pattern with bindings */
-  private def renderPattern(pattern: List[SyntaxToken], bindings: Map[String, Val]): String =
-    pattern.map(renderToken(_, bindings)).mkString(" ")
+  /** Render a pattern with bindings and inherited attributes */
+  private def renderPattern(pattern: List[SyntaxToken], bindings: Map[String, Val], ctx: RenderCtx): String =
+    // Thread context through to handle \n+ and \n- indent changes
+    val (result, _) = pattern.foldLeft(("", ctx)) { case ((acc, currentCtx), tok) =>
+      val (tokStr, newCtx) = renderTokenWithCtx(tok, bindings, currentCtx)
+      val combined =
+        if acc.isEmpty then tokStr
+        else if tokStr.isEmpty then acc                        // \n+/\n- produce empty string
+        else if tokStr.startsWith("\n") then acc + tokStr      // newline token starts fresh
+        else if acc.endsWith("\n") || acc.matches("(?s).*\\n[ ]*") then acc + tokStr  // after newline+indent
+        else if tokStr.matches("^[(),:.].*") then acc + tokStr // punctuation attaches
+        else if acc.endsWith("(") then acc + tokStr            // after open paren
+        else acc + " " + tokStr                                 // else add space
+      (combined, newCtx)
+    }
+    result
   
-  private def renderToken(tok: SyntaxToken, bindings: Map[String, Val]): String =
+  /** Render a token and return updated context (for \n+ and \n-) */
+  private def renderTokenWithCtx(tok: SyntaxToken, bindings: Map[String, Val], ctx: RenderCtx): (String, RenderCtx) =
     tok match
-      case SyntaxToken.Literal(kw) => kw
+      case SyntaxToken.Literal(lit) =>
+        lit match
+          case _ => (lit, ctx)                                   // Any literal keyword
       
-      case SyntaxToken.NonTerm("IDENT", _) =>
-        bindings.get("IDENT").map(extractIdent).getOrElse("???")
+      case SyntaxToken.NonTerm("NL", _) =>
+        ("\n" + ctx.indentStr, ctx)                              // Newline + current indent
       
-      case SyntaxToken.NonTerm("STRING", _) =>
-        bindings.get("STRING").map(v => "\"" + extractIdent(v) + "\"").getOrElse("\"???\"")
+      case SyntaxToken.NonTerm("INDENT", _) =>
+        ("", ctx.indented)                                       // Increase indent for following tokens
       
-      case SyntaxToken.NonTerm("INT", _) =>
-        bindings.get("INT").map(extractIdent).getOrElse("0")
+      case SyntaxToken.NonTerm("DEDENT", _) =>
+        ("", ctx.outdented)                                      // Decrease indent for following tokens
       
       case SyntaxToken.NonTerm(name, mod) =>
-        bindings.get(name) match
-          case Some(VList(items)) =>
-            // Render each item and join
-            items.map(v => renderNonTerm(name, v)).mkString(" ")
-          case Some(v) =>
-            // Check if there's a grammar for this, otherwise treat as identifier
-            if spec.grammars.contains(name) then
-              renderNonTerm(name, v)
-            else
-              extractIdent(v)  // Treat as identifier terminal
-          case None =>
-            s"/* missing: $name */"
+        val str = renderNonTermToken(name, mod, bindings, ctx)
+        (str, ctx)
   
-  private def renderNonTerm(grammarName: String, value: Val): String =
-    // Look for grammar with exact name
+  /** Render a non-terminal token from bindings */
+  private def renderNonTermToken(name: String, mod: Option[String], bindings: Map[String, Val], ctx: RenderCtx): String =
+    // Handle built-in terminals
+    if name == "IDENT" then return bindings.get(name).map(extractIdent).getOrElse("???")
+    if name == "STRING" then return bindings.get(name).map(v => "\"" + extractIdent(v) + "\"").getOrElse("\"???\"")
+    if name == "INT" then return bindings.get(name).map(extractIdent).getOrElse("0")
+    
+    bindings.get(name) match
+      case Some(v) =>
+        val items = valToList(v)
+        if items.nonEmpty || v.isInstanceOf[VList] || isConsNil(v) then
+          // List: render each item with the grammar
+          val separator = if name.toLowerCase.contains("expr") || name.toLowerCase.contains("arg") then ", " else ""
+          items.map(v => renderNonTerm(name, v, ctx)).mkString(separator)
+        else if spec.grammars.contains(name) then
+          renderNonTerm(name, v, ctx)
+        else
+          extractIdent(v)
+      case None =>
+        s"/* missing: $name */"
+  
+  private def isConsNil(v: Val): Boolean = v match
+    case VCon("Nil", _) => true
+    case VCon("Cons", _) => true
+    case VCon("List", _) => true
+    case VList(_) => true
+    case _ => false
+  
+  private def valToList(v: Val): List[Val] = v match
+    case VList(items) => items
+    case VCon("Nil", Nil) => Nil
+    case VCon("Cons", List(head, tail)) => head :: valToList(tail)
+    case VCon("List", items) => items
+    case _ => Nil  // Not a list
+  
+  private def renderNonTerm(grammarName: String, value: Val, ctx: RenderCtx): String =
     spec.grammars.get(grammarName) match
       case Some(rules) => 
-        renderWithRules(rules, value).getOrElse(s"/* cannot render $grammarName: $value */")
+        renderWithRules(rules, value, ctx).getOrElse(s"/* cannot render $grammarName: $value */")
       case None => 
         extractIdent(value)
   

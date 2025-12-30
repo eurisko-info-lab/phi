@@ -2,148 +2,96 @@ package phi.user
 
 import java.nio.file.{Files, Paths}
 import phi.phi.*
-import phi.meta.Val
+import phi.meta.{Val, LangInterpreter}
 import phi.meta.Val.*
 
 // GenMeta: Generate gen/*.scala from meta.phi
 // 
-// Each xform in meta.phi → a generated file in gen/
-//   xform Eval → gen/Eval.scala
-//   xform Match → gen/Match.scala  
-//   xform Show → gen/Show.scala
+// Each semantic xform in meta.phi → a generated file in gen/
+//   xform Eval(env: Env) : Expr ⇄ Val → gen/Eval.scala (via GenEval xform)
 //
-// Each rule in the xform → an extension method
-//   rule Eval.var { EVar(name) ↦ ... } → extension (e: EVar) def evalVar(env: Env)
+// Pipeline:
+//   1. Parse meta.phi → LangSpec (includes Gen* xforms)
+//   2. For each semantic xform: apply corresponding Gen* xform → ScalaFile AST
+//   3. Render ScalaFile AST via scala.phi grammar → String
+//   4. Write to file
 //
-// The pipeline:
-//   1. Parse meta.phi → LangSpec
-//   2. Build Val AST (ScalaPackage, ScalaObject, ExtensionBlock, ...)
-//   3. Render via scala.phi grammar
+// GenMeta knows nothing about Scala - it just orchestrates xform calls.
+// All Scala-specific knowledge is in the Gen* rules in meta.phi.
 object GenMeta:
+  
+  // Maps semantic xforms to their generators
+  val generators = Map(
+    "Eval"  -> "GenEval",
+    "Match" -> "GenMatch", 
+    "Show"  -> "GenShow",
+    "Subst" -> "GenSubst"
+  )
 
   def main(args: Array[String]): Unit =
     println("=" * 60)
     println("GenMeta: Generating gen/*.scala from meta.phi")
     println("=" * 60)
     
-    // 1. Parse meta.phi
     val metaSrc = Files.readString(Paths.get("examples/meta.phi"))
-    
-    println("\n[1] Parsing meta.phi...")
     val metaSpec = PhiParser.parseSpec(metaSrc) match
-      case Right(s) =>
-        println(s"    Language: ${s.name}")
-        println(s"    Sorts: ${s.sorts.map(_.name).mkString(", ")}")
-        println(s"    Constructors: ${s.constructors.map(_.name).mkString(", ")}")
-        println(s"    Xforms: ${s.xforms.map(_.name).mkString(", ")}")
-        println(s"    Rules: ${s.rules.map(_.name).mkString(", ")}")
-        s
-      case Left(err) =>
-        println(s"    Parse error: $err")
-        return
+      case Right(s) => s
+      case Left(err) => println(s"Parse error: $err"); return
         
-    // 2. Parse scala.phi for rendering
     val scalaSrc = Files.readString(Paths.get("examples/scala.phi"))
-    
-    println("\n[2] Parsing scala.phi...")
     val scalaSpec = PhiParser.parseSpec(scalaSrc) match
-      case Right(s) =>
-        println(s"    Language: ${s.name}")
-        println(s"    Grammars: ${s.grammars.keys.mkString(", ")}")
-        s
-      case Left(err) =>
-        println(s"    Parse error: $err")
-        return
+      case Right(s) => s
+      case Left(err) => println(s"Parse error: $err"); return
     
+    val interpreter = LangInterpreter(metaSpec)
     val renderer = GrammarInterp.specParser(scalaSpec)
-    
     val outputDir = Paths.get("tmp/gen")
     if !Files.exists(outputDir) then Files.createDirectories(outputDir)
     
-    // 3. Generate Eval.scala
-    println("\n[3] Generating Eval.scala...")
-    val evalAst = buildEvalAst(metaSpec)
-    val evalCode = renderer.render("scalaFile", evalAst)
-    Files.writeString(outputDir.resolve("Eval.scala"), evalCode)
-    println(s"    Written to: tmp/gen/Eval.scala")
-    
-    // 4. Generate Match.scala
-    println("\n[4] Generating Match.scala...")
-    val matchAst = buildMatchAst(metaSpec)
-    val matchCode = renderer.render("scalaFile", matchAst)
-    Files.writeString(outputDir.resolve("Match.scala"), matchCode)
-    println(s"    Written to: tmp/gen/Match.scala")
-    
-    // 5. Generate Show.scala
-    println("\n[5] Generating Show.scala...")
-    val showAst = buildShowAst(metaSpec)
-    val showCode = renderer.render("scalaFile", showAst)
-    Files.writeString(outputDir.resolve("Show.scala"), showCode)
-    println(s"    Written to: tmp/gen/Show.scala")
+    // Generate a file for each semantic xform that has a generator
+    for 
+      xform <- metaSpec.xforms 
+      genName <- generators.get(xform.name)
+    do
+      println(s"\nGenerating ${xform.name}.scala via $genName...")
+      val xformVal = xformToVal(metaSpec, xform)
+      interpreter.applyXform(genName, xformVal) match
+        case Some(ast) =>
+          val code = renderer.render("scalaFile", ast)
+          Files.writeString(outputDir.resolve(s"${xform.name}.scala"), code)
+          println(s"    Written to: tmp/gen/${xform.name}.scala")
+        case None =>
+          println(s"    Warning: $genName rules did not match")
     
     println("\n" + "=" * 60)
     println("Generation complete!")
     println("=" * 60)
 
-  // ==========================================================================
-  // AST Builders - construct Val representing Scala code
-  // Uses constructors from scala.phi
-  // ==========================================================================
+  /** Convert Xform case class to Val representation */
+  def xformToVal(spec: LangSpec, xform: Xform): Val =
+    val rules = spec.rules.filter(_.name.startsWith(s"${xform.name}."))
+    VCon("Xform", List(
+      VStr(xform.name),
+      toCons(xform.params.map { case (n, t) => VCon("Param", List(VStr(n), VStr(t))) }),
+      VStr(xform.srcType),
+      VStr(xform.tgtType),
+      toCons(rules.map(ruleToVal))
+    ))
   
-  def buildEvalAst(spec: LangSpec): Val =
-    val exprCons = spec.constructors.filter(_.returnType == "Expr")
-    
-    // ScalaPackage("phi.meta.gen", [ScalaObject("Eval", [extensions...])])
-    VCon("ScalaPackage", List(
-      VStr("phi.meta.gen"),
-      VList(List(
-        VCon("ScalaObject", List(
-          VStr("Eval"),
-          VList(
-            exprCons.map { c =>
-              val methodName = "eval" + c.name.stripPrefix("E")
-              // extension (e: EVar) ...
-              VCon("ExtensionOn", List(
-                VStr("e"),
-                VStr(c.name),
-                VList(Nil)  // Empty body for now
-              ))
-            }
-          )
-        ))
-      ))
+  /** Convert Scala List to Cons/Nil Val representation */
+  def toCons(list: List[Val]): Val = list match
+    case Nil => VCon("Nil", Nil)
+    case head :: tail => VCon("Cons", List(head, toCons(tail)))
+  
+  /** Convert Rule to Val */
+  def ruleToVal(rule: Rule): Val =
+    VCon("Rule", List(
+      VStr(rule.name),
+      toCons(rule.cases.map(c => VCon("RuleCase", List(patternToVal(c.pattern), patternToVal(c.body)))))
     ))
-
-  def buildMatchAst(spec: LangSpec): Val =
-    val patCons = spec.constructors.filter(_.returnType == "Pat")
-    
-    VCon("ScalaPackage", List(
-      VStr("phi.meta.gen"),
-      VList(List(
-        VCon("ScalaObject", List(
-          VStr("Match"),
-          VList(
-            patCons.map { c =>
-              VCon("ExtensionOn", List(
-                VStr("p"),
-                VStr(c.name),
-                VList(Nil)
-              ))
-            }
-          )
-        ))
-      ))
-    ))
-
-  def buildShowAst(spec: LangSpec): Val =
-    val grammars = spec.grammars.keys.toList
-    
-    VCon("ScalaPackage", List(
-      VStr("phi.meta.gen"),
-      VList(List(
-        VCon("ScalaObject", List(
-          VStr("Show"),
-          VList(Nil)  // Empty for now - Show derived from grammars
-        ))
-      ))
-    ))
+  
+  def patternToVal(p: MetaPattern): Val = p match
+    case MetaPattern.PVar(n) => VCon("PVar", List(VStr(n)))
+    case MetaPattern.PCon(n, args) => VCon("PCon", List(VStr(n), toCons(args.map(patternToVal))))
+    case MetaPattern.PApp(f, a) => VCon("PApp", List(patternToVal(f), patternToVal(a)))
+    case MetaPattern.PSubst(b, v, r) => VCon("PSubst", List(patternToVal(b), VStr(v), patternToVal(r)))
