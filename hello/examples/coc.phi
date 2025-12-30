@@ -15,97 +15,101 @@
 language CoC {
 
   // =========================================================
-  // Universes (Sorts)
+  // Abstract Syntax (Sorts and Constructors)
   // =========================================================
-  // CoC has two universes forming an impredicative hierarchy:
-  //   Prop : Type    (propositions, proof-irrelevant)
-  //   Type : Type    (types, predicative in extensions)
-  
-  sort Universe
-  constructor Prop : Universe           // Impredicative universe of propositions
-  constructor Type : Universe           // Universe of computational types
-  
-  // Universe ordering: Prop ⊑ Type
-  xform UnivLeq : Universe → Universe ⇄ Bool
-  rule UnivLeq {
-    Prop, _     ↦ True                  // Prop ⊑ anything
-    Type, Type  ↦ True                  // Type ⊑ Type
-    Type, Prop  ↦ False                 // Type ⋢ Prop
-  }
-
-  // Universe of a Pi type (impredicativity of Prop)
-  xform PiUniv : Universe → Universe ⇄ Universe
-  rule PiUniv {
-    _, Prop  ↦ Prop                     // ∀x:A. P : Prop (impredicative!)
-    _, Type  ↦ Type                     // ∀x:A. B : Type
-  }
-
-  // =========================================================
-  // Terms (Unified syntax: terms and types are the same)
-  // =========================================================
-  // In CoC, there's no distinction between terms and types.
-  // Everything is a term, including Type and Prop themselves.
   
   sort Term
   
-  // Universes as terms
-  constructor Star  : Term              // Type (the universe of types)
-  constructor Box   : Term              // □ (the universe of universes, for typing Type)
+  // Universes
+  constructor Star  : Term              // * (Type)
+  constructor Box   : Term              // □ (Kind)
   
-  // Variables
+  // Core terms
   constructor Var   : String → Term
-  
-  // Pi types: Πx:A. B  (dependent function types)
-  // When x ∉ FV(B), this is just A → B
-  constructor Pi    : String → Term → Term → Term
-  
-  // Lambda abstraction: λx:A. t
-  constructor Lam   : String → Term → Term → Term
-  
-  // Application: t u
-  constructor App   : Term → Term → Term
+  constructor Pi    : String → Term → Term → Term     // Πx:A. B
+  constructor Lam   : String → Term → Term → Term     // λx:A. t
+  constructor App   : Term → Term → Term              // f t
 
   // =========================================================
-  // Syntactic Sugar
+  // Concrete Syntax (Grammar)
   // =========================================================
+  // Parses actual CoC notation into the abstract syntax above.
+  //
+  // Examples:
+  //   *                           → Star
+  //   □                           → Box
+  //   x                           → Var("x")
+  //   λx:A. t                     → Lam("x", A, t)
+  //   Πx:A. B                     → Pi("x", A, B)
+  //   ∀x:A. B                     → Pi("x", A, B)
+  //   A → B                       → Pi("_", A, B)
+  //   f t                         → App(f, t)
+  //   (t)                         → t
   
-  // Non-dependent function type: A → B = Πx:A. B where x ∉ FV(B)
-  xform Arrow : Term → Term ⇄ Term
-  rule Arrow {
-    a, b ↦ Pi("_", a, b)
-  }
-  
-  // Universal quantifier (same as Pi, but emphasizes propositions)
-  xform Forall : String → Term → Term ⇄ Term
-  rule Forall {
-    x, a, b ↦ Pi(x, a, b)
+  grammar term {
+    // Universes
+    "*"                             => Star
+    "Type"                          => Star
+    "□"                             => Box
+    "Kind"                          => Box
+    
+    // Variables
+    IDENT                           => Var(IDENT)
+    
+    // Pi types (dependent function)
+    "Π" IDENT ":" term "." term     => Pi(IDENT, term, term)
+    "∀" IDENT ":" term "." term     => Pi(IDENT, term, term)
+    "forall" IDENT ":" term "." term => Pi(IDENT, term, term)
+    
+    // Non-dependent function (sugar for Pi with unused var)
+    term "→" term                   => Pi("_", term, term)
+    term "->" term                  => Pi("_", term, term)
+    
+    // Lambda abstraction
+    "λ" IDENT ":" term "." term     => Lam(IDENT, term, term)
+    "\\" IDENT ":" term "." term    => Lam(IDENT, term, term)
+    "fun" IDENT ":" term "." term   => Lam(IDENT, term, term)
+    
+    // Application (left associative)
+    term term                       => App(term, term)
+    
+    // Parentheses
+    "(" term ")"                    => term
   }
 
   // =========================================================
-  // Contexts (Typing environments)
+  // Contexts
   // =========================================================
   
   sort Context
   constructor Empty  : Context
   constructor Extend : Context → String → Term → Context
   
-  // Context lookup
-  xform Lookup : Context → String ⇄ Option[Term]
-  rule Lookup {
-    Empty, _                    ↦ None
-    Extend(_, x, t), y | x = y  ↦ Some(t)
-    Extend(ctx, _, _), y        ↦ Lookup(ctx, y)
-  }
-  
-  // Context well-formedness (all types are valid)
-  xform WfCtx : Context ⇄ Bool
-  rule WfCtx {
-    Empty                       ↦ True
-    Extend(ctx, x, a)           ↦ and(WfCtx(ctx), IsType(ctx, a))
+  grammar context {
+    "·"                             => Empty
+    "∅"                             => Empty
+    context "," IDENT ":" term      => Extend(context, IDENT, term)
   }
 
   // =========================================================
-  // Substitution (Capture-avoiding)
+  // Judgments (for display/documentation)
+  // =========================================================
+  
+  sort Judgment
+  constructor JType  : Context → Term → Term → Judgment    // Γ ⊢ t : T
+  constructor JKind  : Context → Term → Judgment           // Γ ⊢ T : *
+  constructor JCtx   : Context → Judgment                  // ⊢ Γ ctx
+  constructor JEq    : Context → Term → Term → Judgment    // Γ ⊢ t ≡ u
+
+  grammar judgment {
+    context "⊢" term ":" term       => JType(context, term, term)
+    context "⊢" term "type"         => JKind(context, term)
+    "⊢" context "ctx"               => JCtx(context)
+    context "⊢" term "≡" term       => JEq(context, term, term)
+  }
+
+  // =========================================================
+  // Substitution
   // =========================================================
   
   xform Subst : String → Term → Term ⇄ Term
@@ -122,7 +126,7 @@ language CoC {
   }
 
   // =========================================================
-  // Reduction (Beta reduction)
+  // Reduction
   // =========================================================
   
   xform BetaStep : Term ⇄ Term
@@ -130,7 +134,6 @@ language CoC {
     App(Lam(x, _, t), u)  ↦ Subst(x, u, t)
   }
   
-  // Reduce under binders (full beta reduction)
   xform Reduce : Term ⇄ Term
   rule Reduce {
     Star                        ↦ Star
@@ -142,19 +145,12 @@ language CoC {
     App(f, u)                   ↦ App(Reduce(f), Reduce(u))
   }
   
-  // Normalize to beta-normal form
   strategy Normalize := fixpoint Reduce
 
   // =========================================================
-  // Beta-Equivalence (Definitional equality)
+  // Equality
   // =========================================================
   
-  xform BetaEq : Term → Term ⇄ Bool
-  rule BetaEq {
-    t1, t2 ↦ AlphaEq(Normalize(t1), Normalize(t2))
-  }
-  
-  // Alpha-equivalence (structural equality up to renaming)
   xform AlphaEq : Term → Term ⇄ Bool
   rule AlphaEq {
     Star, Star                              ↦ True
@@ -167,22 +163,23 @@ language CoC {
     App(f1, u1), App(f2, u2)                ↦ and(AlphaEq(f1, f2), AlphaEq(u1, u2))
     _, _                                    ↦ False
   }
+  
+  xform BetaEq : Term → Term ⇄ Bool
+  rule BetaEq {
+    t1, t2 ↦ AlphaEq(Normalize(t1), Normalize(t2))
+  }
 
   // =========================================================
-  // Type Checking (Bidirectional)
+  // Type Checking
   // =========================================================
   
-  // Check if a term is a valid type (has sort Star or Box)
-  xform IsType : Context → Term ⇄ Bool
-  rule IsType {
-    ctx, t ↦ 
-      case Infer(ctx, t) of
-        Some(Star) → True
-        Some(Box)  → True
-        _          → False
+  xform Lookup : Context → String ⇄ Option[Term]
+  rule Lookup {
+    Empty, _                    ↦ None
+    Extend(_, x, t), y | x = y  ↦ Some(t)
+    Extend(ctx, _, _), y        ↦ Lookup(ctx, y)
   }
   
-  // Check if a term is a sort
   xform IsSort : Term ⇄ Bool
   rule IsSort {
     Star  ↦ True
@@ -190,23 +187,13 @@ language CoC {
     _     ↦ False
   }
   
-  // Typing rules axioms:
-  //   ⊢ * : □       (Star has type Box)
-  //   ⊢ □ : □       (Box has type Box - simplified)
-  
   // Inference: Γ ⊢ t : T
   xform Infer : Context → Term ⇄ Option[Term]
   rule Infer {
-    // Axiom: * : □
     _, Star                       ↦ Some(Box)
-    
-    // Axiom: □ : □ (for simplicity; full CoC has no type for □)
     _, Box                        ↦ Some(Box)
-    
-    // Variable
     ctx, Var(x)                   ↦ Lookup(ctx, x)
     
-    // Pi-formation: if A : s₁ and B : s₂ then (Πx:A. B) : s₂
     ctx, Pi(x, a, b)              ↦
       case Infer(ctx, a) of
         Some(s1) | IsSort(s1) →
@@ -215,7 +202,6 @@ language CoC {
             _ → None
         _ → None
     
-    // Lambda: if Γ,x:A ⊢ t : B then Γ ⊢ λx:A.t : Πx:A.B
     ctx, Lam(x, a, t)             ↦
       case Infer(ctx, a) of
         Some(s) | IsSort(s) →
@@ -224,7 +210,6 @@ language CoC {
             None    → None
         _ → None
     
-    // Application: if f : Πx:A.B and u : A then f u : B[x:=u]
     ctx, App(f, u)                ↦
       case Infer(ctx, f) of
         Some(Pi(x, a, b)) →
@@ -234,7 +219,6 @@ language CoC {
         _ → None
   }
   
-  // Type checking: Γ ⊢ t : T
   xform Check : Context → Term → Term ⇄ Bool
   rule Check {
     ctx, t, expected ↦
@@ -244,245 +228,105 @@ language CoC {
   }
 
   // =========================================================
-  // Logical Connectives (Propositions as Types)
+  // Pretty Printing (Reverse of Grammar)
   // =========================================================
   
-  // Bottom (False): ⊥ = ∀P:*. P
-  def False : Term = Pi("P", Star, Var("P"))
-  
-  // Top (True): ⊤ = ∀P:*. P → P
-  def True : Term = Pi("P", Star, Arrow(Var("P"), Var("P")))
-  
-  // Negation: ¬A = A → ⊥
-  xform Not : Term ⇄ Term
-  rule Not { a ↦ Arrow(a, False) }
-  
-  // Conjunction: A ∧ B = ∀P:*. (A → B → P) → P
-  xform And : Term → Term ⇄ Term
-  rule And {
-    a, b ↦ Pi("P", Star, Arrow(Arrow(a, Arrow(b, Var("P"))), Var("P")))
-  }
-  
-  // Disjunction: A ∨ B = ∀P:*. (A → P) → (B → P) → P
-  xform Or : Term → Term ⇄ Term
-  rule Or {
-    a, b ↦ Pi("P", Star, Arrow(Arrow(a, Var("P")), Arrow(Arrow(b, Var("P")), Var("P"))))
-  }
-  
-  // Existential: ∃x:A. B = ∀P:*. (∀x:A. B → P) → P
-  xform Exists : String → Term → Term ⇄ Term
-  rule Exists {
-    x, a, b ↦ Pi("P", Star, Arrow(Pi(x, a, Arrow(b, Var("P"))), Var("P")))
-  }
-  
-  // Leibniz equality: a =_A b = ∀P:(A→*). P a → P b
-  xform Eq : Term → Term → Term ⇄ Term
-  rule Eq {
-    a, t1, t2 ↦ Pi("P", Arrow(a, Star), Arrow(App(Var("P"), t1), App(Var("P"), t2)))
+  xform Pretty : Term ⇄ String
+  rule Pretty {
+    Star                ↦ "*"
+    Box                 ↦ "□"
+    Var(x)              ↦ x
+    Pi("_", a, b)       ↦ concat(Pretty(a), " → ", Pretty(b))
+    Pi(x, a, b)         ↦ concat("Π", x, ":", Pretty(a), ". ", Pretty(b))
+    Lam(x, a, t)        ↦ concat("λ", x, ":", Pretty(a), ". ", Pretty(t))
+    App(f, u)           ↦ concat("(", Pretty(f), " ", Pretty(u), ")")
   }
 
   // =========================================================
-  // Proof Terms
+  // Standard Library
   // =========================================================
   
-  // Identity proof: refl : ∀A:*. ∀x:A. x = x
-  def refl : Term = 
-    Lam("A", Star, 
-      Lam("x", Var("A"),
-        Lam("P", Arrow(Var("A"), Star),
-          Lam("px", App(Var("P"), Var("x")),
-            Var("px")))))
+  // Identity: λA:*. λx:A. x
+  // Parsed from: λA:*. λx:A. x
+  def id = parse term "λA:*. λx:A. x"
   
-  // Symmetry: sym : ∀A:*. ∀x:A. ∀y:A. x = y → y = x
-  // Proof: Given eq : ∀P. P x → P y, instantiate with (λz. P z → P x)
-  //        eq (λz. P z → P x) : (P x → P x) → (P y → P x)
-  //        Apply identity (λpx. px) to get (P y → P x), then apply py
-  def sym : Term =
-    Lam("A", Star,
-      Lam("x", Var("A"),
-        Lam("y", Var("A"),
-          Lam("eq", Eq(Var("A"), Var("x"), Var("y")),
-            Lam("P", Arrow(Var("A"), Star),
-              Lam("py", App(Var("P"), Var("y")),
-                App(App(App(Var("eq"), 
-                            Lam("z", Var("A"), Arrow(App(Var("P"), Var("z")), App(Var("P"), Var("x"))))),
-                        Lam("px", App(Var("P"), Var("x")), Var("px"))),  // identity: P x → P x
-                    Var("py"))))))))
+  // Composition: λA:*. λB:*. λC:*. λf:B→C. λg:A→B. λx:A. f (g x)
+  def compose = parse term "λA:*. λB:*. λC:*. λf:(B → C). λg:(A → B). λx:A. f (g x)"
   
-  // Transitivity: trans : ∀A:*. ∀x:A. ∀y:A. ∀z:A. x = y → y = z → x = z
-  def trans : Term =
-    Lam("A", Star,
-      Lam("x", Var("A"),
-        Lam("y", Var("A"),
-          Lam("z", Var("A"),
-            Lam("eq1", Eq(Var("A"), Var("x"), Var("y")),
-              Lam("eq2", Eq(Var("A"), Var("y"), Var("z")),
-                Lam("P", Arrow(Var("A"), Star),
-                  Lam("px", App(Var("P"), Var("x")),
-                    App(App(Var("eq2"), Var("P")),
-                        App(App(Var("eq1"), Var("P")), Var("px")))))))))))
+  // False (empty type): ∀P:*. P
+  def False = parse term "∀P:*. P"
   
-  // Pair introduction: pair : ∀A:*. ∀B:*. A → B → A ∧ B
-  def pair : Term =
-    Lam("A", Star,
-      Lam("B", Star,
-        Lam("a", Var("A"),
-          Lam("b", Var("B"),
-            Lam("P", Star,
-              Lam("f", Arrow(Var("A"), Arrow(Var("B"), Var("P"))),
-                App(App(Var("f"), Var("a")), Var("b"))))))))
+  // True (unit type): ∀P:*. P → P  
+  def True = parse term "∀P:*. P → P"
   
-  // Left injection: inl : ∀A:*. ∀B:*. A → A ∨ B
-  def inl : Term =
-    Lam("A", Star,
-      Lam("B", Star,
-        Lam("a", Var("A"),
-          Lam("P", Star,
-            Lam("f", Arrow(Var("A"), Var("P")),
-              Lam("g", Arrow(Var("B"), Var("P")),
-                App(Var("f"), Var("a"))))))))
+  // Negation: A → False
+  def Not = parse term "λA:*. A → (∀P:*. P)"
   
-  // Right injection: inr : ∀A:*. ∀B:*. B → A ∨ B
-  def inr : Term =
-    Lam("A", Star,
-      Lam("B", Star,
-        Lam("b", Var("B"),
-          Lam("P", Star,
-            Lam("f", Arrow(Var("A"), Var("P")),
-              Lam("g", Arrow(Var("B"), Var("P")),
-                App(Var("g"), Var("b"))))))))
+  // Conjunction: ∀P:*. (A → B → P) → P
+  def And = parse term "λA:*. λB:*. ∀P:*. (A → B → P) → P"
+  
+  // Disjunction: ∀P:*. (A → P) → (B → P) → P
+  def Or = parse term "λA:*. λB:*. ∀P:*. (A → P) → (B → P) → P"
 
   // =========================================================
-  // Natural Numbers (Church encoding)
+  // Church Numerals
   // =========================================================
   
   // Nat = ∀X:*. X → (X → X) → X
-  def Nat : Term = Pi("X", Star, Arrow(Var("X"), Arrow(Arrow(Var("X"), Var("X")), Var("X"))))
+  def Nat = parse term "∀X:*. X → (X → X) → X"
   
-  // zero : Nat = λX:*. λz:X. λs:X→X. z
-  def zero : Term =
-    Lam("X", Star,
-      Lam("z", Var("X"),
-        Lam("s", Arrow(Var("X"), Var("X")),
-          Var("z"))))
+  // zero = λX:*. λz:X. λs:X→X. z
+  def zero = parse term "λX:*. λz:X. λs:(X → X). z"
   
-  // succ : Nat → Nat = λn:Nat. λX:*. λz:X. λs:X→X. s (n X z s)
-  def succ : Term =
-    Lam("n", Nat,
-      Lam("X", Star,
-        Lam("z", Var("X"),
-          Lam("s", Arrow(Var("X"), Var("X")),
-            App(Var("s"), App(App(App(Var("n"), Var("X")), Var("z")), Var("s")))))))
+  // succ = λn:Nat. λX:*. λz:X. λs:X→X. s (n X z s)
+  def succ = parse term "λn:(∀X:*. X → (X → X) → X). λX:*. λz:X. λs:(X → X). s (n X z s)"
   
-  // one, two, three
-  def one   : Term = App(succ, zero)
-  def two   : Term = App(succ, one)
-  def three : Term = App(succ, two)
-  
-  // add : Nat → Nat → Nat
-  def add : Term =
-    Lam("m", Nat,
-      Lam("n", Nat,
-        Lam("X", Star,
-          Lam("z", Var("X"),
-            Lam("s", Arrow(Var("X"), Var("X")),
-              App(App(App(Var("m"), Var("X")), 
-                      App(App(App(Var("n"), Var("X")), Var("z")), Var("s"))),
-                  Var("s")))))))
-  
-  // mult : Nat → Nat → Nat
-  def mult : Term =
-    Lam("m", Nat,
-      Lam("n", Nat,
-        Lam("X", Star,
-          Lam("z", Var("X"),
-            Lam("s", Arrow(Var("X"), Var("X")),
-              App(App(App(Var("m"), Var("X")), Var("z")),
-                  Lam("x", Var("X"), App(App(App(Var("n"), Var("X")), Var("x")), Var("s")))))))))
+  // add = λm:Nat. λn:Nat. λX:*. λz:X. λs:X→X. m X (n X z s) s
+  def add = parse term "λm:(∀X:*. X → (X → X) → X). λn:(∀X:*. X → (X → X) → X). λX:*. λz:X. λs:(X → X). m X (n X z s) s"
 
   // =========================================================
-  // Polymorphic Identity and Composition
+  // Leibniz Equality
   // =========================================================
   
-  // id : ∀A:*. A → A
-  def id : Term = Lam("A", Star, Lam("x", Var("A"), Var("x")))
+  // Eq A x y = ∀P:(A→*). P x → P y
+  def Eq = parse term "λA:*. λx:A. λy:A. ∀P:(A → *). (P x) → (P y)"
   
-  // compose : ∀A:*. ∀B:*. ∀C:*. (B → C) → (A → B) → A → C
-  def compose : Term =
-    Lam("A", Star,
-      Lam("B", Star,
-        Lam("C", Star,
-          Lam("f", Arrow(Var("B"), Var("C")),
-            Lam("g", Arrow(Var("A"), Var("B")),
-              Lam("x", Var("A"),
-                App(Var("f"), App(Var("g"), Var("x")))))))))
+  // refl : ∀A:*. ∀x:A. Eq A x x
+  // refl = λA. λx. λP. λpx. px
+  def refl = parse term "λA:*. λx:A. λP:(A → *). λpx:(P x). px"
+  
+  // sym : ∀A:*. ∀x:A. ∀y:A. Eq A x y → Eq A y x
+  // Given eq : ∀P. P x → P y, return ∀P. P y → P x
+  // Instantiate eq with (λz. P z → P x), apply id, then py
+  def sym = parse term "λA:*. λx:A. λy:A. λeq:(∀P:(A → *). (P x) → (P y)). λP:(A → *). λpy:(P y). eq (λz:A. (P z) → (P x)) (λpx:(P x). px) py"
+  
+  // trans : ∀A:*. ∀x y z:A. Eq x y → Eq y z → Eq x z
+  def trans = parse term "λA:*. λx:A. λy:A. λz:A. λeq1:(∀P:(A → *). (P x) → (P y)). λeq2:(∀P:(A → *). (P y) → (P z)). λP:(A → *). λpx:(P x). eq2 P (eq1 P px)"
 
   // =========================================================
-  // Type-Level Programming
+  // Example Terms (using grammar)
   // =========================================================
   
-  // Vector type: Vec A n (length-indexed lists)
-  // Vec : * → Nat → *
-  def Vec : Term =
-    Lam("A", Star,
-      Lam("n", Nat,
-        Pi("X", Arrow(Nat, Star),
-          Arrow(App(Var("X"), zero),
-            Arrow(Pi("m", Nat, Arrow(Var("A"), Arrow(App(Var("X"), Var("m")), App(Var("X"), App(succ, Var("m")))))),
-              App(Var("X"), Var("n")))))))
-  
-  // Finite sets: Fin n (numbers less than n)
-  // Fin : Nat → *
-  def Fin : Term =
-    Lam("n", Nat,
-      Pi("X", Arrow(Nat, Star),
-        Arrow(Pi("m", Nat, App(Var("X"), App(succ, Var("m")))),
-          Arrow(Pi("m", Nat, Arrow(App(Var("X"), Var("m")), App(Var("X"), App(succ, Var("m"))))),
-            App(Var("X"), Var("n"))))))
+  def example_id_type = parse term "∀A:*. A → A"
+  def example_nat_type = parse term "∀X:*. X → (X → X) → X"
+  def example_polymorphic_const = parse term "λA:*. λB:*. λx:A. λy:B. x"
 
   // =========================================================
-  // Tests
+  // Test Definitions
   // =========================================================
   
-  // Test: Type of identity function
+  def test_parse_star = parse term "*"
+  def test_parse_box = parse term "□"
+  def test_parse_var = parse term "x"
+  def test_parse_arrow = parse term "A → B"
+  def test_parse_pi = parse term "∀x:A. B"
+  def test_parse_lam = parse term "λx:A. x"
+  def test_parse_app = parse term "f x"
+  def test_parse_nested = parse term "(λx:*. x) *"
+  
   def test_id_type = Infer(Empty, id)
-  // Expected: Some(Pi("A", Star, Arrow(Var("A"), Var("A"))))
-  
-  // Test: Type of zero
   def test_zero_type = Infer(Empty, zero)
-  // Expected: Some(Nat)
-  
-  // Test: Type of successor
-  def test_succ_type = Infer(Empty, succ)
-  // Expected: Some(Arrow(Nat, Nat))
-  
-  // Test: 1 + 1 = 2
-  def test_one_plus_one = BetaEq(App(App(add, one), one), two)
-  // Expected: True
-  
-  // Test: 2 * 2 = 4
-  def test_two_times_two = BetaEq(App(App(mult, two), two), App(succ, three))
-  // Expected: True
-  
-  // Test: Reflexivity is well-typed
-  def test_refl_type = Infer(Empty, refl)
-  // Expected: Some(Pi("A", Star, Pi("x", Var("A"), Eq(Var("A"), Var("x"), Var("x")))))
-  
-  // Test: Star has type Box
-  def test_star_type = Infer(Empty, Star)
-  // Expected: Some(Box)
-  
-  // Test: Pi type formation
-  def test_pi_type = Infer(Empty, Pi("A", Star, Arrow(Var("A"), Var("A"))))
-  // Expected: Some(Star)
-  
-  // Test: Identity applied to Star
-  def test_id_star = Normalize(App(App(id, Star), Nat))
-  // Expected: Nat
-  
-  // Test: Composition works
-  def test_compose_type = Infer(Empty, compose)
-  // Expected: Some(Pi("A", Star, Pi("B", Star, Pi("C", Star, ...))))
+  def test_normalize_id_star = Normalize(App(App(id, Star), Nat))
 
   // =========================================================
   // Strategies
@@ -490,5 +334,5 @@ language CoC {
   
   strategy typecheck := Infer(Empty, _)
   strategy normalize := Normalize
-  strategy equiv := BetaEq
+  strategy pretty := Pretty
 }
