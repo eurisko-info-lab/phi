@@ -1,7 +1,9 @@
-package phi
+package phi.user
 
 import java.nio.file.{Files, Paths}
-import Val.*
+import phi.meta.*
+import phi.meta.Val.*
+import phi.phi.*
 
 /**
  * GenHello: Demonstrates the bootstrapping pipeline
@@ -116,6 +118,10 @@ $scalaCode
       
       case VCon(name, args) =>
         s"$name(${args.map(renderScala(_)).mkString(", ")})"
+      
+      case VStr(s) => s"\"$s\""
+      case VInt(n) => n.toString
+      case VList(elems) => s"List(${elems.map(renderScala(_)).mkString(", ")})"
   
   def extractString(v: Val): String = v match
     case VCon("StringLit", List(VCon("String", List(VCon(s, Nil))))) => s

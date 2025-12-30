@@ -1,6 +1,7 @@
-package phi
+package phi.phi
 
-import Val.*
+import phi.meta.*
+import phi.meta.Val.*
 
 /**
  * Minimal Grammar Interpreter - parses input according to grammar rules

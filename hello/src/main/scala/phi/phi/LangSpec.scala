@@ -1,6 +1,6 @@
-package phi
+package phi.phi
 
-import Val.*
+import phi.meta.Val.*
 
 /**
  * LangSpec: Language specification parsed from .phi files

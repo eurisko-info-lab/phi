@@ -1,6 +1,6 @@
-package phi
+package phi.meta
 
-import Val.*
+import phi.meta.Val.*
 
 /**
  * Minimal Syntax infrastructure for bidirectional parsing/printing

@@ -1,6 +1,7 @@
-package phi
+package phi.meta
 
-import Val.*
+import phi.phi.*
+import phi.meta.Val.*
 
 /**
  * Minimal Meta Interpreter - applies transform rules to values
@@ -71,6 +72,7 @@ class LangInterpreter(spec: LangSpec):
       case RuleGuard.IsConstructor(varName, conName) =>
         bindings.get(varName).exists {
           case VCon(n, _) => n == conName
+          case _ => false
         }
       case RuleGuard.Equals(_, _) => true
   

@@ -1,7 +1,7 @@
-package phi
+package phi.phi
 
 import scala.util.parsing.combinator.*
-import Val.*
+import phi.meta.Val.*
 
 /**
  * Minimal parser for .phi spec files

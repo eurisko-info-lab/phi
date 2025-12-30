@@ -20,6 +20,8 @@ language Phi {
   sort SyntaxArg      // Arguments in grammar results
   sort Xform          // Transform declarations
   sort Rule           // Transform rules
+  sort RuleCase       // Individual rule case
+  sort RuleGuard      // Guard conditions
   sort Pattern        // Meta-level patterns
 
   // ==========================================================================
@@ -34,13 +36,17 @@ language Phi {
   constructor ConstructorDecl : String → Type → Decl
   constructor GrammarDecl : String → List[SyntaxRule] → Decl
   constructor XformDecl : String → String → String → Decl
-  constructor RuleDecl : String → List[Pattern] → Decl
+  constructor RuleDecl : String → List[RuleCase] → Decl
 
   // ==========================================================================
   // Types
   // ==========================================================================
   constructor SortRef : String → Type
   constructor Arrow : Type → Type → Type
+  constructor ListOf : Type → Type
+  constructor Product : Type → Type → Type
+  constructor TypeApp : String → List[Type] → Type
+  constructor TypeVar : String → Type
 
   // ==========================================================================
   // Grammar Rules
@@ -49,19 +55,34 @@ language Phi {
   
   // Tokens
   constructor Literal : String → SyntaxToken
-  constructor NonTerm : String → SyntaxToken
+  constructor NonTerm : String → String → SyntaxToken   // name, modifier (*, +, ?)
   
   // Arguments
   constructor ArgRef : String → SyntaxArg
+  constructor ArgLit : String → SyntaxArg
+  constructor ArgStrLit : String → SyntaxArg
+  constructor ArgWrap : String → SyntaxArg → SyntaxArg
   constructor ArgCon : String → List[SyntaxArg] → SyntaxArg
+  constructor ArgHole : SyntaxArg
 
   // ==========================================================================
-  // Transform Patterns
+  // Transform Rules
+  // ==========================================================================
+  constructor Rule : String → List[RuleCase] → Rule
+  constructor Case : Pattern → Pattern → RuleCase
+  constructor CaseGuarded : Pattern → RuleGuard → Pattern → RuleCase
+  
+  // Guards
+  constructor IsConstructor : String → String → RuleGuard
+  constructor Equals : Pattern → Pattern → RuleGuard
+
+  // ==========================================================================
+  // Meta-level Patterns
   // ==========================================================================
   constructor PVar : String → Pattern
   constructor PCon : String → List[Pattern] → Pattern
   constructor PApp : Pattern → Pattern → Pattern
-  constructor RuleCase : Pattern → Pattern → Rule
+  constructor PSubst : Pattern → String → Pattern → Pattern
 
   // ==========================================================================
   // Grammar: Parse .phi files
@@ -82,6 +103,8 @@ language Phi {
   grammar type {
     IDENT => SortRef(IDENT)
     type "→" type => Arrow(type, type)
+    "List" "[" type "]" => ListOf(type)
+    type "×" type => Product(type, type)
   }
 
   grammar syntaxRule {
@@ -90,20 +113,32 @@ language Phi {
 
   grammar syntaxToken {
     STRING => Literal(STRING)
-    IDENT => NonTerm(IDENT)
+    IDENT => NonTerm(IDENT, "")
+    IDENT "*" => NonTerm(IDENT, "*")
+    IDENT "+" => NonTerm(IDENT, "+")
+    IDENT "?" => NonTerm(IDENT, "?")
   }
 
   grammar syntaxArg {
     IDENT => ArgRef(IDENT)
+    STRING => ArgStrLit(STRING)
     IDENT "(" syntaxArg* ")" => ArgCon(IDENT, syntaxArg)
+    "?" => ArgHole
   }
 
   grammar pattern {
     IDENT => PVar(IDENT)
     IDENT "(" pattern* ")" => PCon(IDENT, pattern)
+    pattern pattern => PApp(pattern, pattern)
   }
 
   grammar ruleCase {
-    pattern "↦" pattern => RuleCase(pattern, pattern)
+    pattern "↦" pattern => Case(pattern, pattern)
+    pattern "|" guard "↦" pattern => CaseGuarded(pattern, guard, pattern)
+  }
+  
+  grammar guard {
+    IDENT "is" IDENT => IsConstructor(IDENT, IDENT)
+    pattern "==" pattern => Equals(pattern, pattern)
   }
 }
