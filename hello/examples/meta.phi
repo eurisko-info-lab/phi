@@ -160,7 +160,7 @@ language Meta {
   
   // Application: evaluate both, apply
   rule Eval.app {
-    EApp(f, x) ↦ Apply(Eval.forward(f), Eval.forward(x))
+    EApp(func, arg) ↦ Apply(Eval.forward(func), Eval.forward(arg))
   }
   
   // Lambda: create closure
@@ -170,7 +170,7 @@ language Meta {
   
   // Match: evaluate scrutinee, try cases
   rule Eval.match {
-    EMatch(scrut, cases) ↦ TryCases(Eval.forward(scrut), cases, env)
+    EMatch(scrutinee, cases) ↦ TryCases(Eval.forward(scrutinee), cases, env)
   }
   
   // Let binding: evaluate value, extend env, evaluate body
@@ -180,17 +180,85 @@ language Meta {
   
   // Case clause (shouldn't be evaluated directly)
   rule Eval.case {
-    ECase(pat, body) ↦ Error("ECase evaluated directly")
+    ECase(pattern, body) ↦ Error("ECase evaluated directly")
   }
   
   // ==========================================================================
   // Show Rules (→ gen/Show.scala)
   // ==========================================================================
-  // NOTE: Val, Pat, Expr have grammars above, so their Show is derived from
-  // the grammar (bidirectional rendering). These explicit rules are only
-  // needed for sorts WITHOUT grammars, or to override grammar-derived rendering.
   
+  // --------------------------------------------------------------------------
+  // Val.show
+  // --------------------------------------------------------------------------
+  rule Show.vcon {
+    VCon(name, args) ↦ ShowCon(name, args)
+  }
+  
+  rule Show.vstr {
+    VStr(s) ↦ ShowStr(s)
+  }
+  
+  rule Show.vint {
+    VInt(n) ↦ Show.int(n)
+  }
+  
+  rule Show.vlist {
+    VList(elems) ↦ Concat("[", Show.join(elems, ", "), "]")
+  }
+  
+  // --------------------------------------------------------------------------
+  // Pat.show
+  // --------------------------------------------------------------------------
+  rule Show.pvar {
+    PVar(name) ↦ name
+  }
+  
+  rule Show.pcon {
+    PCon(name, args) ↦ ShowCon(name, args)
+  }
+  
+  rule Show.pwild {
+    PWild ↦ "_"
+  }
+  
+  rule Show.plit {
+    PLit(value) ↦ Show.forward(value)
+  }
+  
+  // --------------------------------------------------------------------------
+  // Expr.show
+  // --------------------------------------------------------------------------
+  rule Show.evar {
+    EVar(name) ↦ name
+  }
+  
+  rule Show.econ {
+    ECon(name, args) ↦ ShowCon(name, args)
+  }
+  
+  rule Show.eapp {
+    EApp(func, arg) ↦ Concat("(", Show.forward(func), " ", Show.forward(arg), ")")
+  }
+  
+  rule Show.elam {
+    ELam(param, body) ↦ Concat("λ", param, ". ", Show.forward(body))
+  }
+  
+  rule Show.elet {
+    ELet(name, value, body) ↦ Concat("let ", name, " = ", Show.forward(value), " in ", Show.forward(body))
+  }
+  
+  rule Show.ematch {
+    EMatch(scrutinee, cases) ↦ Concat("match ", Show.forward(scrutinee), " { ", Show.join(cases, "; "), " }")
+  }
+  
+  rule Show.ecase {
+    ECase(pattern, body) ↦ Concat(Show.forward(pattern), " => ", Show.forward(body))
+  }
+  
+  // --------------------------------------------------------------------------
   // Env.show (no grammar for Env)
+  // --------------------------------------------------------------------------
   rule Show.emptyenv {
     EmptyEnv ↦ "{}"
   }
@@ -199,237 +267,14 @@ language Meta {
     Bind(name, value, rest) ↦ Concat("{", name, " -> ", Show.forward(value), ", ", Show.forward(rest), "}")
   }
   
+  // --------------------------------------------------------------------------
   // Result.show (no grammar for Result)
+  // --------------------------------------------------------------------------
   rule Show.ok {
     ROk(val, env) ↦ Concat("ROk(", Show.forward(val), ", ", Show.forward(env), ")")
   }
   
   rule Show.fail {
     RFail ↦ "RFail"
-  }
-  
-  // ==========================================================================
-  // Code Generation: Xform → ScalaFile (per-file xforms)
-  // ==========================================================================
-  // Each semantic xform (Eval, Match, Show, Subst) has a corresponding
-  // generator xform that builds the Scala AST. GenMeta orchestrates:
-  //   1. Apply GenEval to Eval xform → ScalaFile AST
-  //   2. Render via scala.phi grammar → String
-  //   3. Write to file
-  
-  // GenEval: Eval xform → gen/Eval.scala
-  xform GenEval : Xform ⇄ ScalaFile
-  
-  rule GenEval.file {
-    Xform("Eval", params, srcType, tgtType, rules) ↦ 
-      ScalaPackage("phi.meta.gen", List(
-        ScalaImport("phi.meta.{Val, Env, Pat, Expr, Result}"),
-        ScalaImport("Expr.*"),
-        ScalaObject("Eval", GenEval.members(rules))
-      ))
-  }
-  
-  rule GenEval.members {
-    rules ↦ Cons(
-      GenEval.dispatch(rules),
-      GenEval.extensions(rules)
-    )
-  }
-  
-  rule GenEval.dispatch {
-    rules ↦ ExtensionOn("e", "Expr", List(
-      DispatchDef("eval", Param("env", "Env"), TypeName("Val"), "e", GenEval.cases(rules))
-    ))
-  }
-  
-  rule GenEval.cases {
-    Cons(Rule(name, cases), rest) ↦ Cons(
-      GenEval.oneCase(name, cases),
-      GenEval.cases(rest)
-    )
-  }
-  
-  rule GenEval.cases {
-    Nil ↦ Nil
-  }
-  
-  // oneCase receives Args(name, cases) where cases = Cons(RuleCase(pat, body), Nil)
-  // pat is the pattern like PCon("EVar", Cons(PVar("name"), Nil))
-  // We extract the constructor name from the pattern
-  rule GenEval.oneCase {
-    Args(name, Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
-      TypeCase("e", conName, Call(GenEval.methodName(name), List(Ident("env"))))
-  }
-  
-  // methodName: "Eval.var" → "evalVar"  
-  rule GenEval.methodName {
-    name ↦ name  // TODO: proper name transformation
-  }
-  
-  rule GenEval.extensions {
-    Cons(Rule(name, cases), rest) ↦ Cons(
-      GenEval.extension(name, cases),
-      GenEval.extensions(rest)
-    )
-  }
-  
-  rule GenEval.extensions {
-    Nil ↦ Nil
-  }
-  
-  // extension receives Args(name, cases)
-  rule GenEval.extension {
-    Args(name, Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
-      ExtensionOn("e", conName, List(
-        DefMethod(GenEval.methodName(name), Param("env", "Env"), TypeName("Val"),
-                  Placeholder)
-      ))
-  }
-  
-  // GenMatch: Match xform → gen/Match.scala
-  xform GenMatch : Xform ⇄ ScalaFile
-  
-  rule GenMatch.file {
-    Xform("Match", params, srcType, tgtType, rules) ↦ 
-      ScalaPackage("phi.meta.gen", List(
-        ScalaImport("phi.meta.{Val, Env, Pat, Expr, Result}"),
-        ScalaImport("Pat.*"),
-        ScalaObject("Match", GenMatch.members(rules))
-      ))
-  }
-  
-  rule GenMatch.members {
-    rules ↦ Cons(
-      GenMatch.dispatch(rules),
-      GenMatch.extensions(rules)
-    )
-  }
-  
-  rule GenMatch.dispatch {
-    rules ↦ ExtensionOn("p", "Pat", List(
-      DispatchDef("matchWith", Param("value", "Val"), TypeName("Result"), "p", GenMatch.cases(rules))
-    ))
-  }
-  
-  rule GenMatch.cases {
-    Cons(Rule(name, cases), rest) ↦ Cons(
-      GenMatch.oneCase(name, cases),
-      GenMatch.cases(rest)
-    )
-  }
-  
-  rule GenMatch.cases {
-    Nil ↦ Nil
-  }
-  
-  // oneCase extracts constructor name from the pattern
-  rule GenMatch.oneCase {
-    Args(name, Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
-      TypeCase("p", conName, Call(GenMatch.methodName(name), List(Ident("value"))))
-  }
-  
-  rule GenMatch.methodName {
-    name ↦ name
-  }
-  
-  rule GenMatch.extensions {
-    Cons(Rule(name, cases), rest) ↦ Cons(
-      GenMatch.extension(name, cases),
-      GenMatch.extensions(rest)
-    )
-  }
-  
-  rule GenMatch.extensions {
-    Nil ↦ Nil
-  }
-  
-  // extension for specific pattern type
-  rule GenMatch.extension {
-    Args(name, Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
-      ExtensionOn("p", conName, List(
-        DefMethod(GenMatch.methodName(name), Param("value", "Val"), TypeName("Result"),
-                  Placeholder)
-      ))
-  }
-  
-  // GenShow: Show xform → gen/Show.scala  
-  xform GenShow : Xform ⇄ ScalaFile
-  
-  rule GenShow.file {
-    Xform("Show", params, srcType, tgtType, rules) ↦ 
-      ScalaPackage("phi.meta.gen", List(
-        ScalaImport("phi.meta.{Val, Env, Pat, Expr, Result}"),
-        ScalaObject("Show", GenShow.members(rules))
-      ))
-  }
-  
-  rule GenShow.members {
-    rules ↦ Cons(
-      GenShow.dispatch(rules),
-      GenShow.extensions(rules)
-    )
-  }
-  
-  rule GenShow.cases {
-    Cons(Rule(name, cases), rest) ↦ Cons(
-      GenShow.oneCase(name, cases),
-      GenShow.cases(rest)
-    )
-  }
-  
-  rule GenShow.cases {
-    Nil ↦ Nil
-  }
-  
-  rule GenShow.extensions {
-    Cons(Rule(name, cases), rest) ↦ Cons(
-      GenShow.extension(name, cases),
-      GenShow.extensions(rest)
-    )
-  }
-  
-  rule GenShow.extensions {
-    Nil ↦ Nil
-  }
-  
-  // GenSubst: Subst xform → gen/Subst.scala
-  xform GenSubst : Xform ⇄ ScalaFile
-  
-  rule GenSubst.file {
-    Xform("Subst", params, srcType, tgtType, rules) ↦ 
-      ScalaPackage("phi.meta.gen", List(
-        ScalaImport("phi.meta.{Val, Env, Pat, Expr, Result}"),
-        ScalaImport("Expr.*"),
-        ScalaObject("Subst", GenSubst.members(rules))
-      ))
-  }
-  
-  rule GenSubst.members {
-    rules ↦ Cons(
-      GenSubst.dispatch(rules),
-      GenSubst.extensions(rules)
-    )
-  }
-  
-  rule GenSubst.cases {
-    Cons(Rule(name, cases), rest) ↦ Cons(
-      GenSubst.oneCase(name, cases),
-      GenSubst.cases(rest)
-    )
-  }
-  
-  rule GenSubst.cases {
-    Nil ↦ Nil
-  }
-  
-  rule GenSubst.extensions {
-    Cons(Rule(name, cases), rest) ↦ Cons(
-      GenSubst.extension(name, cases),
-      GenSubst.extensions(rest)
-    )
-  }
-  
-  rule GenSubst.extensions {
-    Nil ↦ Nil
   }
 }

@@ -2,6 +2,8 @@ package phi.meta
 
 import phi.phi.*
 import phi.meta.Val.*
+import phi.meta.gen.Show.show
+import phi.meta.gen.Interp  // Use generated pattern matching and substitution
 
 /**
  * Minimal Meta Interpreter - applies transform rules to values
@@ -11,11 +13,9 @@ class LangInterpreter(spec: LangSpec):
   /** Apply a named xform rule to a value */
   def applyXform(xformName: String, value: Val): Option[Val] =
     // Look for rules matching this xform name (e.g., "Greeting2Scala.hello")
-    val matchingRules = spec.rules.filter(_.name.startsWith(xformName + "."))
-    if matchingRules.nonEmpty then
-      matchingRules.foldLeft[Option[Val]](None) { (acc, rule) =>
-        acc.orElse(applyRule(rule, value))
-      }
+    val rules = spec.rules.filter(_.name.startsWith(xformName + "."))
+    if rules.nonEmpty then
+      applyRules(rules, value)
     else
       // Try to find a direct match
       spec.rules.find(_.name == xformName).flatMap { rule =>
@@ -45,36 +45,11 @@ class LangInterpreter(spec: LangSpec):
       else None
     }
   
-  private def showVal(v: Val): String = v match
-    case VStr(s) => s"\"$s\""
-    case VCon(n, Nil) => n
-    case VCon(n, args) => s"$n(${args.map(showVal).take(2).mkString(", ")}${if args.size > 2 then ", ..." else ""})"
-    case _ => v.toString.take(50)
+  private def showVal(v: Val): String = v.show
   
+  // Use generated matchPattern from gen/Interp
   private def matchPattern(pattern: MetaPattern, value: Val): Option[Map[String, Val]] =
-    pattern match
-      case MetaPattern.PVar(name) =>
-        Some(Map(name -> value))
-      
-      case MetaPattern.PCon(name, args) =>
-        value match
-          case VCon(vname, vargs) if vname == name && args.length == vargs.length =>
-            args.zip(vargs).foldLeft[Option[Map[String, Val]]](Some(Map.empty)) {
-              case (Some(bindings), (pat, v)) =>
-                matchPattern(pat, v).map(bindings ++ _)
-              case (None, _) => None
-            }
-          // String literal pattern matches VStr
-          case VStr(s) if args.isEmpty && name == s =>
-            Some(Map.empty)
-          case _ => None
-      
-      case MetaPattern.PApp(func, arg) =>
-        // Handle app patterns if needed
-        None
-      
-      case MetaPattern.PSubst(_, _, _) =>
-        None
+    Interp.matchPattern(pattern, value)
   
   private def checkGuard(guard: RuleGuard, bindings: Map[String, Val]): Boolean =
     guard match
@@ -83,19 +58,26 @@ class LangInterpreter(spec: LangSpec):
           case VCon(n, _) => n == conName
           case _ => false
         }
-      case RuleGuard.Equals(_, _) => true
+      case RuleGuard.Equals(lhs, rhs) =>
+        // Substitute both sides and compare
+        val lhsVal = substitute(lhs, bindings)
+        val rhsVal = substitute(rhs, bindings)
+        lhsVal == rhsVal
   
+  // Use generated substitute from gen/Interp, but extend with rule/xform handling
   private def substitute(expr: MetaPattern, bindings: Map[String, Val]): Val =
     expr match
-      case MetaPattern.PVar(name) =>
-        bindings.getOrElse(name, VCon(name, Nil))
-      
       case MetaPattern.PCon(name, args) =>
         // Check if this is a rule reference that should be recursively applied
         val transformedArgs = args.map(substitute(_, bindings))
         
+        // Handle StrConcat: meta-level string concatenation evaluated at substitution time
+        // Only treat as StrConcat operation if there are arguments to concatenate
+        if name == "StrConcat" && args.nonEmpty then
+          val concatenated = transformedArgs.map(Interp.extractString).mkString
+          VStr(concatenated)
         // Handle xform.forward references like Name2Scala.forward(name)
-        if name.contains(".forward") then
+        else if name.contains(".forward") then
           val xformName = name.replace(".forward", "")
           transformedArgs match
             case List(arg) =>
@@ -125,18 +107,5 @@ class LangInterpreter(spec: LangSpec):
             case _ =>
               VCon(name, transformedArgs)
       
-      case MetaPattern.PApp(func, arg) =>
-        // Handle application patterns like XformName.forward(arg)
-        val argVal = substitute(arg, bindings)
-        func match
-          case MetaPattern.PCon(name, Nil) if name.endsWith(".forward") =>
-            val xformName = name.dropRight(8)
-            applyXform(xformName, argVal).getOrElse(VCon(name, List(argVal)))
-          case _ =>
-            val funcVal = substitute(func, bindings)
-            VCon("App", List(funcVal, argVal))
-      
-      case MetaPattern.PSubst(body, varName, replacement) =>
-        val replacementVal = substitute(replacement, bindings)
-        val newBindings = bindings + (varName -> replacementVal)
-        substitute(body, newBindings)
+      // Delegate other cases to generated Interp.substitute
+      case _ => Interp.substitute(expr, bindings)

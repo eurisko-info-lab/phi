@@ -1,9 +1,10 @@
 package phi.user
 
-import java.nio.file.{Files, Paths}
+import java.nio.file.{Files, Paths, Path}
 import phi.phi.*
 import phi.meta.{Val, LangInterpreter}
 import phi.meta.Val.*
+import GenBase.*
 
 // GenMeta: Generate gen/*.scala from meta.phi
 // 
@@ -11,87 +12,75 @@ import phi.meta.Val.*
 //   xform Eval(env: Env) : Expr ⇄ Val → gen/Eval.scala (via GenEval xform)
 //
 // Pipeline:
-//   1. Parse meta.phi → LangSpec (includes Gen* xforms)
-//   2. For each semantic xform: apply corresponding Gen* xform → ScalaFile AST
-//   3. Render ScalaFile AST via scala.phi grammar → String
-//   4. Write to file
-//
-// GenMeta knows nothing about Scala - it just orchestrates xform calls.
-// All Scala-specific knowledge is in the Gen* rules in meta.phi.
+//   1. Parse meta.phi → LangSpec (semantic definitions)
+//   2. Parse meta2scala.phi → LangSpec (Gen* code generators)
+//   3. For each semantic xform: apply corresponding Gen* xform → ScalaFile AST
+//   4. Render ScalaFile AST via scala.phi grammar → String
+//   5. Compare with existing hand-crafted code (if any) and ask user to confirm
+//   6. Write to file (if confirmed or no existing file)
 object GenMeta:
   
-  // Maps semantic xforms to their generators
-  val generators = Map(
-    "Eval"  -> "GenEval",
-    "Match" -> "GenMatch", 
-    "Show"  -> "GenShow",
-    "Subst" -> "GenSubst"
+  // Maps semantic xforms to their generators (per-xform)
+  val perXformGenerators = Map(
+    "Eval"   -> "GenEval",
+    "Match"  -> "GenMatch", 
+    "Show"   -> "GenShow"
   )
+  
+  // Generators that work on the full spec (not per-xform)
+  val specLevelGenerators = Map(
+    "Interp" -> "GenInterp"
+  )
+  
+  // Combined for backwards compat
+  val generators = perXformGenerators ++ specLevelGenerators
+  
+  // Hand-crafted source directory
+  val handCraftedDir = Paths.get("src/main/scala/phi/meta/gen")
+  
+  // Generated output directory  
+  val generatedDir = Paths.get("tmp/gen")
 
   def main(args: Array[String]): Unit =
-    println("=" * 60)
-    println("GenMeta: Generating gen/*.scala from meta.phi")
-    println("=" * 60)
+    parseArgs(args)
+    banner("GenMeta: Generating gen/*.scala from meta.phi")
     
-    val metaSrc = Files.readString(Paths.get("examples/meta.phi"))
-    val metaSpec = PhiParser.parseSpec(metaSrc) match
-      case Right(s) => s
-      case Left(err) => println(s"Parse error: $err"); return
-        
-    val scalaSrc = Files.readString(Paths.get("examples/scala.phi"))
-    val scalaSpec = PhiParser.parseSpec(scalaSrc) match
-      case Right(s) => s
-      case Left(err) => println(s"Parse error: $err"); return
+    // Load specs
+    val metaSpec = loadSpecOrDie("examples/meta.phi", "meta.phi")
+    val meta2scalaSpec = loadSpecOrDie("examples/meta2scala.phi", "meta2scala.phi")
+    val scalaSpec = loadSpecOrDie("examples/scala.phi", "scala.phi")
     
-    val interpreter = LangInterpreter(metaSpec)
+    val interpreter = LangInterpreter(meta2scalaSpec)
     val renderer = GrammarInterp.specParser(scalaSpec)
-    val outputDir = Paths.get("tmp/gen")
-    if !Files.exists(outputDir) then Files.createDirectories(outputDir)
     
     // Generate a file for each semantic xform that has a generator
     for 
       xform <- metaSpec.xforms 
-      genName <- generators.get(xform.name)
+      genName <- perXformGenerators.get(xform.name)
     do
-      println(s"\nGenerating ${xform.name}.scala via $genName...")
+      info(s"\nGenerating ${xform.name}.scala via $genName...")
       val xformVal = xformToVal(metaSpec, xform)
       interpreter.applyXform(genName, xformVal) match
         case Some(ast) =>
-          val code = renderer.render("scalaFile", ast)
-          Files.writeString(outputDir.resolve(s"${xform.name}.scala"), code)
-          println(s"    Written to: tmp/gen/${xform.name}.scala")
+          if dumpAst then detail(s"AST: ${ast.toString.take(3000)}")
+          val code = renderer.render("scalaFile", ast) + "\n"
+          val fileName = s"${xform.name}.scala"
+          writeWithDiff(code, fileName, handCraftedDir, generatedDir)
         case None =>
-          println(s"    Warning: $genName rules did not match")
+          warning(s"$genName rules did not match")
     
-    println("\n" + "=" * 60)
-    println("Generation complete!")
-    println("=" * 60)
-
-  /** Convert Xform case class to Val representation */
-  def xformToVal(spec: LangSpec, xform: Xform): Val =
-    val rules = spec.rules.filter(_.name.startsWith(s"${xform.name}."))
-    VCon("Xform", List(
-      VStr(xform.name),
-      toCons(xform.params.map { case (n, t) => VCon("Param", List(VStr(n), VStr(t))) }),
-      VStr(xform.srcType),
-      VStr(xform.tgtType),
-      toCons(rules.map(ruleToVal))
-    ))
-  
-  /** Convert Scala List to Cons/Nil Val representation */
-  def toCons(list: List[Val]): Val = list match
-    case Nil => VCon("Nil", Nil)
-    case head :: tail => VCon("Cons", List(head, toCons(tail)))
-  
-  /** Convert Rule to Val */
-  def ruleToVal(rule: Rule): Val =
-    VCon("Rule", List(
-      VStr(rule.name),
-      toCons(rule.cases.map(c => VCon("RuleCase", List(patternToVal(c.pattern), patternToVal(c.body)))))
-    ))
-  
-  def patternToVal(p: MetaPattern): Val = p match
-    case MetaPattern.PVar(n) => VCon("PVar", List(VStr(n)))
-    case MetaPattern.PCon(n, args) => VCon("PCon", List(VStr(n), toCons(args.map(patternToVal))))
-    case MetaPattern.PApp(f, a) => VCon("PApp", List(patternToVal(f), patternToVal(a)))
-    case MetaPattern.PSubst(b, v, r) => VCon("PSubst", List(patternToVal(b), VStr(v), patternToVal(r)))
+    // Generate spec-level files (like Interp which iterates all xforms)
+    for (fileName, genName) <- specLevelGenerators do
+      info(s"\nGenerating $fileName.scala via $genName...")
+      import phi.phi.gen.ToVal.*
+      val specVal = metaSpec.toVal
+      interpreter.applyXform(genName, specVal) match
+        case Some(ast) =>
+          if dumpAst then detail(s"AST: ${ast.toString.take(3000)}")
+          val code = renderer.render("scalaFile", ast) + "\n"
+          writeWithDiff(code, s"$fileName.scala", handCraftedDir, generatedDir)
+        case None =>
+          warning(s"$genName rules did not match")
+    
+    info("")
+    banner("Generation complete!")

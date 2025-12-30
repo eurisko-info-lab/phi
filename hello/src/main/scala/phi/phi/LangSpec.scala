@@ -1,7 +1,5 @@
 package phi.phi
 
-import phi.meta.Val.*
-
 /**
  * LangSpec: Language specification parsed from .phi files
  */

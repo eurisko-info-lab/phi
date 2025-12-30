@@ -1,239 +1,1463 @@
 // =============================================================================
-// Meta: Bootstrap Transform - Phi to Scala Implementation
+// Phi2Scala: Generate Scala code from Phi language specifications
 // =============================================================================
-// This spec defines how to compile a Phi language spec into a working
-// Scala implementation. It's the key to bootstrapping: phi.phi + meta.phi
-// can generate the Scala code that interprets phi.phi.
+// This transforms phi.phi (the meta-language spec) into Scala source code.
+// GenRender generates phi.phi.gen/Render.scala for pretty printing LangSpec.
+// GenToVal generates phi.phi.gen/ToVal.scala for converting to Val representation.
+//
+// GenPhi orchestrates:
+//   1. Load phi.phi (language spec definitions)
+//   2. Load phi2scala.phi (this file - code generators)
+//   3. Apply GenRender → ScalaFile AST
+//   4. Apply GenToVal → ScalaFile AST
+//   5. Render via scala.phi grammar → String
+//   6. Write to phi.phi.gen/*.scala
 
-language Meta {
+language Phi2Scala {
   // ==========================================================================
-  // Input Sorts (from Phi)
+  // Input Sorts (from phi.phi)
   // ==========================================================================
-  sort Spec
-  sort Decl
-  sort Sort
-  sort Constructor
-  sort Type
-  sort Grammar
-  sort SyntaxRule
-  sort SyntaxToken
-  sort SyntaxArg
-  sort Xform
-  sort Rule
-  sort Pattern
+  sort Spec           // LangSpec
+  sort Sort           // Sort declaration
+  sort Constructor    // Constructor with types
+  sort LangType       // Type expressions
+  sort Grammar        // Grammar with rules  
+  sort SyntaxRule     // Individual syntax rules
+  sort SyntaxToken    // Literal | NonTerm
+  sort SyntaxArg      // ArgRef | ArgCon | ArgLit | etc
+  sort Xform          // Transform declaration
+  sort Rule           // Transform rule
+  sort RuleCase       // Pattern ↦ body
 
   // ==========================================================================
-  // Output Sorts (Scala AST)
+  // Output Sorts (Scala AST - shared with meta2scala.phi)
   // ==========================================================================
   sort ScalaFile
   sort ScalaDecl
-  sort ScalaStmt
   sort ScalaExpr
-  sort ScalaPat
+  sort ScalaStmt
   sort ScalaType
   sort ScalaCase
 
   // ==========================================================================
-  // Input Constructors (from Phi)
-  // ==========================================================================
-  constructor LangSpec : String → List[Decl] → Spec
-  constructor SortDecl : String → Decl
-  constructor ConstructorDecl : String → Type → Decl
-  constructor GrammarDecl : String → List[SyntaxRule] → Decl
-  constructor XformDecl : String → String → String → Decl
-  constructor RuleDecl : String → List[Pattern] → Decl
-  constructor SortRef : String → Type
-  constructor Arrow : Type → Type → Type
-  constructor SynRule : List[SyntaxToken] → SyntaxArg → SyntaxRule
-  constructor Literal : String → SyntaxToken
-  constructor NonTerm : String → SyntaxToken
-  constructor ArgRef : String → SyntaxArg
-  constructor ArgCon : String → List[SyntaxArg] → SyntaxArg
-  constructor PVar : String → Pattern
-  constructor PCon : String → List[Pattern] → Pattern
-  constructor RuleCase : Pattern → Pattern → Rule
-
-  // ==========================================================================
-  // Output Constructors (Scala AST)
-  // ==========================================================================
-  // File structure
-  constructor Package : String → List[ScalaDecl] → ScalaFile
-  
-  // Declarations
-  constructor ObjectDecl : String → List[ScalaDecl] → ScalaDecl
-  constructor EnumDecl : String → List[ScalaDecl] → ScalaDecl
-  constructor CaseDecl : String → List[ScalaType] → ScalaDecl
-  constructor DefDecl : String → List[ScalaType] → ScalaType → ScalaExpr → ScalaDecl
-  constructor ValDecl : String → ScalaExpr → ScalaDecl
-  
-  // Types
-  constructor TypeRef : String → ScalaType
-  constructor TypeApp : String → List[ScalaType] → ScalaType
-  constructor FuncType : ScalaType → ScalaType → ScalaType
-  
-  // Expressions
-  constructor Var : String → ScalaExpr
-  constructor App : ScalaExpr → List[ScalaExpr] → ScalaExpr
-  constructor Lambda : String → ScalaExpr → ScalaExpr
-  constructor Match : ScalaExpr → List[ScalaCase] → ScalaExpr
-  constructor Block : List[ScalaStmt] → ScalaExpr
-  constructor StringLit : String → ScalaExpr
-  constructor ListExpr : List[ScalaExpr] → ScalaExpr
-  constructor MapExpr : List[ScalaExpr] → ScalaExpr
-  constructor If : ScalaExpr → ScalaExpr → ScalaExpr → ScalaExpr
-  
-  // Patterns
-  constructor PatVar : String → ScalaPat
-  constructor PatCon : String → List[ScalaPat] → ScalaPat
-  constructor PatWild : ScalaPat
-  
-  // Case clause
-  constructor CaseClause : ScalaPat → ScalaExpr → ScalaCase
-
-  // ==========================================================================
   // Transforms
   // ==========================================================================
-  xform Spec2Scala : Spec ⇄ ScalaFile
-  xform Decl2Scala : Decl ⇄ ScalaDecl
-  xform Type2Scala : Type ⇄ ScalaType
-  xform Pattern2Match : Pattern ⇄ ScalaPat
-  xform Pattern2Build : Pattern ⇄ ScalaExpr
-  xform SyntaxRule2Parser : SyntaxRule ⇄ ScalaExpr
-  xform SyntaxArg2Builder : SyntaxArg ⇄ ScalaExpr
+  xform GenRender : Spec ⇄ ScalaFile
+  xform GenToVal : Spec ⇄ ScalaFile
+  xform GenFold : Spec ⇄ ScalaFile
+  xform GenValidate : Spec ⇄ ScalaFile
+  xform GenParser : Spec ⇄ ScalaFile
+  xform GenInterp : Spec ⇄ ScalaFile
 
   // ==========================================================================
-  // Rules: Spec → Scala Package
+  // GenRender: LangSpec → phi.phi.gen/Render.scala
   // ==========================================================================
+  // Generates pretty printing extension methods for all phi.phi types
   
-  // A language spec becomes a Scala package with:
-  // - LangSpec case class
-  // - Val enum
-  // - Parser object
-  // - Interpreter class
-  rule Spec2Scala.langSpec {
-    LangSpec(name, decls) ↦ 
-      Package(StringLit("phi"), ListExpr(
-        // enum Val { case VCon(name: String, args: List[Val]) }
-        EnumDecl(StringLit("Val"), ListExpr(
-          CaseDecl(StringLit("VCon"), ListExpr(TypeRef(StringLit("String")), 
-                                                TypeApp(StringLit("List"), ListExpr(TypeRef(StringLit("Val"))))))
-        )),
-        // case class LangSpec(...)
-        Decl2Scala.forward(decls)
+  rule GenRender.file {
+    LangSpec(name, sorts, constructors, grammars, xforms, rules) ↦ 
+      ScalaPackage("phi.phi.gen", List(
+        ScalaImport("phi.phi.*"),
+        BlankDecl,
+        DeclDocComment("Render: Pretty printing for phi.phi AST types (generated from phi.phi)",
+          ScalaObject("Render", GenRender.members(constructors, grammars)))
       ))
   }
-
-  // ==========================================================================
-  // Rules: Sort → Scala Type Alias (comment only, sorts are semantic)
-  // ==========================================================================
-  rule Decl2Scala.sort {
-    SortDecl(name) ↦ 
-      ValDecl(StringConcat(StringLit("// sort "), Var(name)), Var(StringLit("()")))
+  
+  // Members: extensions for each type
+  rule GenRender.members {
+    Args(constructors, grammars) ↦ GenRender.concat(
+      GenRender.specExtensions,
+      GenRender.concat(
+        GenRender.typeExtensions,
+        GenRender.concat(
+          GenRender.syntaxExtensions,
+          GenRender.concat(
+            GenRender.xformExtensions,
+            GenRender.ruleExtensions
+          )
+        )
+      )
+    )
+  }
+  
+  // Concatenate two lists
+  rule GenRender.concat {
+    Args(Nil, ys) ↦ ys
+  }
+  rule GenRender.concat {
+    Args(Cons(x, xs), ys) ↦ Cons(x, GenRender.concat(Args(xs, ys)))
   }
 
   // ==========================================================================
-  // Rules: Constructor → Pattern Match Case
+  // LangSpec.show extension
   // ==========================================================================
-  rule Decl2Scala.constructor {
-    ConstructorDecl(name, ty) ↦
-      DefDecl(Var(name), Type2Scala.forward(ty), TypeRef(StringLit("Val")),
-        Lambda(StringLit("args"), 
-          App(Var(StringLit("VCon")), ListExpr(Var(name), Var(StringLit("args"))))))
+  // Note: Using BinOp concatenation since string interpolation with escapes 
+  // is not supported by the Phi parser. The generated code will use s"..." form.
+  rule GenRender.specExtensions {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== LangSpec.show ==========",
+          ExtensionOn("spec", "LangSpec", List(
+            DefMethod0("show", TypeName("String"),
+              LetIn("decls",
+                BinOp(
+                  BinOp(
+                    BinOp(
+                      BinOp(
+                        MethodCall(MethodCall(FieldAccess(Ident("spec"), "sorts"), "map", List(FieldAccess(Ident("_"), "show"))), "map", List(Lambda("s", BinOp(StrLit("  "), "++", Ident("s"))))),
+                        "++", MethodCall(MethodCall(FieldAccess(Ident("spec"), "constructors"), "map", List(FieldAccess(Ident("_"), "show"))), "map", List(Lambda("s", BinOp(StrLit("  "), "++", Ident("s")))))
+                      ),
+                      "++", MethodCall(MethodCall(MethodCall0(FieldAccess(Ident("spec"), "grammars"), "toList"), "map", List(Lambda("g", Call("showGrammar", List(FieldAccess(Ident("g"), "_1"), FieldAccess(Ident("g"), "_2")))))), "map", List(Lambda("s", BinOp(StrLit("  "), "++", Ident("s")))))
+                    ),
+                    "++", MethodCall(MethodCall(FieldAccess(Ident("spec"), "xforms"), "map", List(FieldAccess(Ident("_"), "show"))), "map", List(Lambda("s", BinOp(StrLit("  "), "++", Ident("s")))))
+                  ),
+                  "++", MethodCall(MethodCall(FieldAccess(Ident("spec"), "rules"), "map", List(FieldAccess(Ident("_"), "show"))), "map", List(Lambda("s", BinOp(StrLit("  "), "++", Ident("s")))))
+                ),
+                BinOp(BinOp(BinOp(BinOp(StrLit("language "), "++", FieldAccess(Ident("spec"), "name")), "++", StrLit(" {")), "++", NL), "++",
+                  BinOp(MethodCall(Ident("decls"), "mkString", List(NL)), "++", BinOp(NL, "++", StrLit("}"))))
+              )
+            )
+          ))
+        ),
+        Cons(
+          BlankLine,
+          Cons(
+            Comment("========== Sort.show ==========",
+              ExtensionOn("sort", "Sort", List(
+                DefMethod0("show", TypeName("String"),
+                  BinOp(StrLit("sort "), "++", FieldAccess(Ident("sort"), "name"))
+                )
+              ))
+            ),
+            Cons(
+              BlankLine,
+              Cons(
+                Comment("========== Constructor.show ==========",
+                  ExtensionOn("con", "Constructor", List(
+                    DefMethod0("show", TypeName("String"),
+                      LetIn("argTypes", MethodCall(FieldAccess(Ident("con"), "argTypes"), "map", List(FieldAccess(Ident("_"), "show"))),
+                        LetIn("typeStr",
+                          IfExpr(MethodCall0(Ident("argTypes"), "isEmpty"),
+                            FieldAccess(Ident("con"), "returnType"),
+                            BinOp(BinOp(MethodCall(Ident("argTypes"), "mkString", List(StrLit(" -> "))), "++", StrLit(" -> ")), "++", FieldAccess(Ident("con"), "returnType"))
+                          ),
+                          BinOp(BinOp(BinOp(StrLit("constructor "), "++", FieldAccess(Ident("con"), "name")), "++", StrLit(" : ")), "++", Ident("typeStr"))
+                        )
+                      )
+                    )
+                  ))
+                ),
+                Nil
+              )
+            )
+          )
+        )
+      )
+    )
   }
 
   // ==========================================================================
-  // Rules: Grammar → Parser Methods
+  // LangType.show extension
   // ==========================================================================
-  rule Decl2Scala.grammar {
-    GrammarDecl(name, rules) ↦
-      DefDecl(StringConcat(StringLit("parse_"), Var(name)),
-        ListExpr(TypeRef(StringLit("TokenStream"))),
-        TypeApp(StringLit("Either"), ListExpr(TypeRef(StringLit("String")), TypeRef(StringLit("Val")))),
-        Match(Var(StringLit("stream")), 
-              SyntaxRule2Parser.forward(rules)))
+  rule GenRender.typeExtensions {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== LangType.show ==========",
+          ExtensionOn("ty", "LangType", List(
+            DefMethod0("show", TypeName("String"),
+              MatchExpr(Ident("ty"), Cons(
+                PatCase("LangType.SortRef(name)", Ident("name")),
+                Cons(PatCase("LangType.Arrow(from, to)", BinOp(BinOp(MethodCall0(Ident("from"), "show"), "++", StrLit(" -> ")), "++", MethodCall0(Ident("to"), "show"))),
+                Cons(PatCase("LangType.ListOf(elem)", BinOp(BinOp(StrLit("List["), "++", MethodCall0(Ident("elem"), "show")), "++", StrLit("]"))),
+                Cons(PatCase("LangType.Product(left, right)", BinOp(BinOp(BinOp(BinOp(StrLit("("), "++", MethodCall0(Ident("left"), "show")), "++", StrLit(", ")), "++", MethodCall0(Ident("right"), "show")), "++", StrLit(")"))),
+                Cons(PatCase("LangType.TypeApp(name, args)", BinOp(BinOp(BinOp(Ident("name"), "++", StrLit("[")), "++", MethodCall(MethodCall(Ident("args"), "map", List(FieldAccess(Ident("_"), "show"))), "mkString", List(StrLit(", ")))), "++", StrLit("]"))),
+                Cons(PatCase("LangType.TypeVar(name)", Ident("name")),
+                Nil)))))
+              ))
+            )
+          ))
+        ),
+        Nil
+      )
+    )
   }
 
   // ==========================================================================
-  // Rules: SyntaxRule → Case Clause
+  // Syntax extensions (Grammar, SyntaxRule, SyntaxToken, SyntaxArg)
   // ==========================================================================
-  rule SyntaxRule2Parser.rule {
-    SynRule(tokens, result) ↦
-      CaseClause(PatWild, SyntaxArg2Builder.forward(result))
+  rule GenRender.syntaxExtensions {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Grammar helper ==========",
+          DefMethodN("showGrammar", List(Param("name", "String"), Param("rules", "List[SyntaxRule]")), TypeName("String"),
+            BinOp(BinOp(BinOp(BinOp(StrLit("grammar "), "++", Ident("name")), "++", StrLit(" {")), "++", NL), "++",
+              BinOp(MethodCall(MethodCall(Ident("rules"), "map", List(Lambda("r", BinOp(StrLit("    "), "++", MethodCall0(Ident("r"), "show"))))), "mkString", List(NL)), "++",
+                BinOp(NL, "++", StrLit("  }"))))
+          )
+        ),
+        Cons(
+          BlankLine,
+          Cons(
+            Comment("========== SyntaxRule.show ==========",
+              ExtensionOn("rule", "SyntaxRule", List(
+                DefMethod0("show", TypeName("String"),
+                  LetIn("pattern", MethodCall(MethodCall(FieldAccess(Ident("rule"), "pattern"), "map", List(FieldAccess(Ident("_"), "show"))), "mkString", List(StrLit(" "))),
+                    BinOp(BinOp(Ident("pattern"), "++", StrLit(" => ")), "++", MethodCall0(FieldAccess(Ident("rule"), "result"), "show"))
+                  )
+                )
+              ))
+            ),
+            Cons(
+              BlankLine,
+              Cons(
+                Comment("========== SyntaxToken.show ==========",
+                  ExtensionOn("tok", "SyntaxToken", List(
+                    DefMethod0("show", TypeName("String"),
+                      MatchExpr(Ident("tok"), Cons(
+                        PatCase("SyntaxToken.Literal(text)", BinOp(BinOp(DQuotLit, "++", Ident("text")), "++", DQuotLit)),
+                        Cons(PatCase("SyntaxToken.NonTerm(name, None)", Ident("name")),
+                        Cons(PatCase("SyntaxToken.NonTerm(name, Some(mod))", BinOp(Ident("name"), "++", Ident("mod"))),
+                        Nil))
+                      ))
+                    )
+                  ))
+                ),
+                Cons(
+                  BlankLine,
+                  Cons(
+                    Comment("========== SyntaxArg.show ==========",
+                      ExtensionOn("arg", "SyntaxArg", List(
+                        DefMethod0("show", TypeName("String"),
+                          MatchExpr(Ident("arg"), Cons(
+                            PatCase("SyntaxArg.Ref(name)", Ident("name")),
+                            Cons(PatCase("SyntaxArg.Lit(value)", Ident("value")),
+                            Cons(PatCase("SyntaxArg.StrLit(value)", BinOp(BinOp(DQuotLit, "++", Ident("value")), "++", DQuotLit)),
+                            Cons(PatCase("SyntaxArg.Wrap(wrapper, inner)", BinOp(BinOp(BinOp(Ident("wrapper"), "++", StrLit("(")), "++", MethodCall0(Ident("inner"), "show")), "++", StrLit(")"))),
+                            Cons(PatCase("SyntaxArg.Con(name, Nil)", Ident("name")),
+                            Cons(PatCase("SyntaxArg.Con(name, args)", BinOp(BinOp(BinOp(Ident("name"), "++", StrLit("(")), "++", MethodCall(MethodCall(Ident("args"), "map", List(FieldAccess(Ident("_"), "show"))), "mkString", List(StrLit(", ")))), "++", StrLit(")"))),
+                            Cons(PatCase("SyntaxArg.Hole", StrLit("?")),
+                            Nil))))))
+                          ))
+                        )
+                      ))
+                    ),
+                    Nil
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
   }
 
   // ==========================================================================
-  // Rules: SyntaxArg → Val Builder Expression
+  // Xform.show extension
   // ==========================================================================
-  rule SyntaxArg2Builder.ref {
-    ArgRef(name) ↦ 
-      App(Var(StringLit("bindings.get")), ListExpr(Var(name)))
-  }
-
-  rule SyntaxArg2Builder.con {
-    ArgCon(name, args) ↦
-      App(Var(StringLit("VCon")), 
-          ListExpr(Var(name), 
-                   App(Var(StringLit("List")), SyntaxArg2Builder.forward(args))))
-  }
-
-  // ==========================================================================
-  // Rules: Type → Scala Type
-  // ==========================================================================
-  rule Type2Scala.sortRef {
-    SortRef(name) ↦ TypeRef(StringLit("Val"))
-  }
-
-  rule Type2Scala.arrow {
-    Arrow(from, to) ↦ 
-      FuncType(Type2Scala.forward(from), Type2Scala.forward(to))
-  }
-
-  // ==========================================================================
-  // Rules: Pattern → Scala Pattern (for matching)
-  // ==========================================================================
-  rule Pattern2Match.var {
-    PVar(name) ↦ PatVar(Var(name))
-  }
-
-  rule Pattern2Match.con {
-    PCon(name, args) ↦ 
-      PatCon(StringConcat(StringLit("VCon"), 
-             StringConcat(StringLit("(\""), 
-             StringConcat(Var(name), StringLit("\", _)")))),
-             Pattern2Match.forward(args))
+  rule GenRender.xformExtensions {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Xform.show ==========",
+          ExtensionOn("xform", "Xform", List(
+            DefMethod0("show", TypeName("String"),
+              LetIn("paramsStr",
+                IfExpr(MethodCall0(FieldAccess(Ident("xform"), "params"), "isEmpty"),
+                  StrLit(""),
+                  BinOp(BinOp(StrLit("("), "++", MethodCall(MethodCall(FieldAccess(Ident("xform"), "params"), "map", List(Lambda("nt", BinOp(BinOp(FieldAccess(Ident("nt"), "_1"), "++", StrLit(": ")), "++", FieldAccess(Ident("nt"), "_2"))))), "mkString", List(StrLit(", ")))), "++", StrLit(")"))
+                ),
+                BinOp(BinOp(BinOp(BinOp(BinOp(BinOp(StrLit("xform "), "++", FieldAccess(Ident("xform"), "name")), "++", Ident("paramsStr")), "++", StrLit(" : ")), "++", FieldAccess(Ident("xform"), "srcType")), "++", StrLit(" <-> ")), "++", FieldAccess(Ident("xform"), "tgtType"))
+              )
+            )
+          ))
+        ),
+        Nil
+      )
+    )
   }
 
   // ==========================================================================
-  // Rules: Pattern → Scala Expression (for building)
+  // Rule, RuleCase, RuleGuard, MetaPattern extensions
   // ==========================================================================
-  rule Pattern2Build.var {
-    PVar(name) ↦ 
-      App(Var(StringLit("bindings")), ListExpr(Var(name)))
+  rule GenRender.ruleExtensions {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Rule.show ==========",
+          ExtensionOn("rule", "Rule", List(
+            DefMethod0("show", TypeName("String"),
+              MethodCall(MethodCall(FieldAccess(Ident("rule"), "cases"), "map", List(
+                Lambda("rc", BinOp(BinOp(BinOp(BinOp(BinOp(StrLit("rule "), "++", FieldAccess(Ident("rule"), "name")), "++", StrLit(" {")), "++", NL), "++", BinOp(StrLit("    "), "++", MethodCall0(Ident("rc"), "show"))), "++", BinOp(NL, "++", StrLit("  }"))))
+              )), "mkString", List(NL))
+            )
+          ))
+        ),
+        Cons(
+          BlankLine,
+          Cons(
+            Comment("========== RuleCase.show ==========",
+              ExtensionOn("rc", "RuleCase", List(
+                DefMethod0("show", TypeName("String"),
+                  LetIn("guardStr",
+                    MethodCall(FieldAccess(Ident("rc"), "guard"), "map", List(Lambda("g", BinOp(StrLit(" | "), "++", MethodCall0(Ident("g"), "show"))))),
+                    BinOp(BinOp(BinOp(MethodCall0(FieldAccess(Ident("rc"), "pattern"), "show"), "++", MethodCall(Ident("guardStr"), "getOrElse", List(StrLit("")))), "++", StrLit(" |-> ")), "++", MethodCall0(FieldAccess(Ident("rc"), "body"), "show"))
+                  )
+                )
+              ))
+            ),
+            Cons(
+              BlankLine,
+              Cons(
+                Comment("========== RuleGuard.show ==========",
+                  ExtensionOn("guard", "RuleGuard", List(
+                    DefMethod0("show", TypeName("String"),
+                      MatchExpr(Ident("guard"), Cons(
+                        PatCase("RuleGuard.IsConstructor(varName, conName)", BinOp(BinOp(Ident("varName"), "++", StrLit(" is ")), "++", Ident("conName"))),
+                        Cons(PatCase("RuleGuard.Equals(left, right)", BinOp(BinOp(MethodCall0(Ident("left"), "show"), "++", StrLit(" == ")), "++", MethodCall0(Ident("right"), "show"))),
+                        Nil)
+                      ))
+                    )
+                  ))
+                ),
+                Cons(
+                  BlankLine,
+                  Cons(
+                    Comment("========== MetaPattern.show ==========",
+                      ExtensionOn("pat", "MetaPattern", List(
+                        DefMethod0("show", TypeName("String"),
+                          MatchExpr(Ident("pat"), Cons(
+                            PatCase("MetaPattern.PVar(name)", Ident("name")),
+                            Cons(PatCase("MetaPattern.PCon(name, Nil)", Ident("name")),
+                            Cons(PatCase("MetaPattern.PCon(name, args)", BinOp(BinOp(BinOp(Ident("name"), "++", StrLit("(")), "++", MethodCall(MethodCall(Ident("args"), "map", List(FieldAccess(Ident("_"), "show"))), "mkString", List(StrLit(", ")))), "++", StrLit(")"))),
+                            Cons(PatCase("MetaPattern.PApp(func, arg)", BinOp(BinOp(BinOp(BinOp(StrLit("("), "++", MethodCall0(Ident("func"), "show")), "++", StrLit(" ")), "++", MethodCall0(Ident("arg"), "show")), "++", StrLit(")"))),
+                            Cons(PatCase("MetaPattern.PSubst(body, varName, replacement)", 
+                              BinOp(BinOp(BinOp(BinOp(BinOp(MethodCall0(Ident("body"), "show"), "++", StrLit("[")), "++", Ident("varName")), "++", StrLit(" := ")), "++", MethodCall0(Ident("replacement"), "show")), "++", StrLit("]"))),
+                            Nil))))
+                          ))
+                        )
+                      ))
+                    ),
+                    Nil
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
   }
 
-  rule Pattern2Build.con {
-    PCon(name, args) ↦
-      App(Var(StringLit("VCon")), 
-          ListExpr(Var(name), 
-                   App(Var(StringLit("List")), Pattern2Build.forward(args))))
+  // ==========================================================================
+  // GenToVal: LangSpec → phi.phi.gen/ToVal.scala
+  // ==========================================================================
+  // Generates methods to convert phi.phi types to Val (VCon/VStr/VList)
+  
+  rule GenToVal.file {
+    LangSpec(name, sorts, constructors, grammars, xforms, rules) ↦ 
+      ScalaPackage("phi.phi.gen", List(
+        ScalaImport("phi.phi.*"),
+        ScalaImport("phi.meta.Val"),
+        ScalaImport("phi.meta.Val.*"),
+        BlankDecl,
+        DeclDocComment("ToVal: Convert phi.phi types to Val representation (generated from phi.phi)",
+          ScalaObject("ToVal", GenToVal.members(constructors)))
+      ))
+  }
+  
+  // All members - use wildcard since we don't use the constructor list
+  rule GenToVal.members {
+    _ ↦ GenToVal.concat(
+      GenToVal.coreExtensions,
+      GenToVal.concat(
+        GenToVal.typeExtensions,
+        GenToVal.concat(
+          GenToVal.syntaxExtensions,
+          GenToVal.concat(
+            GenToVal.xformExtensions,
+            GenToVal.ruleExtensions
+          )
+        )
+      )
+    )
+  }
+  
+  rule GenToVal.concat {
+    Args(Nil, ys) ↦ ys
+  }
+  rule GenToVal.concat {
+    Args(Cons(x, xs), ys) ↦ Cons(x, GenToVal.concat(Args(xs, ys)))
   }
 
   // ==========================================================================
-  // Rules: Xform/Rule → Interpreter Method
+  // toCons helper (List → Cons/Nil)
   // ==========================================================================
-  rule Decl2Scala.xform {
-    XformDecl(name, src, tgt) ↦
-      DefDecl(Var(name),
-        ListExpr(TypeRef(StringLit("Val"))),
-        TypeApp(StringLit("Option"), ListExpr(TypeRef(StringLit("Val")))),
-        Var(StringLit("???")))
+  rule GenToVal.coreExtensions {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== toCons helper ==========",
+          DefMethodN("toCons", List(Param("list", "List[Val]")), TypeName("Val"),
+            MatchExpr(Ident("list"), Cons(
+              PatCase("Nil", Call("VCon", List(StrLit("Nil"), Ident("Nil")))),
+              Cons(PatCase("head :: tail", Call("VCon", List(StrLit("Cons"), Call("List", List(Ident("head"), Call("toCons", List(Ident("tail")))))))),
+              Nil)
+            ))
+          )
+        ),
+        Cons(
+          BlankLine,
+          Cons(
+            Comment("========== LangSpec.toVal ==========",
+              ExtensionOn("spec", "LangSpec", List(
+                DefMethod0("toVal", TypeName("Val"),
+                  Call("VCon", List(
+                    StrLit("LangSpec"),
+                    Call("List", List(
+                      Call("VStr", List(FieldAccess(Ident("spec"), "name"))),
+                      Call("toCons", List(MethodCall(FieldAccess(Ident("spec"), "sorts"), "map", List(FieldAccess(Ident("_"), "toVal"))))),
+                      Call("toCons", List(MethodCall(FieldAccess(Ident("spec"), "constructors"), "map", List(FieldAccess(Ident("_"), "toVal"))))),
+                      MethodCall0(FieldAccess(Ident("spec"), "grammars"), "toVal"),
+                      Call("toCons", List(MethodCall(FieldAccess(Ident("spec"), "xforms"), "map", List(FieldAccess(Ident("_"), "toVal"))))),
+                      Call("toCons", List(MethodCall(FieldAccess(Ident("spec"), "rules"), "map", List(FieldAccess(Ident("_"), "toVal")))))
+                    ))
+                  ))
+                )
+              ))
+            ),
+            Cons(
+              BlankLine,
+              Cons(
+                Comment("========== Sort.toVal ==========",
+                  ExtensionOn("sort", "Sort", List(
+                    DefMethod0("toVal", TypeName("Val"),
+                      Call("VCon", List(StrLit("Sort"), Call("List", List(Call("VStr", List(FieldAccess(Ident("sort"), "name")))))))
+                    )
+                  ))
+                ),
+                Cons(
+                  BlankLine,
+                  Cons(
+                    Comment("========== Constructor.toVal ==========",
+                      ExtensionOn("con", "Constructor", List(
+                        DefMethod0("toVal", TypeName("Val"),
+                          Call("VCon", List(
+                            StrLit("Constructor"),
+                            Call("List", List(
+                              Call("VStr", List(FieldAccess(Ident("con"), "name"))),
+                              Call("toCons", List(MethodCall(FieldAccess(Ident("con"), "argTypes"), "map", List(FieldAccess(Ident("_"), "toVal"))))),
+                              Call("VStr", List(FieldAccess(Ident("con"), "returnType")))
+                            ))
+                          ))
+                        )
+                      ))
+                    ),
+                    Nil
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
   }
 
-  rule Decl2Scala.rule {
-    RuleDecl(name, cases) ↦
-      DefDecl(Var(name),
-        ListExpr(TypeRef(StringLit("Val"))),
-        TypeApp(StringLit("Option"), ListExpr(TypeRef(StringLit("Val")))),
-        Match(Var(StringLit("v")), Pattern2Match.forward(cases)))
+  // ==========================================================================
+  // LangType.toVal
+  // ==========================================================================
+  rule GenToVal.typeExtensions {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== LangType.toVal ==========",
+          ExtensionOn("ty", "LangType", List(
+            DefMethod0("toVal", TypeName("Val"),
+              MatchExpr(Ident("ty"), Cons(
+                PatCase("LangType.SortRef(name)", Call("VCon", List(StrLit("SortRef"), Call("List", List(Call("VStr", List(Ident("name")))))))),
+                Cons(PatCase("LangType.Arrow(from, to)", Call("VCon", List(StrLit("Arrow"), Call("List", List(MethodCall0(Ident("from"), "toVal"), MethodCall0(Ident("to"), "toVal")))))),
+                Cons(PatCase("LangType.ListOf(elem)", Call("VCon", List(StrLit("ListOf"), Call("List", List(MethodCall0(Ident("elem"), "toVal")))))),
+                Cons(PatCase("LangType.Product(left, right)", Call("VCon", List(StrLit("Product"), Call("List", List(MethodCall0(Ident("left"), "toVal"), MethodCall0(Ident("right"), "toVal")))))),
+                Cons(PatCase("LangType.TypeApp(name, args)", Call("VCon", List(StrLit("TypeApp"), Call("List", List(Call("VStr", List(Ident("name"))), Call("toCons", List(MethodCall(Ident("args"), "map", List(FieldAccess(Ident("_"), "toVal")))))))))),
+                Cons(PatCase("LangType.TypeVar(name)", Call("VCon", List(StrLit("TypeVar"), Call("List", List(Call("VStr", List(Ident("name")))))))),
+                Nil)))))
+              ))
+            )
+          ))
+        ),
+        Nil
+      )
+    )
+  }
+
+  // ==========================================================================
+  // Grammar/Syntax types toVal
+  // ==========================================================================
+  rule GenToVal.syntaxExtensions {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Grammar map toVal ==========",
+          ExtensionOn("grammars", "Map[String, List[SyntaxRule]]", List(
+            DefMethod0("toVal", TypeName("Val"),
+              Call("toCons", List(MethodCall(MethodCall0(Ident("grammars"), "toList"), "map", List(
+                Lambda("kv", Call("VCon", List(StrLit("Grammar"), Call("List", List(
+                  Call("VStr", List(FieldAccess(Ident("kv"), "_1"))),
+                  Call("toCons", List(MethodCall(FieldAccess(Ident("kv"), "_2"), "map", List(FieldAccess(Ident("_"), "toVal")))))
+                )))))
+              ))))
+            )
+          ))
+        ),
+        Cons(
+          BlankLine,
+          Cons(
+            Comment("========== SyntaxRule.toVal ==========",
+              ExtensionOn("rule", "SyntaxRule", List(
+                DefMethod0("toVal", TypeName("Val"),
+                  Call("VCon", List(
+                    StrLit("SynRule"),
+                    Call("List", List(
+                      Call("toCons", List(MethodCall(FieldAccess(Ident("rule"), "pattern"), "map", List(FieldAccess(Ident("_"), "toVal"))))),
+                      MethodCall0(FieldAccess(Ident("rule"), "result"), "toVal")
+                    ))
+                  ))
+                )
+              ))
+            ),
+            Cons(
+              BlankLine,
+              Cons(
+                Comment("========== SyntaxToken.toVal ==========",
+                  ExtensionOn("tok", "SyntaxToken", List(
+                    DefMethod0("toVal", TypeName("Val"),
+                      MatchExpr(Ident("tok"), Cons(
+                        PatCase("SyntaxToken.Literal(text)", Call("VCon", List(StrLit("Literal"), Call("List", List(Call("VStr", List(Ident("text")))))))),
+                        Cons(PatCase("SyntaxToken.NonTerm(name, mod)", Call("VCon", List(StrLit("NonTerm"), Call("List", List(Call("VStr", List(Ident("name"))), Call("VStr", List(MethodCall(Ident("mod"), "getOrElse", List(StrLit("")))))))))),
+                        Nil)
+                      ))
+                    )
+                  ))
+                ),
+                Cons(
+                  BlankLine,
+                  Cons(
+                    Comment("========== SyntaxArg.toVal ==========",
+                      ExtensionOn("arg", "SyntaxArg", List(
+                        DefMethod0("toVal", TypeName("Val"),
+                          MatchExpr(Ident("arg"), Cons(
+                            PatCase("SyntaxArg.Ref(name)", Call("VCon", List(StrLit("ArgRef"), Call("List", List(Call("VStr", List(Ident("name")))))))),
+                            Cons(PatCase("SyntaxArg.Lit(value)", Call("VCon", List(StrLit("ArgLit"), Call("List", List(Call("VStr", List(Ident("value")))))))),
+                            Cons(PatCase("SyntaxArg.StrLit(value)", Call("VCon", List(StrLit("ArgStrLit"), Call("List", List(Call("VStr", List(Ident("value")))))))),
+                            Cons(PatCase("SyntaxArg.Wrap(wrapper, inner)", Call("VCon", List(StrLit("ArgWrap"), Call("List", List(Call("VStr", List(Ident("wrapper"))), MethodCall0(Ident("inner"), "toVal")))))),
+                            Cons(PatCase("SyntaxArg.Con(name, args)", Call("VCon", List(StrLit("ArgCon"), Call("List", List(Call("VStr", List(Ident("name"))), Call("toCons", List(MethodCall(Ident("args"), "map", List(FieldAccess(Ident("_"), "toVal")))))))))),
+                            Cons(PatCase("SyntaxArg.Hole", Call("VCon", List(StrLit("ArgHole"), Ident("Nil")))),
+                            Nil)))))
+                          ))
+                        )
+                      ))
+                    ),
+                    Nil
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  }
+
+  // ==========================================================================
+  // Xform.toVal
+  // ==========================================================================
+  rule GenToVal.xformExtensions {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Xform.toVal ==========",
+          ExtensionOn("xform", "Xform", List(
+            DefMethod0("toVal", TypeName("Val"),
+              Call("VCon", List(
+                StrLit("Xform"),
+                Call("List", List(
+                  Call("VStr", List(FieldAccess(Ident("xform"), "name"))),
+                  Call("toCons", List(MethodCall(FieldAccess(Ident("xform"), "params"), "map", List(
+                    Lambda("nt", Call("VCon", List(StrLit("Param"), Call("List", List(Call("VStr", List(FieldAccess(Ident("nt"), "_1"))), Call("VStr", List(FieldAccess(Ident("nt"), "_2"))))))))
+                  )))),
+                  Call("VStr", List(FieldAccess(Ident("xform"), "srcType"))),
+                  Call("VStr", List(FieldAccess(Ident("xform"), "tgtType"))),
+                  Call("toCons", List(MethodCall(FieldAccess(Ident("xform"), "rules"), "map", List(FieldAccess(Ident("_"), "toVal")))))
+                ))
+              ))
+            )
+          ))
+        ),
+        Nil
+      )
+    )
+  }
+
+  // ==========================================================================
+  // Rule, RuleCase, RuleGuard, MetaPattern toVal
+  // ==========================================================================
+  rule GenToVal.ruleExtensions {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Rule.toVal ==========",
+          ExtensionOn("rule", "Rule", List(
+            DefMethod0("toVal", TypeName("Val"),
+              Call("VCon", List(
+                StrLit("Rule"),
+                Call("List", List(
+                  Call("VStr", List(FieldAccess(Ident("rule"), "name"))),
+                  Call("toCons", List(MethodCall(FieldAccess(Ident("rule"), "cases"), "map", List(FieldAccess(Ident("_"), "toVal")))))
+                ))
+              ))
+            )
+          ))
+        ),
+        Cons(
+          BlankLine,
+          Cons(
+            Comment("========== RuleCase.toVal ==========",
+              ExtensionOn("rc", "RuleCase", List(
+                DefMethod0("toVal", TypeName("Val"),
+                  Call("VCon", List(
+                    StrLit("RuleCase"),
+                    Call("List", List(
+                      MethodCall0(FieldAccess(Ident("rc"), "pattern"), "toVal"),
+                      MethodCall0(FieldAccess(Ident("rc"), "body"), "toVal")
+                    ))
+                  ))
+                )
+              ))
+            ),
+            Cons(
+              BlankLine,
+              Cons(
+                Comment("========== RuleGuard.toVal ==========",
+                  ExtensionOn("guard", "RuleGuard", List(
+                    DefMethod0("toVal", TypeName("Val"),
+                      MatchExpr(Ident("guard"), Cons(
+                        PatCase("RuleGuard.IsConstructor(varName, conName)", Call("VCon", List(StrLit("IsConstructor"), Call("List", List(Call("VStr", List(Ident("varName"))), Call("VStr", List(Ident("conName")))))))),
+                        Cons(PatCase("RuleGuard.Equals(left, right)", Call("VCon", List(StrLit("Equals"), Call("List", List(MethodCall0(Ident("left"), "toVal"), MethodCall0(Ident("right"), "toVal")))))),
+                        Nil)
+                      ))
+                    )
+                  ))
+                ),
+                Cons(
+                  BlankLine,
+                  Cons(
+                    Comment("========== MetaPattern.toVal ==========",
+                      ExtensionOn("pat", "MetaPattern", List(
+                        DefMethod0("toVal", TypeName("Val"),
+                          MatchExpr(Ident("pat"), Cons(
+                            PatCase("MetaPattern.PVar(name)", Call("VCon", List(StrLit("PVar"), Call("List", List(Call("VStr", List(Ident("name")))))))),
+                            Cons(PatCase("MetaPattern.PCon(name, args)", Call("VCon", List(StrLit("PCon"), Call("List", List(Call("VStr", List(Ident("name"))), Call("toCons", List(MethodCall(Ident("args"), "map", List(FieldAccess(Ident("_"), "toVal")))))))))),
+                            Cons(PatCase("MetaPattern.PApp(func, arg)", Call("VCon", List(StrLit("PApp"), Call("List", List(MethodCall0(Ident("func"), "toVal"), MethodCall0(Ident("arg"), "toVal")))))),
+                            Cons(PatCase("MetaPattern.PSubst(body, varName, replacement)", Call("VCon", List(StrLit("PSubst"), Call("List", List(MethodCall0(Ident("body"), "toVal"), Call("VStr", List(Ident("varName"))), MethodCall0(Ident("replacement"), "toVal")))))),
+                            Nil)))
+                          ))
+                        )
+                      ))
+                    ),
+                    Nil
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  }
+
+  // ==========================================================================
+  // GenFold: LangSpec → phi.phi.gen/Fold.scala
+  // ==========================================================================
+  // Generates a generic fold trait for traversing LangSpec structures.
+  // Users can extend and override methods to collect/transform data.
+  
+  rule GenFold.file {
+    LangSpec(name, sorts, constructors, grammars, xforms, rules) ↦ 
+      ScalaPackage("phi.phi.gen", List(
+        ScalaImport("phi.phi.*"),
+        BlankDecl,
+        DeclDocComment("Fold: Generic fold/visitor for phi.phi AST types (generated from phi.phi)",
+          ScalaTrait0("Fold[A]", GenFold.members))
+      ))
+  }
+  
+  rule GenFold.members {
+    _ ↦ GenFold.concat(
+      GenFold.coreMembers,
+      GenFold.concat(
+        GenFold.typeMembers,
+        GenFold.concat(
+          GenFold.syntaxMembers,
+          GenFold.ruleMembers
+        )
+      )
+    )
+  }
+  
+  rule GenFold.concat {
+    Args(Nil, ys) ↦ ys
+  }
+  rule GenFold.concat {
+    Args(Cons(x, xs), ys) ↦ Cons(x, GenFold.concat(Args(xs, ys)))
+  }
+
+  // Core fold methods
+  rule GenFold.coreMembers {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Combine results ==========",
+          DefMethodAbstract("combine", List(Param("a", "A"), Param("b", "A")), TypeName("A"))
+        ),
+        Cons(
+          DefMethodAbstract0("empty", TypeName("A")),
+          Cons(
+            BlankLine,
+            Cons(
+              Comment("========== Fold over LangSpec ==========",
+                DefMethodN("foldSpec", List(Param("spec", "LangSpec")), TypeName("A"),
+                  MethodCallCurried(Call("List", List(
+                    MethodCallCurried(MethodCall(FieldAccess(Ident("spec"), "sorts"), "map", List(Ident("foldSort"))), "foldLeft", Ident("empty"), Ident("combine")),
+                    MethodCallCurried(MethodCall(FieldAccess(Ident("spec"), "constructors"), "map", List(Ident("foldConstructor"))), "foldLeft", Ident("empty"), Ident("combine")),
+                    MethodCallCurried(MethodCall(MethodCall0(FieldAccess(Ident("spec"), "grammars"), "values"), "flatMap", List(Lambda("rules", MethodCall(Ident("rules"), "map", List(Ident("foldSyntaxRule")))))), "foldLeft", Ident("empty"), Ident("combine")),
+                    MethodCallCurried(MethodCall(FieldAccess(Ident("spec"), "xforms"), "map", List(Ident("foldXform"))), "foldLeft", Ident("empty"), Ident("combine")),
+                    MethodCallCurried(MethodCall(FieldAccess(Ident("spec"), "rules"), "map", List(Ident("foldRule"))), "foldLeft", Ident("empty"), Ident("combine"))
+                  )), "foldLeft", Ident("empty"), Ident("combine"))
+                )
+              ),
+              Cons(
+                BlankLine,
+                Cons(
+                  Comment("========== Sort ==========",
+                    DefMethodN("foldSort", List(Param("sort", "Sort")), TypeName("A"), Ident("empty"))
+                  ),
+                  Cons(
+                    BlankLine,
+                    Cons(
+                      Comment("========== Constructor ==========",
+                        DefMethodN("foldConstructor", List(Param("con", "Constructor")), TypeName("A"),
+                          MethodCallCurried(MethodCall(FieldAccess(Ident("con"), "argTypes"), "map", List(Ident("foldLangType"))), "foldLeft", Ident("empty"), Ident("combine"))
+                        )
+                      ),
+                      Nil
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  }
+
+  // Type fold methods
+  rule GenFold.typeMembers {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== LangType ==========",
+          DefMethodN("foldLangType", List(Param("ty", "LangType")), TypeName("A"),
+            MatchExpr(Ident("ty"), Cons(
+              PatCase("LangType.SortRef(name)", Ident("empty")),
+              Cons(PatCase("LangType.Arrow(from, to)", Call("combine", List(Call("foldLangType", List(Ident("from"))), Call("foldLangType", List(Ident("to")))))),
+              Cons(PatCase("LangType.ListOf(elem)", Call("foldLangType", List(Ident("elem")))),
+              Cons(PatCase("LangType.Product(left, right)", Call("combine", List(Call("foldLangType", List(Ident("left"))), Call("foldLangType", List(Ident("right")))))),
+              Cons(PatCase("LangType.TypeApp(name, args)", MethodCallCurried(MethodCall(Ident("args"), "map", List(Ident("foldLangType"))), "foldLeft", Ident("empty"), Ident("combine"))),
+              Cons(PatCase("LangType.TypeVar(name)", Ident("empty")),
+              Nil)))))
+            ))
+          )
+        ),
+        Nil
+      )
+    )
+  }
+
+  // Syntax fold methods
+  rule GenFold.syntaxMembers {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== SyntaxRule ==========",
+          DefMethodN("foldSyntaxRule", List(Param("rule", "SyntaxRule")), TypeName("A"),
+            Call("combine", List(
+              MethodCallCurried(MethodCall(FieldAccess(Ident("rule"), "pattern"), "map", List(Ident("foldSyntaxToken"))), "foldLeft", Ident("empty"), Ident("combine")),
+              Call("foldSyntaxArg", List(FieldAccess(Ident("rule"), "result")))
+            ))
+          )
+        ),
+        Cons(
+          BlankLine,
+          Cons(
+            Comment("========== SyntaxToken ==========",
+              DefMethodN("foldSyntaxToken", List(Param("tok", "SyntaxToken")), TypeName("A"), Ident("empty"))
+            ),
+            Cons(
+              BlankLine,
+              Cons(
+                Comment("========== SyntaxArg ==========",
+                  DefMethodN("foldSyntaxArg", List(Param("arg", "SyntaxArg")), TypeName("A"),
+                    MatchExpr(Ident("arg"), Cons(
+                      PatCase("SyntaxArg.Ref(name)", Ident("empty")),
+                      Cons(PatCase("SyntaxArg.Lit(value)", Ident("empty")),
+                      Cons(PatCase("SyntaxArg.StrLit(value)", Ident("empty")),
+                      Cons(PatCase("SyntaxArg.Wrap(wrapper, inner)", Call("foldSyntaxArg", List(Ident("inner")))),
+                      Cons(PatCase("SyntaxArg.Con(name, args)", MethodCallCurried(MethodCall(Ident("args"), "map", List(Ident("foldSyntaxArg"))), "foldLeft", Ident("empty"), Ident("combine"))),
+                      Cons(PatCase("SyntaxArg.Hole", Ident("empty")),
+                      Nil)))))
+                    ))
+                  )
+                ),
+                Nil
+              )
+            )
+          )
+        )
+      )
+    )
+  }
+
+  // Rule fold methods
+  rule GenFold.ruleMembers {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Xform ==========",
+          DefMethodN("foldXform", List(Param("xform", "Xform")), TypeName("A"),
+            MethodCallCurried(MethodCall(FieldAccess(Ident("xform"), "rules"), "map", List(Ident("foldRule"))), "foldLeft", Ident("empty"), Ident("combine"))
+          )
+        ),
+        Cons(
+          BlankLine,
+          Cons(
+            Comment("========== Rule ==========",
+              DefMethodN("foldRule", List(Param("rule", "Rule")), TypeName("A"),
+                MethodCallCurried(MethodCall(FieldAccess(Ident("rule"), "cases"), "map", List(Ident("foldRuleCase"))), "foldLeft", Ident("empty"), Ident("combine"))
+              )
+            ),
+            Cons(
+              BlankLine,
+              Cons(
+                Comment("========== RuleCase ==========",
+                  DefMethodN("foldRuleCase", List(Param("rc", "RuleCase")), TypeName("A"),
+                    Call("combine", List(
+                      Call("foldMetaPattern", List(FieldAccess(Ident("rc"), "pattern"))),
+                      Call("foldMetaPattern", List(FieldAccess(Ident("rc"), "body")))
+                    ))
+                  )
+                ),
+                Cons(
+                  BlankLine,
+                  Cons(
+                    Comment("========== MetaPattern ==========",
+                      DefMethodN("foldMetaPattern", List(Param("pat", "MetaPattern")), TypeName("A"),
+                        MatchExpr(Ident("pat"), Cons(
+                          PatCase("MetaPattern.PVar(name)", Ident("empty")),
+                          Cons(PatCase("MetaPattern.PCon(name, args)", MethodCallCurried(MethodCall(Ident("args"), "map", List(Ident("foldMetaPattern"))), "foldLeft", Ident("empty"), Ident("combine"))),
+                          Cons(PatCase("MetaPattern.PApp(func, arg)", Call("combine", List(Call("foldMetaPattern", List(Ident("func"))), Call("foldMetaPattern", List(Ident("arg")))))),
+                          Cons(PatCase("MetaPattern.PSubst(body, varName, replacement)", Call("combine", List(Call("foldMetaPattern", List(Ident("body"))), Call("foldMetaPattern", List(Ident("replacement")))))),
+                          Nil)))
+                        ))
+                      )
+                    ),
+                    Nil
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  }
+
+  // ==========================================================================
+  // GenValidate: LangSpec → phi.phi.gen/Validate.scala
+  // ==========================================================================
+  // Generates validation for LangSpec: checks that all references are declared.
+  
+  rule GenValidate.file {
+    LangSpec(name, sorts, constructors, grammars, xforms, rules) ↦ 
+      ScalaPackage("phi.phi.gen", List(
+        ScalaImport("phi.phi.*"),
+        BlankDecl,
+        DeclDocComment("Validate: Semantic validation for phi.phi specs (generated from phi.phi)",
+          ScalaObject("Validate", GenValidate.members))
+      ))
+  }
+  
+  rule GenValidate.members {
+    _ ↦ GenValidate.concat(
+      GenValidate.errorType,
+      GenValidate.concat(
+        GenValidate.collectMethods,
+        GenValidate.validateMethod
+      )
+    )
+  }
+  
+  rule GenValidate.concat {
+    Args(Nil, ys) ↦ ys
+  }
+  rule GenValidate.concat {
+    Args(Cons(x, xs), ys) ↦ Cons(x, GenValidate.concat(Args(xs, ys)))
+  }
+
+  // Error case class
+  rule GenValidate.errorType {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Validation Error ==========",
+          CaseClassDecl("ValidationError", List(Param("message", "String"), Param("location", "String")))
+        ),
+        Nil
+      )
+    )
+  }
+
+  // Collection methods
+  rule GenValidate.collectMethods {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Collect declared names ==========",
+          DefMethodN("declaredSorts", List(Param("spec", "LangSpec")), TypeName("Set[String]"),
+            MethodCall0(MethodCall(FieldAccess(Ident("spec"), "sorts"), "map", List(FieldAccess(Ident("_"), "name"))), "toSet")
+          )
+        ),
+        Cons(
+          BlankLine,
+          Cons(
+            DefMethodN("declaredConstructors", List(Param("spec", "LangSpec")), TypeName("Set[String]"),
+              MethodCall0(MethodCall(FieldAccess(Ident("spec"), "constructors"), "map", List(FieldAccess(Ident("_"), "name"))), "toSet")
+            ),
+            Cons(
+              BlankLine,
+              Cons(
+                DefMethodN("declaredGrammars", List(Param("spec", "LangSpec")), TypeName("Set[String]"),
+                  MethodCall0(MethodCall0(FieldAccess(Ident("spec"), "grammars"), "keySet"), "toSet")
+                ),
+                Cons(
+                  BlankLine,
+                  Cons(
+                    Comment("========== Collect referenced sorts ==========",
+                      DefMethodN("referencedSorts", List(Param("spec", "LangSpec")), TypeName("Set[String]"),
+                        BinOp(
+                          BinOp(
+                            MethodCall0(MethodCall(FieldAccess(Ident("spec"), "constructors"), "map", List(FieldAccess(Ident("_"), "returnType"))), "toSet"),
+                            "++",
+                            MethodCall0(MethodCall(FieldAccess(Ident("spec"), "constructors"), "flatMap", List(Lambda("c", Call("sortRefsInType", List(FieldAccess(Ident("c"), "argTypes")))))), "toSet")
+                          ),
+                          "++",
+                          MethodCall0(MethodCall(FieldAccess(Ident("spec"), "xforms"), "flatMap", List(Lambda("x", Call("List", List(FieldAccess(Ident("x"), "srcType"), FieldAccess(Ident("x"), "tgtType")))))), "toSet")
+                        )
+                      )
+                    ),
+                    Cons(
+                      BlankLine,
+                      Cons(
+                        DefMethodN("sortRefsInType", List(Param("types", "List[LangType]")), TypeName("List[String]"),
+                          MethodCall(Ident("types"), "flatMap", List(Ident("sortRefsInSingleType")))
+                        ),
+                        Cons(
+                          BlankLine,
+                          Cons(
+                            DefMethodN("sortRefsInSingleType", List(Param("ty", "LangType")), TypeName("List[String]"),
+                              MatchExpr(Ident("ty"), Cons(
+                                PatCase("LangType.SortRef(name)", Call("List", List(Ident("name")))),
+                                Cons(PatCase("LangType.Arrow(from, to)", BinOp(Call("sortRefsInSingleType", List(Ident("from"))), "++", Call("sortRefsInSingleType", List(Ident("to"))))),
+                                Cons(PatCase("LangType.ListOf(elem)", Call("sortRefsInSingleType", List(Ident("elem")))),
+                                Cons(PatCase("LangType.Product(left, right)", BinOp(Call("sortRefsInSingleType", List(Ident("left"))), "++", Call("sortRefsInSingleType", List(Ident("right"))))),
+                                Cons(PatCase("LangType.TypeApp(name, args)", BinOp(Call("List", List(Ident("name"))), "++", Call("sortRefsInType", List(Ident("args"))))),
+                                Cons(PatCase("LangType.TypeVar(name)", Ident("Nil")),
+                                Nil)))))
+                              ))
+                            ),
+                            Cons(
+                              BlankLine,
+                              Cons(
+                                Comment("========== Collect referenced grammars ==========",
+                                  DefMethodN("referencedGrammars", List(Param("spec", "LangSpec")), TypeName("Set[String]"),
+                                    MethodCall0(MethodCall(MethodCall0(FieldAccess(Ident("spec"), "grammars"), "values"), "flatMap", List(Lambda("rules", MethodCall(Ident("rules"), "flatMap", List(Lambda("r", Call("nonTermsInRule", List(Ident("r"))))))))), "toSet")
+                                  )
+                                ),
+                                Cons(
+                                  BlankLine,
+                                  Cons(
+                                    DefMethodN("nonTermsInRule", List(Param("rule", "SyntaxRule")), TypeName("List[String]"),
+                                      MethodCall(FieldAccess(Ident("rule"), "pattern"), "collect", List(PartialFunc(PatCase("SyntaxToken.NonTerm(name, _)", Ident("name")))))
+                                    ),
+                                    Nil
+                                  )
+                                )
+                              )
+                            )
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  }
+
+  // Main validate method
+  rule GenValidate.validateMethod {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Main validation ==========",
+          DefMethodN("validate", List(Param("spec", "LangSpec")), TypeName("List[ValidationError]"),
+            LetIn("declared", Call("declaredSorts", List(Ident("spec"))),
+              LetIn("referenced", Call("referencedSorts", List(Ident("spec"))),
+                LetIn("undeclaredSorts", BinOp(Ident("referenced"), "--", Ident("declared")),
+                  LetIn("declGrammars", Call("declaredGrammars", List(Ident("spec"))),
+                    LetIn("refGrammars", Call("referencedGrammars", List(Ident("spec"))),
+                      LetIn("undeclaredGrammars", BinOp(BinOp(Ident("refGrammars"), "--", Ident("declGrammars")), "--", Ident("declared")),
+                        BinOp(
+                          MethodCall(MethodCall0(Ident("undeclaredSorts"), "toList"), "map", List(Lambda("s", Call("ValidationError", List(BinOp(StrLit("Undefined sort: "), "++", Ident("s")), StrLit("sort reference")))))),
+                          "++",
+                          MethodCall(MethodCall0(Ident("undeclaredGrammars"), "toList"), "map", List(Lambda("g", Call("ValidationError", List(BinOp(StrLit("Undefined grammar/sort: "), "++", Ident("g")), StrLit("grammar non-terminal"))))))
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        ),
+        Cons(
+          BlankLine,
+          Cons(
+            Comment("========== Convenience method ==========",
+              DefMethodN("isValid", List(Param("spec", "LangSpec")), TypeName("Boolean"),
+                MethodCall0(Call("validate", List(Ident("spec"))), "isEmpty")
+              )
+            ),
+            Nil
+          )
+        )
+      )
+    )
+  }
+
+  // ==========================================================================
+  // GenParser: LangSpec → phi.phi.gen/Parser.scala (partial)
+  // ==========================================================================
+  // Generates parser combinators from grammar rules.
+  // Focus: Generate parser methods for each grammar with proper variable binding.
+  // Note: Base methods (ident, string) are hardcoded as they need regex patterns
+  // that cannot be expressed in phi string syntax (no escape sequences).
+  
+  rule GenParser.file {
+    LangSpec(name, sorts, constructors, grammars, xforms, rules) ↦ 
+      ScalaPackage("phi.phi.gen", List(
+        ScalaImport("scala.util.parsing.combinator.*"),
+        ScalaImport("phi.phi.*"),
+        ScalaImport("phi.meta.Val"),
+        ScalaImport("phi.meta.Val.*"),
+        BlankDecl,
+        DeclDocComment("Parser: Generated parser combinators from phi.phi grammar rules",
+          ScalaObject("Parser extends RegexParsers", 
+            GenParser.concat(GenParser.tokenParsers, GenParser.grammarMembers(grammars))))
+      ))
+  }
+  
+  // Token parsers for IDENT and STRING terminals
+  // Using RawMember to emit exact Scala code (avoids escaping issues in string literals)
+  rule GenParser.tokenParsers {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        RawMember("// ========== Token parsers =========="),
+        Cons(
+          RawMember("def ident: Parser[String] = \"\"\"[a-zA-Z_][a-zA-Z0-9_]*\"\"\".r"),
+          Cons(
+            RawMember("def string: Parser[String] = \"\"\"\"[^\"]*\"\"\"\".r ^^ { s => s.substring(1, s.length - 1) }"),
+            Nil
+          )
+        )
+      )
+    )
+  }
+  
+  // Concatenate two lists
+  rule GenParser.concat {
+    Args(Nil, ys) ↦ ys
+  }
+  rule GenParser.concat {
+    Args(Cons(x, xs), ys) ↦ Cons(x, GenParser.concat(Args(xs, ys)))
+  }
+  
+  // Generate parser method for each grammar
+  rule GenParser.grammarMembers {
+    Nil ↦ Nil
+  }
+  rule GenParser.grammarMembers {
+    Cons(Grammar(name, rules), rest) ↦ 
+      Cons(
+        BlankLine,
+        Cons(
+          Comment(StrConcat("========== ", name, " parser =========="),
+            DefMethod0(GenParser.safeName(name), TypeName("Parser[Val]"),
+              GenParser.rulesExpr(rules)
+            )
+          ),
+          GenParser.grammarMembers(rest)
+        )
+      )
+  }
+  
+  // Make grammar names safe (avoid Scala keywords like 'type')
+  rule GenParser.safeName {
+    "type" ↦ "typeParser"
+  }
+  rule GenParser.safeName {
+    name ↦ name
+  }
+  
+  // Make variable names safe (avoid Scala keywords and convert terminals)
+  rule GenParser.safeVarName {
+    "type" ↦ "ty"
+  }
+  rule GenParser.safeVarName {
+    "IDENT" ↦ "id"
+  }
+  rule GenParser.safeVarName {
+    "STRING" ↦ "str"
+  }
+  rule GenParser.safeVarName {
+    name ↦ name
+  }
+  
+  // Convert token names for parser calls (IDENT -> ident, STRING -> string)
+  rule GenParser.parserName {
+    "IDENT" ↦ "ident"
+  }
+  rule GenParser.parserName {
+    "STRING" ↦ "string"
+  }
+  rule GenParser.parserName {
+    name ↦ GenParser.safeName(name)
+  }
+  
+  // Generate alternation of rule patterns
+  rule GenParser.rulesExpr {
+    Nil ↦ Call("failure", List(StrLit("no rules")))
+  }
+  rule GenParser.rulesExpr {
+    Cons(rule, Nil) ↦ GenParser.ruleExpr(rule)
+  }
+  rule GenParser.rulesExpr {
+    Cons(rule, rest) ↦ BinOp(GenParser.ruleExpr(rule), "|", GenParser.rulesExpr(rest))
+  }
+  
+  // ==========================================================================
+  // CORE: Generate parser for a single rule with proper variable binding
+  // ==========================================================================
+  // Strategy:
+  // 1. Enumerate tokens to create bindings: [(name, varName, modifier)]
+  // 2. Generate case pattern: case _ ~ x1 ~ _ ~ x2 => ...
+  // 3. Transform result using bindings with occurrence tracking
+  
+  rule GenParser.ruleExpr {
+    SynRule(tokens, result) ↦ 
+      BinOp(
+        GenParser.tokensExpr(tokens),
+        "^^",
+        PartialFunc(PatCase(
+          GenParser.casePattern(tokens, GenParser.initCounts),
+          GenParser.resultWithBindings(result, GenParser.makeBindings(tokens, GenParser.initCounts), GenParser.initCounts)
+        ))
+      )
+  }
+  
+  // Initial occurrence counts (empty map represented as Nil)
+  rule GenParser.initCounts {
+    _ ↦ Nil
+  }
+  
+  // ==========================================================================
+  // Bindings: Create [(tokenName, varName)] list from tokens
+  // ==========================================================================
+  
+  rule GenParser.makeBindings {
+    Args(Nil, counts) ↦ Nil
+  }
+  rule GenParser.makeBindings {
+    Args(Cons(Literal(text), rest), counts) ↦ 
+      GenParser.makeBindings(Args(rest, counts))
+  }
+  rule GenParser.makeBindings {
+    Args(Cons(NonTerm(name, mod), rest), counts) ↦ 
+      Cons(
+        Binding(name, GenParser.varName(GenParser.safeVarName(name), GenParser.getCount(name, counts)), mod),
+        GenParser.makeBindings(Args(rest, GenParser.incCount(name, counts)))
+      )
+  }
+  
+  // Binding constructor: (tokenName, varName, modifier)
+  constructor Binding : String → String → String → Binding
+  
+  // Generate variable name with occurrence number
+  rule GenParser.varName {
+    Args(name, "0") ↦ name
+  }
+  rule GenParser.varName {
+    Args(name, n) ↦ StrConcat(name, n)
+  }
+  
+  // ==========================================================================
+  // Count tracking: Map from name -> count
+  // Uses explicit pattern matching instead of guards
+  // ==========================================================================
+  
+  // Get count for name (default 0)
+  rule GenParser.getCount {
+    Args(name, Nil) ↦ "0"
+  }
+  rule GenParser.getCount {
+    Args(name, Cons(Count(n, c), rest)) | name == n ↦ c
+  }
+  rule GenParser.getCount {
+    Args(name, Cons(Count(n, c), rest)) ↦ GenParser.getCount(Args(name, rest))
+  }
+  
+  // Increment count for name
+  rule GenParser.incCount {
+    Args(name, Nil) ↦ Cons(Count(name, "1"), Nil)
+  }
+  rule GenParser.incCount {
+    Args(name, Cons(Count(n, c), rest)) | name == n ↦ Cons(Count(name, GenParser.succ(c)), rest)
+  }
+  rule GenParser.incCount {
+    Args(name, Cons(Count(n, c), rest)) ↦ Cons(Count(n, c), GenParser.incCount(Args(name, rest)))
+  }
+  
+  // Count entry: (name, count)
+  constructor Count : String → String → Count
+  
+  // Successor function for string numbers
+  rule GenParser.succ {
+    "0" ↦ "1"
+  }
+  rule GenParser.succ {
+    "1" ↦ "2"
+  }
+  rule GenParser.succ {
+    "2" ↦ "3"
+  }
+  rule GenParser.succ {
+    "3" ↦ "4"
+  }
+  rule GenParser.succ {
+    "4" ↦ "5"
+  }
+  
+  // ==========================================================================
+  // Case pattern generation: case _ ~ x1 ~ _ ~ x2 => ...
+  // ==========================================================================
+  
+  rule GenParser.casePattern {
+    Args(Nil, counts) ↦ "_"
+  }
+  rule GenParser.casePattern {
+    Args(Cons(tok, Nil), counts) ↦ GenParser.tokenPattern(tok, counts)
+  }
+  rule GenParser.casePattern {
+    Args(Cons(tok, rest), counts) ↦ 
+      StrConcat(
+        GenParser.tokenPattern(tok, counts), 
+        StrConcat(" ~ ", GenParser.casePattern(Args(rest, GenParser.updateCounts(tok, counts))))
+      )
+  }
+  
+  // Pattern for single token: _ for literals, varName for non-terminals
+  rule GenParser.tokenPattern {
+    Args(Literal(text), counts) ↦ "_"
+  }
+  rule GenParser.tokenPattern {
+    Args(NonTerm(name, mod), counts) ↦ GenParser.varName(GenParser.safeVarName(name), GenParser.getCount(name, counts))
+  }
+  
+  // Update counts after processing a token
+  rule GenParser.updateCounts {
+    Args(Literal(text), counts) ↦ counts
+  }
+  rule GenParser.updateCounts {
+    Args(NonTerm(name, mod), counts) ↦ GenParser.incCount(name, counts)
+  }
+  
+  // ==========================================================================
+  // Token parser expressions (unchanged)
+  // ==========================================================================
+  
+  rule GenParser.tokensExpr {
+    Nil ↦ Call("success", List(Ident("()")))
+  }
+  rule GenParser.tokensExpr {
+    Cons(tok, Nil) ↦ GenParser.tokenExpr(tok)
+  }
+  rule GenParser.tokensExpr {
+    Cons(tok, rest) ↦ BinOp(GenParser.tokenExpr(tok), "~", GenParser.tokensExpr(rest))
+  }
+  
+  rule GenParser.tokenExpr {
+    Literal(text) ↦ StrLit(text)
+  }
+  rule GenParser.tokenExpr {
+    NonTerm(name, "") ↦ Ident(GenParser.parserName(name))
+  }
+  rule GenParser.tokenExpr {
+    NonTerm(name, "*") ↦ Call("rep", List(Ident(GenParser.parserName(name))))
+  }
+  rule GenParser.tokenExpr {
+    NonTerm(name, "+") ↦ Call("rep1", List(Ident(GenParser.parserName(name))))
+  }
+  rule GenParser.tokenExpr {
+    NonTerm(name, "?") ↦ Call("opt", List(Ident(GenParser.parserName(name))))
+  }
+  
+  // ==========================================================================
+  // Result expression with bindings and occurrence tracking
+  // ==========================================================================
+  
+  // Nullary constructor (no args, uppercase name not in bindings)
+  // Examples: ArgHole, BlankDecl, etc.
+  rule GenParser.resultWithBindings {
+    Args(ArgRef("ArgHole"), bindings, counts) ↦ 
+      Call("VCon", List(StrLit("ArgHole"), Ident("Nil")))
+  }
+  rule GenParser.resultWithBindings {
+    Args(ArgRef(name), bindings, counts) ↦ 
+      GenParser.wrapToken(
+        Ident(GenParser.varName(GenParser.safeVarName(name), GenParser.getCount(name, counts))),
+        GenParser.findBinding(name, GenParser.getCount(name, counts), bindings)
+      )
+  }
+  rule GenParser.resultWithBindings {
+    Args(ArgCon(name, args), bindings, counts) ↦ 
+      Call("VCon", List(
+        StrLit(name), 
+        GenParser.argsToListWithBindings(args, bindings, counts)
+      ))
+  }
+  rule GenParser.resultWithBindings {
+    Args(ArgStrLit(s), bindings, counts) ↦ 
+      Call("VStr", List(StrLit(s)))
+  }
+  rule GenParser.resultWithBindings {
+    Args(ArgHole, bindings, counts) ↦ 
+      Call("VCon", List(StrLit("?"), Ident("Nil")))
+  }
+  
+  // Wrap token value based on modifier
+  // "" -> single value (might need VStr for IDENT/STRING)
+  // "*" or "+" -> VList(...)
+  // "?" -> needs getOrElse handling
+  rule GenParser.wrapToken {
+    Args(expr, Binding("IDENT", varName, "")) ↦ Call("VStr", List(expr))
+  }
+  rule GenParser.wrapToken {
+    Args(expr, Binding("STRING", varName, "")) ↦ Call("VStr", List(expr))
+  }
+  rule GenParser.wrapToken {
+    Args(expr, Binding(name, varName, "")) ↦ expr
+  }
+  rule GenParser.wrapToken {
+    Args(expr, Binding(name, varName, "*")) ↦ Call("VList", List(expr))
+  }
+  rule GenParser.wrapToken {
+    Args(expr, Binding(name, varName, "+")) ↦ Call("VList", List(expr))
+  }
+  rule GenParser.wrapToken {
+    Args(expr, Binding(name, varName, "?")) ↦ 
+      MethodCall(expr, "getOrElse", List(Call("VCon", List(StrLit("None"), Ident("Nil")))))
+  }
+  
+  // Find binding by name and occurrence
+  rule GenParser.findBinding {
+    Args(name, count, Nil) ↦ Binding(name, name, "")
+  }
+  rule GenParser.findBinding {
+    Args(name, count, Cons(Binding(n, v, m), rest)) | GenParser.varName(name, count) == v ↦ 
+      Binding(n, v, m)
+  }
+  rule GenParser.findBinding {
+    Args(name, count, Cons(Binding(n, v, m), rest)) ↦ 
+      GenParser.findBinding(Args(name, count, rest))
+  }
+  
+  // Build List(...) with proper binding tracking
+  rule GenParser.argsToListWithBindings {
+    Args(Nil, bindings, counts) ↦ Ident("Nil")
+  }
+  rule GenParser.argsToListWithBindings {
+    Args(Cons(arg, Nil), bindings, counts) ↦ 
+      Call("List", List(GenParser.resultWithBindings(Args(arg, bindings, counts))))
+  }
+  rule GenParser.argsToListWithBindings {
+    Args(Cons(arg, rest), bindings, counts) ↦ 
+      Call("List", Cons(
+        GenParser.resultWithBindings(Args(arg, bindings, counts)),
+        GenParser.argsListTail(rest, bindings, GenParser.updateCountsForArg(arg, counts))
+      ))
+  }
+  
+  // Tail of args list (after first element)
+  rule GenParser.argsListTail {
+    Args(Nil, bindings, counts) ↦ Nil
+  }
+  rule GenParser.argsListTail {
+    Args(Cons(arg, rest), bindings, counts) ↦ 
+      Cons(
+        GenParser.resultWithBindings(Args(arg, bindings, counts)),
+        GenParser.argsListTail(rest, bindings, GenParser.updateCountsForArg(arg, counts))
+      )
+  }
+  
+  // Update counts when processing an ArgRef
+  rule GenParser.updateCountsForArg {
+    Args(ArgRef(name), counts) ↦ GenParser.incCount(name, counts)
+  }
+  rule GenParser.updateCountsForArg {
+    Args(ArgCon(name, args), counts) ↦ GenParser.updateCountsForArgs(args, counts)
+  }
+  rule GenParser.updateCountsForArg {
+    Args(ArgStrLit(s), counts) ↦ counts
+  }
+  rule GenParser.updateCountsForArg {
+    Args(ArgHole, counts) ↦ counts
+  }
+  
+  rule GenParser.updateCountsForArgs {
+    Args(Nil, counts) ↦ counts
+  }
+  rule GenParser.updateCountsForArgs {
+    Args(Cons(arg, rest), counts) ↦ 
+      GenParser.updateCountsForArgs(Args(rest, GenParser.updateCountsForArg(arg, counts)))
   }
 }

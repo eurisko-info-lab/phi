@@ -2,13 +2,12 @@ package phi.phi
 
 import phi.meta.*
 import phi.meta.Val.*
+import TokenRender.RenderCtx
 
 /**
  * Minimal Grammar Interpreter - parses input according to grammar rules
  */
 object GrammarInterp:
-  import Lex.*
-  
   /** Build a parser from a language spec */
   def specParser(spec: LangSpec): GrammarParser = GrammarParser(spec)
 
@@ -109,11 +108,7 @@ case class GrammarParser(spec: LangSpec):
   // Uses attribute grammar: indent level is inherited attribute
   // ==========================================================================
   
-  // Inherited attributes passed during rendering
-  case class RenderCtx(indent: Int = 0):
-    def indented: RenderCtx = copy(indent = indent + 1)
-    def outdented: RenderCtx = copy(indent = math.max(0, indent - 1))
-    def indentStr: String = "  " * indent
+  // Use RenderCtx from TokenRender module
   
   /** Render a Val to a String using a named grammar */
   def render(grammarName: String, value: Val): String =
@@ -123,7 +118,14 @@ case class GrammarParser(spec: LangSpec):
         renderWithRules(rules, value, RenderCtx()).getOrElse(s"/* Cannot render: ${value} */")
   
   private def renderWithRules(rules: List[SyntaxRule], value: Val, ctx: RenderCtx): Option[String] =
-    rules.view.flatMap(rule => tryRenderRule(rule, value, ctx)).headOption
+    // Special case: StrLit renders directly as a quoted string
+    value match
+      case VCon("StrLit", List(VStr(s))) => Some(s"\"$s\"")
+      case VCon("StrLit", List(VCon(s, Nil))) => Some(s"\"$s\"")  // String literal as VCon
+      case VCon("DQuotLit", Nil) => Some("\"\\\"\"")  // Double quote literal: "\""
+      case VCon("RawMember", List(VStr(s))) => Some("\n" + ctx.indentStr + s)  // Raw code with NL prefix
+      case VCon("RawMember", List(VCon(s, Nil))) => Some("\n" + ctx.indentStr + s)  // Raw code as VCon with NL
+      case _ => rules.view.flatMap(rule => tryRenderRule(rule, value, ctx)).headOption
   
   private def tryRenderRule(rule: SyntaxRule, value: Val, ctx: RenderCtx): Option[String] =
     matchTemplate(rule.result, value) match
@@ -142,8 +144,12 @@ case class GrammarParser(spec: LangSpec):
           }
         }
       
-      case (SyntaxArg.Ref(name), v) =>
-        // Bind this value to the name
+      // Ref starting with uppercase is a constructor reference - must match exactly
+      case (SyntaxArg.Ref(name), VCon(vname, Nil)) if name.headOption.exists(_.isUpper) =>
+        if name == vname then Some(Map.empty) else None
+      
+      // Ref starting with lowercase is a variable binding - match anything
+      case (SyntaxArg.Ref(name), v) if name.headOption.exists(_.isLower) =>
         Some(Map(name -> v))
       
       case (SyntaxArg.Lit(lit), VCon(name, Nil)) if lit == name =>
@@ -162,15 +168,7 @@ case class GrammarParser(spec: LangSpec):
     // Thread context through to handle \n+ and \n- indent changes
     val (result, _) = pattern.foldLeft(("", ctx)) { case ((acc, currentCtx), tok) =>
       val (tokStr, newCtx) = renderTokenWithCtx(tok, bindings, currentCtx)
-      val combined =
-        if acc.isEmpty then tokStr
-        else if tokStr.isEmpty then acc                        // \n+/\n- produce empty string
-        else if tokStr.startsWith("\n") then acc + tokStr      // newline token starts fresh
-        else if acc.endsWith("\n") || acc.matches("(?s).*\\n[ ]*") then acc + tokStr  // after newline+indent
-        else if tokStr.matches("^[(),:.].*") then acc + tokStr // punctuation attaches
-        else if acc.endsWith("(") then acc + tokStr            // after open paren
-        else acc + " " + tokStr                                 // else add space
-      (combined, newCtx)
+      (TokenRender.combine(acc, tokStr), newCtx)
     }
     result
   
@@ -178,17 +176,11 @@ case class GrammarParser(spec: LangSpec):
   private def renderTokenWithCtx(tok: SyntaxToken, bindings: Map[String, Val], ctx: RenderCtx): (String, RenderCtx) =
     tok match
       case SyntaxToken.Literal(lit) =>
-        lit match
-          case _ => (lit, ctx)                                   // Any literal keyword
+        (lit, ctx)
       
-      case SyntaxToken.NonTerm("NL", _) =>
-        ("\n" + ctx.indentStr, ctx)                              // Newline + current indent
-      
-      case SyntaxToken.NonTerm("INDENT", _) =>
-        ("", ctx.indented)                                       // Increase indent for following tokens
-      
-      case SyntaxToken.NonTerm("DEDENT", _) =>
-        ("", ctx.outdented)                                      // Decrease indent for following tokens
+      case SyntaxToken.NonTerm(name, mod) if TokenRender.isBuiltin(name) && !bindings.contains(name) =>
+        // Built-in token with special rendering semantics
+        TokenRender.renderBuiltin(name, ctx)
       
       case SyntaxToken.NonTerm(name, mod) =>
         val str = renderNonTermToken(name, mod, bindings, ctx)
@@ -203,17 +195,48 @@ case class GrammarParser(spec: LangSpec):
     
     bindings.get(name) match
       case Some(v) =>
-        val items = valToList(v)
-        if items.nonEmpty || v.isInstanceOf[VList] || isConsNil(v) then
-          // List: render each item with the grammar
-          val separator = if name.toLowerCase.contains("expr") || name.toLowerCase.contains("arg") then ", " else ""
-          items.map(v => renderNonTerm(name, v, ctx)).mkString(separator)
+        // If modifier is * or +, treat as list. Otherwise treat as single value.
+        val isList = mod.exists(m => m == "*" || m == "+")
+        if isList then
+          val items = valToList(v)
+          // List: render each item with appropriate grammar
+          // Use comma separator for expressions, args, and params
+          val separator = if name.toLowerCase.contains("expr") || name.toLowerCase.contains("arg") || name.toLowerCase.contains("param") then ", " else ""
+          items.map(item =>
+            // Special case: StrLit renders as quoted string
+            item match
+              case VCon("StrLit", List(VStr(s))) => s"\"$s\""
+              case VCon("StrLit", List(VCon(s, Nil))) => s"\"$s\""
+              case _ =>
+                findGrammarFor(item) match
+                  case Some(grammarName) => renderNonTerm(grammarName, item, ctx)
+                  case None => extractIdent(item)
+          ).mkString(separator)
         else if spec.grammars.contains(name) then
           renderNonTerm(name, v, ctx)
         else
-          extractIdent(v)
+          // Single value: try to find a grammar or extract ident
+          findGrammarFor(v) match
+            case Some(grammarName) => 
+              renderNonTerm(grammarName, v, ctx)
+            case None => 
+              extractIdent(v)
       case None =>
         s"/* missing: $name */"
+  
+  /** Find which grammar can render a given value */
+  private def findGrammarFor(v: Val): Option[String] =
+    v match
+      case VCon(conName, _) =>
+        // Look through all grammars to find one with a rule for this constructor
+        spec.grammars.find { case (grammarName, rules) =>
+          rules.exists(rule => rule.result match
+            case SyntaxArg.Con(name, _) => name == conName
+            case SyntaxArg.Ref(name) => name == conName && name.headOption.exists(_.isUpper)
+            case _ => false
+          )
+        }.map(_._1)
+      case _ => None
   
   private def isConsNil(v: Val): Boolean = v match
     case VCon("Nil", _) => true

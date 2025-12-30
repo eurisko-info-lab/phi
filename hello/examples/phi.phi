@@ -99,6 +99,11 @@ language Phi {
     "xform" IDENT ":" IDENT "⇄" IDENT => XformDecl(IDENT, IDENT, IDENT)
     "rule" qualifiedName "{" ruleCase "}" => RuleDecl(qualifiedName, ruleCase)
   }
+  
+  // Qualified name: IDENT or IDENT.IDENT.IDENT...
+  grammar qualifiedName {
+    IDENT => IDENT
+  }
 
   grammar type {
     IDENT => SortRef(IDENT)
@@ -126,19 +131,19 @@ language Phi {
     "?" => ArgHole
   }
 
-  grammar pattern {
-    IDENT => PVar(IDENT)
-    IDENT "(" pattern* ")" => PCon(IDENT, pattern)
-    pattern pattern => PApp(pattern, pattern)
-  }
-
   grammar ruleCase {
     pattern "↦" pattern => Case(pattern, pattern)
     pattern "|" guard "↦" pattern => CaseGuarded(pattern, guard, pattern)
   }
-  
+
   grammar guard {
     IDENT "is" IDENT => IsConstructor(IDENT, IDENT)
     pattern "==" pattern => Equals(pattern, pattern)
+  }
+
+  grammar pattern {
+    IDENT => PVar(IDENT)
+    IDENT "(" pattern* ")" => PCon(IDENT, pattern)
+    pattern pattern => PApp(pattern, pattern)
   }
 }

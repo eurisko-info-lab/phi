@@ -1,149 +1,1036 @@
 // =============================================================================
-// Meta2Scala: Compile Meta interpreter to Scala
+// Meta2Scala: Generate Scala code from Meta semantic definitions
 // =============================================================================
-// Transforms the meta-level semantic definitions into executable Scala code.
+// This transforms meta.phi semantic operations into Scala source code.
+// Each xform (Eval, Match, Show, Subst) gets a corresponding Gen* xform
+// that produces a ScalaFile AST, rendered via scala.phi grammar.
+//
+// GenMeta orchestrates:
+//   1. Load meta.phi (semantic definitions)
+//   2. Load meta2scala.phi (this file - code generators)
+//   3. For each semantic xform, apply Gen* → ScalaFile AST
+//   4. Render via scala.phi grammar → String
+//   5. Write to tmp/gen/*.scala
 
 language Meta2Scala {
-  // ==========================================================================
-  // Input Sorts (from Meta)
-  // ==========================================================================
-  sort Val
-  sort Env
-  sort Pat
-  sort Expr
-  sort Result
+  // We need to reference types from both meta.phi and scala.phi
+  // The xforms transform Xform (from meta) to ScalaFile (from scala)
   
   // ==========================================================================
-  // Output Sorts (Scala AST)
+  // GenEval: Eval xform → gen/Eval.scala
   // ==========================================================================
-  sort ScalaFile
-  sort ScalaDecl
-  sort ScalaStmt
-  sort ScalaExpr
-  sort ScalaPat
-  sort ScalaType
-  sort ScalaCase
+  xform GenEval : Xform ⇄ ScalaFile
   
-  // ==========================================================================
-  // Input Constructors (from Meta)
-  // ==========================================================================
-  constructor VCon : String → List[Val] → Val
-  constructor VStr : String → Val
-  constructor VInt : Int → Val
-  constructor VList : List[Val] → Val
-  constructor EmptyEnv : Env
-  constructor Bind : String → Val → Env → Env
-  constructor PVar : String → Pat
-  constructor PCon : String → List[Pat] → Pat
-  constructor PWild : Pat
-  constructor PLit : Val → Pat
-  constructor EVar : String → Expr
-  constructor ECon : String → List[Expr] → Expr
-  constructor EApp : Expr → Expr → Expr
-  constructor ELam : String → Expr → Expr
-  constructor EMatch : Expr → List[Expr] → Expr
-  constructor ECase : Pat → Expr → Expr
-  constructor ROk : Val → Env → Result
-  constructor RFail : Result
+  rule GenEval.file {
+    Xform("Eval", params, srcType, tgtType, rules) ↦ 
+      ScalaPackage("phi.meta.gen", List(
+        ScalaImport("phi.meta.{Val, Env, Pat, Expr, Result}"),
+        ScalaImport("Val.*"),
+        ScalaImport("Env.*"),
+        ScalaImport("Pat.*"),
+        ScalaImport("Expr.*"),
+        ScalaImport("Result.*"),
+        ScalaImport("phi.meta.gen.Match.matchWith"),
+        BlankDecl,
+        DeclDocComment("Eval: Expression evaluation (generated from meta.phi Eval xform)",
+          ScalaObject("Eval", GenEval.members(rules)))
+      ))
+  }
   
-  // ==========================================================================
-  // Output Constructors (Scala AST)
-  // ==========================================================================
-  constructor Package : String → List[ScalaDecl] → ScalaFile
-  constructor EnumDecl : String → List[ScalaDecl] → ScalaDecl
-  constructor CaseDecl : String → List[ScalaType] → ScalaDecl
-  constructor DefDecl : String → List[ScalaType] → ScalaType → ScalaExpr → ScalaDecl
-  constructor TypeRef : String → ScalaType
-  constructor TypeApp : String → List[ScalaType] → ScalaType
-  constructor Var : String → ScalaExpr
-  constructor App : ScalaExpr → List[ScalaExpr] → ScalaExpr
-  constructor Match : ScalaExpr → List[ScalaCase] → ScalaExpr
-  constructor StringLit : String → ScalaExpr
-  constructor PatVar : String → ScalaPat
-  constructor PatCon : String → List[ScalaPat] → ScalaPat
-  constructor PatWild : ScalaPat
-  constructor CaseClause : ScalaPat → ScalaExpr → ScalaCase
+  rule GenEval.members {
+    rules ↦ Cons(
+      GenEval.dispatch(rules),
+      Cons(BlankLine, GenEval.extensionsAndHelpers(rules))
+    )
+  }
   
-  // ==========================================================================
-  // Transforms
-  // ==========================================================================
-  xform Val2Scala : Val ⇄ ScalaDecl
-  xform Pat2Scala : Pat ⇄ ScalaPat
-  xform Expr2Scala : Expr ⇄ ScalaExpr
-  xform Result2Scala : Result ⇄ ScalaExpr
+  // Append helper methods after extensions
+  rule GenEval.extensionsAndHelpers {
+    rules ↦ GenEval.appendHelpers(GenEval.extensions(rules))
+  }
   
-  // ==========================================================================
-  // Rules: Val enum
-  // ==========================================================================
+  rule GenEval.appendHelpers {
+    extensions ↦ GenEval.concat(extensions, Cons(BlankLine, GenEval.helpers))
+  }
   
-  // Generate: enum Val { case VCon(name: String, args: List[Val]) ... }
-  rule Val2Scala.enum {
-    VCon(name, args) ↦ 
-      EnumDecl(StringLit("Val"), 
-        CaseDecl(StringLit("VCon"), 
-          TypeRef(StringLit("String")), 
-          TypeApp(StringLit("List"), TypeRef(StringLit("Val")))))
+  // Helper methods for Eval (tryCases, applyVal)
+  // tryCases: match on cases list, try each ECase pattern
+  rule GenEval.helpers {
+    _ ↦ Cons(
+      DocComment("Try each case until one matches (part of EMatch semantics)",
+        DefMethodN("tryCases", List(Param("value", "Val"), Param("cases", "List[Expr]"), Param("env", "Env")), TypeName("Val"),
+          MatchExpr(Ident("cases"), Cons(
+            PatCase("Nil", Call("VCon", List(StrLit("MatchError"), Call("List", List(Ident("value")))))),
+            Cons(
+              NestedMatch("ECase(pat, body) :: rest", 
+                MethodCall(Ident("pat"), "matchWith", List(Ident("value"), Ident("env"))),
+                Cons(
+                  PatCase("ROk(_, env1)", MethodCall(Ident("body"), "eval", List(Ident("env1")))),
+                  Cons(
+                    PatCase("RFail", Call("tryCases", List(Ident("value"), Ident("rest"), Ident("env")))),
+                    Nil
+                  )
+                )
+              ),
+              Cons(
+                PatCase("_ :: rest", Call("tryCases", List(Ident("value"), Ident("rest"), Ident("env")))),
+                Nil
+              )
+            )
+          ))
+        )),
+      Cons(
+        DocComment("Apply a function value to an argument",
+          DefMethodN("applyVal", List(Param("func", "Val"), Param("arg", "Val"), Param("env", "Env")), TypeName("Val"),
+            Call("VCon", List(StrLit("App"), Call("List", List(Ident("func"), Ident("arg"))))))),
+        Nil
+      )
+    )
+  }
+  
+  // Concatenate two Cons lists
+  rule GenEval.concat {
+    Args(Nil, ys) ↦ ys
+  }
+  rule GenEval.concat {
+    Args(Cons(x, xs), ys) ↦ Cons(x, GenEval.concat(Args(xs, ys)))
+  }
+  
+  rule GenEval.dispatch {
+    rules ↦ ExtensionOn("e", "Expr", List(
+      DispatchDef("eval", Param("env", "Env"), TypeName("Val"), "e", GenEval.cases(rules))
+    ))
+  }
+  
+  rule GenEval.cases {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenEval.oneCase(name, cases),
+      GenEval.cases(rest)
+    )
+  }
+  
+  rule GenEval.cases {
+    Nil ↦ Nil
+  }
+  
+  // oneCase: generate case e: EVar => e.evalVar(env)
+  // We extract conName from pattern, derive method name from rule name
+  // Eval.var + EVar → evalVar
+  rule GenEval.oneCase {
+    Args("Eval.var", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      TypeCase("e", conName, MethodCall(Ident("e"), "evalVar", List(Ident("env"))))
+  }
+  rule GenEval.oneCase {
+    Args("Eval.con", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      TypeCase("e", conName, MethodCall(Ident("e"), "evalCon", List(Ident("env"))))
+  }
+  rule GenEval.oneCase {
+    Args("Eval.app", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      TypeCase("e", conName, MethodCall(Ident("e"), "evalApp", List(Ident("env"))))
+  }
+  rule GenEval.oneCase {
+    Args("Eval.lam", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      TypeCase("e", conName, MethodCall(Ident("e"), "evalLam", List(Ident("env"))))
+  }
+  rule GenEval.oneCase {
+    Args("Eval.let", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      TypeCase("e", conName, MethodCall(Ident("e"), "evalLet", List(Ident("env"))))
+  }
+  rule GenEval.oneCase {
+    Args("Eval.match", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      TypeCase("e", conName, MethodCall(Ident("e"), "evalMatch", List(Ident("env"))))
+  }
+  rule GenEval.oneCase {
+    Args("Eval.case", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      TypeCase("e", conName, MethodCall(Ident("e"), "evalCase", List(Ident("env"))))
+  }
+  
+  rule GenEval.extensions {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenEval.extension(name, cases),
+      GenEval.extensions(rest)
+    )
+  }
+  
+  rule GenEval.extensions {
+    Nil ↦ Nil
+  }
+  
+  // extension: generate extension (e: EVar) def evalVar(...)
+  // Wrap with Comment showing the full rule from meta.phi
+  rule GenEval.extension {
+    Args("Eval.var", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Eval.var { EVar(name) ↦ Lookup(name, env) }", ExtensionOn("e", conName, List(
+        DefMethod("evalVar", Param("env", "Env"), TypeName("Val"), GenEval.body(body)))))
+  }
+  rule GenEval.extension {
+    Args("Eval.con", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Eval.con { ECon(name, args) ↦ VCon(name, Eval.list(args, env)) }", ExtensionOn("e", conName, List(
+        DefMethod("evalCon", Param("env", "Env"), TypeName("Val"), GenEval.body(body)))))
+  }
+  rule GenEval.extension {
+    Args("Eval.app", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Eval.app { EApp(func, arg) ↦ Apply(Eval(func), Eval(arg)) }", ExtensionOn("e", conName, List(
+        DefMethod("evalApp", Param("env", "Env"), TypeName("Val"), GenEval.body(body)))))
+  }
+  rule GenEval.extension {
+    Args("Eval.lam", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Eval.lam { ELam(param, body) ↦ VClosure(param, body, env) }", ExtensionOn("e", conName, List(
+        DefMethod("evalLam", Param("env", "Env"), TypeName("Val"), GenEval.body(body)))))
+  }
+  rule GenEval.extension {
+    Args("Eval.let", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Eval.let { ELet(name, value, body) ↦ Eval(body, Bind(name, Eval(value), env)) }", ExtensionOn("e", conName, List(
+        DefMethod("evalLet", Param("env", "Env"), TypeName("Val"), GenEval.body(body)))))
+  }
+  rule GenEval.extension {
+    Args("Eval.match", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Eval.match { EMatch(scrutinee, cases) ↦ TryCases(Eval(scrutinee), cases, env) }", ExtensionOn("e", conName, List(
+        DefMethod("evalMatch", Param("env", "Env"), TypeName("Val"), GenEval.body(body)))))
+  }
+  rule GenEval.extension {
+    Args("Eval.case", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Eval.case { ECase(pat, body) ↦ Error(...) }", ExtensionOn("e", conName, List(
+        DefMethod("evalCase", Param("env", "Env"), TypeName("Val"), GenEval.body(body)))))
+  }
+  
+  // Transform rule body to Scala expression
+  // The pattern variables become field accesses on 'e' (the extension receiver)
+  
+  // Lookup(name, env) → lookup(e.name, env).getOrElse(VCon(e.name, Nil))
+  rule GenEval.body {
+    PCon("Lookup", Cons(PVar(name), Cons(PVar(envVar), Nil))) ↦ 
+      MethodCall(
+        Call("lookup", List(FieldAccess(Ident("e"), name), Ident(envVar))),
+        "getOrElse",
+        List(Call("VCon", List(FieldAccess(Ident("e"), name), Ident("Nil")))))
+  }
+  
+  // VCon(name, Eval.list(args, env)) → VCon(e.name, e.args.map(_.eval(env)))
+  rule GenEval.body {
+    PCon("VCon", Cons(PVar(name), Cons(PCon("Eval.list", Cons(PVar(argsVar), rest)), Nil))) ↦ 
+      Call("VCon", List(
+        FieldAccess(Ident("e"), name), 
+        MethodCall(FieldAccess(Ident("e"), argsVar), "map", List(Ident("_.eval(env)")))))
+  }
+  
+  // VClosure(param, body, env) → VCon("Closure", List(VStr(e.param), VCon("Body", Nil)))
+  rule GenEval.body {
+    PCon("VClosure", Cons(PVar(param), Cons(PVar(bodyVar), Cons(PVar(envVar), Nil)))) ↦ 
+      Call("VCon", List(
+        StrLit("Closure"),
+        Call("List", List(
+          Call("VStr", List(FieldAccess(Ident("e"), param))),
+          Call("VCon", List(StrLit("Body"), Ident("Nil")))))))
+  }
+  
+  // Apply(Eval.forward(func), Eval.forward(arg)) → applyVal(e.func.eval(env), e.arg.eval(env), env)
+  rule GenEval.body {
+    PCon("Apply", Cons(PCon("Eval.forward", Cons(PVar(func), Nil)), Cons(PCon("Eval.forward", Cons(PVar(arg), Nil)), Nil))) ↦ 
+      Call("applyVal", List(
+        MethodCall(FieldAccess(Ident("e"), func), "eval", List(Ident("env"))),
+        MethodCall(FieldAccess(Ident("e"), arg), "eval", List(Ident("env"))),
+        Ident("env")))
+  }
+  
+  // TryCases(Eval.forward(scrutinee), cases, env) → tryCases(e.scrutinee.eval(env), e.cases, env)
+  rule GenEval.body {
+    PCon("TryCases", Cons(PCon("Eval.forward", Cons(PVar(scrutinee), Nil)), Cons(PVar(cases), Cons(PVar(envVar), Nil)))) ↦ 
+      Call("tryCases", List(
+        MethodCall(FieldAccess(Ident("e"), scrutinee), "eval", List(Ident("env"))),
+        FieldAccess(Ident("e"), cases),
+        Ident(envVar)))
+  }
+  
+  // Eval.forward(body, Bind(name, Eval.forward(value), env)) 
+  // → val v = e.value.eval(env); e.body.eval(Bind(e.name, v, env))
+  // This needs a Block construct, but for now generate inline:
+  rule GenEval.body {
+    PCon("Eval.forward", Cons(PVar(bodyVar), Cons(PCon("Bind", Cons(PVar(name), Cons(PCon("Eval.forward", Cons(PVar(valueVar), Nil)), Cons(PVar(envVar), Nil)))), Nil))) ↦ 
+      MethodCall(FieldAccess(Ident("e"), bodyVar), "eval", List(
+        Call("Bind", List(
+          FieldAccess(Ident("e"), name),
+          MethodCall(FieldAccess(Ident("e"), valueVar), "eval", List(Ident("env"))),
+          Ident(envVar)))))
+  }
+  
+  // Error("msg") → VCon("Error", List(VStr("msg")))
+  // When the arg is a literal string (PCon with Nil args), extract and quote it
+  rule GenEval.body {
+    PCon("Error", Cons(PCon(msg, Nil), Nil)) ↦ 
+      Call("VCon", List(StrLit("Error"), Call("List", List(Call("VStr", List(StrLit(msg)))))))
+  }
+  
+  // Error(varName) → VCon("Error", List(VStr(varName))) - for variable references
+  rule GenEval.body {
+    PCon("Error", Cons(PVar(msg), Nil)) ↦ 
+      Call("VCon", List(StrLit("Error"), Call("List", List(Call("VStr", List(FieldAccess(Ident("e"), msg)))))))
+  }
+
+  // Eval.forward(x) → e.x.eval(env)
+  rule GenEval.body {
+    PCon("Eval.forward", Cons(PVar(name), Nil)) ↦ 
+      MethodCall(FieldAccess(Ident("e"), name), "eval", List(Ident("env")))
+  }
+  
+  // Eval.forward(x, newEnv) → e.x.eval(newEnv)
+  rule GenEval.body {
+    PCon("Eval.forward", Cons(PVar(name), Cons(newEnv, Nil))) ↦ 
+      MethodCall(FieldAccess(Ident("e"), name), "eval", List(GenEval.body(newEnv)))
+  }
+  
+  // Bind(name, val, env) → Bind(e.name, val, env) 
+  rule GenEval.body {
+    PCon("Bind", Cons(PVar(name), Cons(val, Cons(PVar(envVar), Nil)))) ↦ 
+      Call("Bind", List(FieldAccess(Ident("e"), name), GenEval.body(val), Ident(envVar)))
+  }
+  
+  // Variable reference from pattern → field access
+  rule GenEval.body {
+    PVar(name) ↦ FieldAccess(Ident("e"), name)
+  }
+  
+  // String literal
+  rule GenEval.body {
+    PCon(s, Nil) ↦ StrLit(s)
+  }
+  
+  // Fallback for unknown
+  rule GenEval.body {
+    body ↦ Ident("???")
+  }
+  
+  // Convert args list
+  rule GenEval.bodyArgs {
+    Cons(arg, rest) ↦ Cons(GenEval.body(arg), GenEval.bodyArgs(rest))
+  }
+  
+  rule GenEval.bodyArgs {
+    Nil ↦ Nil
   }
   
   // ==========================================================================
-  // Rules: Pattern → Scala Pattern
+  // GenMatch: Match xform → gen/Match.scala
+  // ==========================================================================
+  xform GenMatch : Xform ⇄ ScalaFile
+  
+  rule GenMatch.file {
+    Xform("Match", params, srcType, tgtType, rules) ↦ 
+      ScalaPackage("phi.meta.gen", List(
+        ScalaImport("phi.meta.{Val, Env, Pat, Result}"),
+        ScalaImport("Val.*"),
+        ScalaImport("Env.*"),
+        ScalaImport("Pat.*"),
+        ScalaImport("Result.*"),
+        BlankDecl,
+        DeclDocComment("Match: Pattern matching (generated from meta.phi Match xform)",
+          ScalaObject("Match", GenMatch.membersAndHelpers(rules)))
+      ))
+  }
+  
+  rule GenMatch.membersAndHelpers {
+    rules ↦ Cons(
+      GenMatch.dispatch(rules),
+      Cons(BlankLine, GenMatch.extensionsAndHelpers(rules))
+    )
+  }
+  
+  rule GenMatch.extensionsAndHelpers {
+    rules ↦ GenMatch.appendHelpers(GenMatch.extensions(rules))
+  }
+  
+  rule GenMatch.appendHelpers {
+    extensions ↦ GenMatch.concat(extensions, Cons(BlankLine, GenMatch.helpers))
+  }
+  
+  // Helper method for Match (matchArgs)
+  // matchArgs: match list of patterns against list of values
+  rule GenMatch.helpers {
+    _ ↦ Cons(
+      DocComment("Match a list of patterns against a list of values",
+        DefMethodN("matchArgs", List(Param("pats", "List[Pat]"), Param("vals", "List[Val]"), Param("env", "Env")), TypeName("Result"),
+          MatchExpr(TupleExpr(List(Ident("pats"), Ident("vals"))), Cons(
+            PatCase("(Nil, Nil)", Call("ROk", List(Call("VList", List(Ident("Nil"))), Ident("env")))),
+            Cons(
+              NestedMatch("(p :: ps, v :: vs)",
+                MethodCall(Ident("p"), "matchWith", List(Ident("v"), Ident("env"))),
+                Cons(
+                  PatCase("ROk(_, env1)", Call("matchArgs", List(Ident("ps"), Ident("vs"), Ident("env1")))),
+                  Cons(
+                    PatCase("RFail", Ident("RFail")),
+                    Nil
+                  )
+                )
+              ),
+              Cons(
+                PatCase("_", Ident("RFail")),
+                Nil
+              )
+            )
+          ))
+        )),
+      Nil
+    )
+  }
+  
+  // Concatenate two Cons lists
+  rule GenMatch.concat {
+    Args(Nil, ys) ↦ ys
+  }
+  rule GenMatch.concat {
+    Args(Cons(x, xs), ys) ↦ Cons(x, GenMatch.concat(Args(xs, ys)))
+  }
+  
+  rule GenMatch.dispatch {
+    rules ↦ ExtensionOn("pat", "Pat", List(
+      DispatchDefN("matchWith", List(Param("value", "Val"), Param("env", "Env")), TypeName("Result"), "pat", GenMatch.cases(rules))
+    ))
+  }
+  
+  rule GenMatch.cases {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenMatch.oneCase(name, cases),
+      GenMatch.cases(rest)
+    )
+  }
+  
+  rule GenMatch.cases {
+    Nil ↦ Nil
+  }
+  
+  // Generate dispatch case: case p: PVar => p.matchVar(value, env)
+  rule GenMatch.oneCase {
+    Args("Match.var", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      TypeCase("p", conName, MethodCall(Ident("p"), "matchVar", List(Ident("value"), Ident("env"))))
+  }
+  rule GenMatch.oneCase {
+    Args("Match.con", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      TypeCase("p", conName, MethodCall(Ident("p"), "matchCon", List(Ident("value"), Ident("env"))))
+  }
+  rule GenMatch.oneCase {
+    Args("Match.wild", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      PatCase("PWild", Call("matchWild", List(Ident("value"), Ident("env"))))
+  }
+  rule GenMatch.oneCase {
+    Args("Match.lit", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      TypeCase("p", conName, MethodCall(Ident("p"), "matchLit", List(Ident("value"), Ident("env"))))
+  }
+
+  rule GenMatch.extensions {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenMatch.extension(name, cases),
+      GenMatch.extensions(rest)
+    )
+  }
+  
+  rule GenMatch.extensions {
+    Nil ↦ Nil
+  }
+  
+  // Generate extension methods with actual implementations
+  // PVar: ROk(value, Bind(p.name, value, env))
+  rule GenMatch.extension {
+    Args("Match.var", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Match.var { PVar(name) ↦ ROk(val, Bind(name, val, env)) }", ExtensionOn("p", conName, List(
+        DefMethodN("matchVar", List(Param("value", "Val"), Param("env", "Env")), TypeName("Result"),
+          Call("ROk", List(Ident("value"), Call("Bind", List(FieldAccess(Ident("p"), "name"), Ident("value"), Ident("env"))))))
+      )))
+  }
+  
+  // PCon: match constructor name and args
+  // value match { case VCon(vname, vargs) if p.name == vname && ... => matchArgs(...) case _ => RFail }
+  rule GenMatch.extension {
+    Args("Match.con", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Match.con { PCon(name, pats) ↦ Match.args(pats, args, env) }", ExtensionOn("p", conName, List(
+        DefMethodN("matchCon", List(Param("value", "Val"), Param("env", "Env")), TypeName("Result"),
+          MatchExpr(Ident("value"), Cons(
+            GuardedCase("VCon(vname, vargs)",
+              BinOp(BinOp(FieldAccess(Ident("p"), "name"), "==", Ident("vname")), "&&",
+                    BinOp(FieldAccess(FieldAccess(Ident("p"), "args"), "length"), "==", FieldAccess(Ident("vargs"), "length"))),
+              Call("matchArgs", List(FieldAccess(Ident("p"), "args"), Ident("vargs"), Ident("env")))),
+            Cons(
+              PatCase("_", Ident("RFail")),
+              Nil
+            )
+          ))
+        )
+      )))
+  }
+  
+  // PWild: ROk(value, env) - standalone function since PWild is an object
+  rule GenMatch.extension {
+    Args("Match.wild", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Match.wild { PWild ↦ ROk(val, env) }", DefMethodN("matchWild", List(Param("value", "Val"), Param("env", "Env")), TypeName("Result"),
+        Call("ROk", List(Ident("value"), Ident("env")))))
+  }
+  
+  // PLit: if value == p.value then ROk else RFail
+  rule GenMatch.extension {
+    Args("Match.lit", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Match.lit { PLit(expected) ↦ ROk(val, env) }", ExtensionOn("p", conName, List(
+        DefMethodN("matchLit", List(Param("value", "Val"), Param("env", "Env")), TypeName("Result"),
+          IfExpr(BinOp(Ident("value"), "==", FieldAccess(Ident("p"), "value")),
+                 Call("ROk", List(Ident("value"), Ident("env"))),
+                 Ident("RFail")))))
+      )
+  }
+  
+  // ==========================================================================
+  // GenShow: Show xform → gen/Show.scala  
+  // ==========================================================================
+  // Show generates extension methods for all meta.phi types
+  xform GenShow : Xform ⇄ ScalaFile
+  
+  rule GenShow.file {
+    Xform("Show", params, srcType, tgtType, rules) ↦ 
+      ScalaPackage("phi.meta.gen", List(
+        ScalaImport("phi.meta.{Val, Env, Pat, Expr, Result}"),
+        ScalaImport("Val.*"),
+        ScalaImport("Env.*"),
+        ScalaImport("Pat.*"),
+        ScalaImport("Expr.*"),
+        ScalaImport("Result.*"),
+        BlankDecl,
+        DeclDocComment("Show: Pretty printing (generated from meta.phi Show xform)",
+          ScalaObject("Show", GenShow.members(rules)))
+      ))
+  }
+  
+  // Members: dispatchers + extensions
+  rule GenShow.members {
+    rules ↦ GenShow.concat(
+      GenShow.dispatchers,
+      GenShow.extensions(rules)
+    )
+  }
+  
+  // All type dispatchers
+  rule GenShow.dispatchers {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Val.show ==========",
+          ExtensionOn("v", "Val", List(
+            DispatchDef0("show", TypeName("String"), "v",
+              Cons(TypeCase("c", "VCon", MethodCall0(Ident("c"), "showCon")),
+              Cons(TypeCase("s", "VStr", MethodCall0(Ident("s"), "showStr")),
+              Cons(TypeCase("i", "VInt", MethodCall0(Ident("i"), "showInt")),
+              Cons(TypeCase("l", "VList", MethodCall0(Ident("l"), "showList")),
+              Nil)))))))),
+        Cons(
+          BlankLine,
+          Cons(
+            Comment("========== Pat.show ==========",
+              ExtensionOn("p", "Pat", List(
+                DispatchDef0("show", TypeName("String"), "p",
+                  Cons(TypeCase("v", "PVar", MethodCall0(Ident("v"), "showPVar")),
+                  Cons(TypeCase("c", "PCon", MethodCall0(Ident("c"), "showPCon")),
+                  Cons(PatCase("PWild", StrLit("_")),
+                  Cons(TypeCase("l", "PLit", MethodCall0(Ident("l"), "showPLit")),
+                  Nil)))))))),
+            Cons(
+              BlankLine,
+              Cons(
+                Comment("========== Expr.show ==========",
+                  ExtensionOn("e", "Expr", List(
+                    DispatchDef0("show", TypeName("String"), "e",
+                      Cons(TypeCase("v", "EVar", FieldAccess(Ident("v"), "name")),
+                      Cons(TypeCase("c", "ECon", MethodCall0(Ident("c"), "showECon")),
+                      Cons(TypeCase("a", "EApp", MethodCall0(Ident("a"), "showEApp")),
+                      Cons(TypeCase("l", "ELam", MethodCall0(Ident("l"), "showELam")),
+                      Cons(TypeCase("t", "ELet", MethodCall0(Ident("t"), "showELet")),
+                      Cons(TypeCase("m", "EMatch", MethodCall0(Ident("m"), "showEMatch")),
+                      Cons(TypeCase("cs", "ECase", MethodCall0(Ident("cs"), "showECase")),
+                      Nil))))))))))),
+                Cons(
+                  BlankLine,
+                  Cons(
+                    Comment("========== Env.show ==========",
+                      ExtensionOn("env", "Env", List(
+                        DispatchDef0("show", TypeName("String"), "env",
+                          Cons(PatCase("EmptyEnv", StrLit("{}")),
+                          Cons(TypeCase("b", "Bind", MethodCall0(Ident("b"), "showBind")),
+                          Nil)))))),
+                    Cons(
+                      BlankLine,
+                      Cons(
+                        Comment("========== Result.show ==========",
+                          ExtensionOn("r", "Result", List(
+                            DispatchDef0("show", TypeName("String"), "r",
+                              Cons(TypeCase("ok", "ROk", MethodCall0(Ident("ok"), "showOk")),
+                              Cons(PatCase("RFail", StrLit("RFail")),
+                              Nil)))))),
+                        Nil
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  }
+  
+  // Concatenate two lists
+  rule GenShow.concat {
+    Args(Nil, ys) ↦ ys
+  }
+  rule GenShow.concat {
+    Args(Cons(x, xs), ys) ↦ Cons(x, GenShow.concat(Args(xs, ys)))
+  }
+  
+  rule GenShow.extensions {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenShow.extension(name, cases),
+      GenShow.extensions(rest)
+    )
+  }
+  
+  rule GenShow.extensions {
+    Nil ↦ Nil
+  }
+  
+  // --------------------------------------------------------------------------
+  // Val extensions
+  // --------------------------------------------------------------------------
+  
+  // Show.vcon: VCon(name, args) → if args.isEmpty then name else name(args...)
+  rule GenShow.extension {
+    Args("Show.vcon", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.vcon { VCon(name, args) ↦ ShowCon(...) }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showCon", TypeName("String"),
+            IfExpr(MethodCall0(FieldAccess(Ident("self"), "args"), "isEmpty"),
+              FieldAccess(Ident("self"), "name"),
+              BinOp(BinOp(BinOp(FieldAccess(Ident("self"), "name"), "++", StrLit("(")), "++",
+                MethodCall(MethodCall(FieldAccess(Ident("self"), "args"), "map", List(FieldAccess(Ident("_"), "show"))), "mkString", List(StrLit(", ")))), "++",
+                StrLit(")")))))))
+  }
+  
+  // Show.vstr: VStr(s) → "\"" ++ s ++ "\""
+  rule GenShow.extension {
+    Args("Show.vstr", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.vstr { VStr(s) ↦ ShowStr(s) }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showStr", TypeName("String"),
+            BinOp(BinOp(DQuotLit, "++", FieldAccess(Ident("self"), "s")), "++", DQuotLit)))))
+  }
+  
+  // Show.vint: VInt(n) → n.toString
+  rule GenShow.extension {
+    Args("Show.vint", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.vint { VInt(n) ↦ Show.int(n) }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showInt", TypeName("String"),
+            MethodCall0(FieldAccess(Ident("self"), "n"), "toString")))))
+  }
+  
+  // Show.vlist: VList(elems) → "[" ++ elems.map(_.show).mkString(", ") ++ "]"
+  rule GenShow.extension {
+    Args("Show.vlist", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.vlist { VList(elems) ↦ [...] }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showList", TypeName("String"),
+            BinOp(BinOp(StrLit("["), "++",
+              MethodCall(MethodCall(FieldAccess(Ident("self"), "elems"), "map", List(FieldAccess(Ident("_"), "show"))), "mkString", List(StrLit(", ")))), "++",
+              StrLit("]"))))))
+  }
+  
+  // --------------------------------------------------------------------------
+  // Pat extensions
+  // --------------------------------------------------------------------------
+  
+  // Show.pvar: PVar(name) → name
+  rule GenShow.extension {
+    Args("Show.pvar", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.pvar { PVar(name) ↦ name }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showPVar", TypeName("String"),
+            FieldAccess(Ident("self"), "name")))))
+  }
+  
+  // Show.pcon: PCon(name, args) → if args.isEmpty then name else name(args...)
+  rule GenShow.extension {
+    Args("Show.pcon", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.pcon { PCon(name, args) ↦ ShowCon(...) }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showPCon", TypeName("String"),
+            IfExpr(MethodCall0(FieldAccess(Ident("self"), "args"), "isEmpty"),
+              FieldAccess(Ident("self"), "name"),
+              BinOp(BinOp(BinOp(FieldAccess(Ident("self"), "name"), "++", StrLit("(")), "++",
+                MethodCall(MethodCall(FieldAccess(Ident("self"), "args"), "map", List(FieldAccess(Ident("_"), "show"))), "mkString", List(StrLit(", ")))), "++",
+                StrLit(")")))))))
+  }
+  
+  // Show.pwild: PWild → "_" - handled in dispatcher
+  rule GenShow.extension {
+    Args("Show.pwild", cases) ↦ BlankLine
+  }
+  
+  // Show.plit: PLit(value) → value.show
+  rule GenShow.extension {
+    Args("Show.plit", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.plit { PLit(value) ↦ Show.forward(value) }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showPLit", TypeName("String"),
+            MethodCall0(FieldAccess(Ident("self"), "value"), "show")))))
+  }
+  
+  // --------------------------------------------------------------------------
+  // Expr extensions
+  // --------------------------------------------------------------------------
+  
+  // Show.evar: EVar(name) → name - handled in dispatcher
+  rule GenShow.extension {
+    Args("Show.evar", cases) ↦ BlankLine
+  }
+  
+  // Show.econ: ECon(name, args) → if args.isEmpty then name else name(args...)
+  rule GenShow.extension {
+    Args("Show.econ", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.econ { ECon(name, args) ↦ ShowCon(...) }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showECon", TypeName("String"),
+            IfExpr(MethodCall0(FieldAccess(Ident("self"), "args"), "isEmpty"),
+              FieldAccess(Ident("self"), "name"),
+              BinOp(BinOp(BinOp(FieldAccess(Ident("self"), "name"), "++", StrLit("(")), "++",
+                MethodCall(MethodCall(FieldAccess(Ident("self"), "args"), "map", List(FieldAccess(Ident("_"), "show"))), "mkString", List(StrLit(", ")))), "++",
+                StrLit(")")))))))
+  }
+  
+  // Show.eapp: EApp(func, arg) → "(" ++ func.show ++ " " ++ arg.show ++ ")"
+  rule GenShow.extension {
+    Args("Show.eapp", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.eapp { EApp(func, arg) ↦ Concat(...) }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showEApp", TypeName("String"),
+            BinOp(BinOp(BinOp(BinOp(StrLit("("), "++",
+              MethodCall0(FieldAccess(Ident("self"), "func"), "show")), "++",
+              StrLit(" ")), "++",
+              MethodCall0(FieldAccess(Ident("self"), "arg"), "show")), "++",
+              StrLit(")"))))))
+  }
+  
+  // Show.elam: ELam(param, body) → "λ" ++ param ++ ". " ++ body.show
+  rule GenShow.extension {
+    Args("Show.elam", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.elam { ELam(param, body) ↦ Concat(...) }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showELam", TypeName("String"),
+            BinOp(BinOp(BinOp(StrLit("λ"), "++",
+              FieldAccess(Ident("self"), "param")), "++",
+              StrLit(". ")), "++",
+              MethodCall0(FieldAccess(Ident("self"), "body"), "show"))))))
+  }
+  
+  // Show.elet: ELet(name, value, body) → "let " ++ name ++ " = " ++ value.show ++ " in " ++ body.show
+  rule GenShow.extension {
+    Args("Show.elet", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.elet { ELet(name, value, body) ↦ Concat(...) }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showELet", TypeName("String"),
+            BinOp(BinOp(BinOp(BinOp(BinOp(StrLit("let "), "++",
+              FieldAccess(Ident("self"), "name")), "++",
+              StrLit(" = ")), "++",
+              MethodCall0(FieldAccess(Ident("self"), "value"), "show")), "++",
+              StrLit(" in ")), "++",
+              MethodCall0(FieldAccess(Ident("self"), "body"), "show"))))))
+  }
+  
+  // Show.ematch: EMatch(scrutinee, cases) → "match " ++ scrutinee.show ++ " { " ++ cases.map(_.show).mkString("; ") ++ " }"
+  rule GenShow.extension {
+    Args("Show.ematch", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.ematch { EMatch(scrutinee, cases) ↦ Concat(...) }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showEMatch", TypeName("String"),
+            BinOp(BinOp(BinOp(BinOp(StrLit("match "), "++",
+              MethodCall0(FieldAccess(Ident("self"), "scrutinee"), "show")), "++",
+              StrLit(" { ")), "++",
+              MethodCall(MethodCall(FieldAccess(Ident("self"), "cases"), "map", List(FieldAccess(Ident("_"), "show"))), "mkString", List(StrLit("; ")))), "++",
+              StrLit(" }"))))))
+  }
+  
+  // Show.ecase: ECase(pattern, body) → pattern.show ++ " => " ++ body.show
+  rule GenShow.extension {
+    Args("Show.ecase", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.ecase { ECase(pattern, body) ↦ Concat(...) }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showECase", TypeName("String"),
+            BinOp(BinOp(MethodCall0(FieldAccess(Ident("self"), "pattern"), "show"), "++",
+              StrLit(" => ")), "++",
+              MethodCall0(FieldAccess(Ident("self"), "body"), "show"))))))
+  }
+  
+  // --------------------------------------------------------------------------
+  // Env extensions
+  // --------------------------------------------------------------------------
+  
+  // Show.emptyenv: EmptyEnv → "{}" - handled in dispatcher
+  rule GenShow.extension {
+    Args("Show.emptyenv", cases) ↦ BlankLine
+  }
+  
+  // Show.bind: Bind(name, value, rest) → "{name -> value.show, rest.show}"
+  rule GenShow.extension {
+    Args("Show.bind", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.bind { Bind(name, value, rest) ↦ Concat(...) }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showBind", TypeName("String"),
+            BinOp(BinOp(BinOp(BinOp(BinOp(BinOp(StrLit("{"), "++",
+              FieldAccess(Ident("self"), "name")), "++",
+              StrLit(" -> ")), "++",
+              MethodCall0(FieldAccess(Ident("self"), "value"), "show")), "++",
+              StrLit(", ")), "++",
+              MethodCall0(FieldAccess(Ident("self"), "rest"), "show")), "++",
+              StrLit("}"))))))
+  }
+  
+  // --------------------------------------------------------------------------
+  // Result extensions
+  // --------------------------------------------------------------------------
+  
+  // Show.ok: ROk(value, env) → "ROk(value.show, env.show)"
+  rule GenShow.extension {
+    Args("Show.ok", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      Comment("rule Show.ok { ROk(value, env) ↦ Concat(...) }",
+        ExtensionOn("self", conName, List(
+          DefMethod0("showOk", TypeName("String"),
+            BinOp(BinOp(BinOp(BinOp(StrLit("ROk("), "++",
+              MethodCall0(FieldAccess(Ident("self"), "value"), "show")), "++",
+              StrLit(", ")), "++",
+              MethodCall0(FieldAccess(Ident("self"), "env"), "show")), "++",
+              StrLit(")"))))))
+  }
+  
+  // Show.fail: RFail → "RFail" - handled in dispatcher
+  rule GenShow.extension {
+    Args("Show.fail", cases) ↦ BlankLine
+  }
+  
+  // Fallback for unknown Show rules - skip them
+  rule GenShow.extension {
+    Args(name, cases) ↦ BlankLine
+  }
+
+  // ==========================================================================
+  // GenInterp: LangSpec → phi.meta.gen/Interp.scala (partial)
+  // ==========================================================================
+  // Generates interpreter dispatch from meta.phi xform definitions.
+  // Focus: Generate applyXform dispatcher and per-xform methods.
+  
+  xform GenInterp : Spec ⇄ ScalaFile
+  
+  rule GenInterp.file {
+    LangSpec(name, sorts, constructors, grammars, xforms, rules) ↦ 
+      ScalaPackage("phi.meta.gen", List(
+        ScalaImport("phi.phi.MetaPattern"),
+        ScalaImport("phi.meta.{Val, Env, Pat, Expr, Result}"),
+        ScalaImport("Val.*"),
+        ScalaImport("Env.*"),
+        ScalaImport("Pat.*"),
+        ScalaImport("Expr.*"),
+        ScalaImport("Result.*"),
+        BlankDecl,
+        DeclDocComment("Interp: Generated interpreter dispatch from meta.phi xforms",
+          ScalaObject("Interp", GenInterp.members(xforms, rules)))
+      ))
+  }
+  
+  rule GenInterp.members {
+    Args(xforms, rules) ↦ GenInterp.concat(
+      GenInterp.applyXformMethod(xforms),
+      GenInterp.concat(
+        GenInterp.xformMethods(xforms, rules),
+        GenInterp.concat(
+          GenInterp.matchPatternMethod,
+          GenInterp.substituteMethod
+        )
+      )
+    )
+  }
+  
+  rule GenInterp.concat {
+    Args(Nil, ys) ↦ ys
+  }
+  rule GenInterp.concat {
+    Args(Cons(x, xs), ys) ↦ Cons(x, GenInterp.concat(Args(xs, ys)))
+  }
+  
+  // Main applyXform dispatcher - generates cases for each xform
+  rule GenInterp.applyXformMethod {
+    xforms ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Apply transform by name ==========",
+          DefMethodN("applyXform", List(Param("xformName", "String"), Param("value", "Val")), TypeName("Option[Val]"),
+            MatchExpr(Ident("xformName"), GenInterp.xformCases(xforms))
+          )
+        ),
+        Nil
+      )
+    )
+  }
+  
+  // Generate cases for applyXform dispatcher
+  rule GenInterp.xformCases {
+    Nil ↦ Cons(PatCase("_", Ident("None")), Nil)
+  }
+  rule GenInterp.xformCases {
+    Cons(Xform(name, params, srcType, tgtType, xformRules), rest) ↦ 
+      Cons(
+        PatCase(StrLit(name), Call(StrConcat("apply", name), List(Ident("value")))),
+        GenInterp.xformCases(rest)
+      )
+  }
+  
+  // Generate method for each xform
+  rule GenInterp.xformMethods {
+    Args(Nil, rules) ↦ Nil
+  }
+  rule GenInterp.xformMethods {
+    Args(Cons(xform, rest), rules) ↦ 
+      GenInterp.concat(
+        GenInterp.xformMethod(xform, rules),
+        GenInterp.xformMethods(rest, rules)
+      )
+  }
+  
+  rule GenInterp.xformMethod {
+    Args(Xform(name, params, srcType, tgtType, xformRules), rules) ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment(StrConcat("========== ", name, " =========="),
+          DefMethodN(StrConcat("apply", name), List(Param("value", "Val")), TypeName("Option[Val]"),
+            MatchExpr(Ident("value"), Cons(PatCase("_", Ident("None")), Nil))
+          )
+        ),
+        Nil
+      )
+    )
+  }
+
+  // ==========================================================================
+  // Pattern Matching - cases from phi.phi Pattern constructors
   // ==========================================================================
   
-  rule Pat2Scala.var {
-    PVar(name) ↦ PatVar(Var(name))
+  rule GenInterp.matchPatternMethod {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Pattern Matching (MetaPattern → Val → bindings) ==========",
+          DefMethodN("matchPattern", List(Param("pattern", "MetaPattern"), Param("value", "Val")), TypeName("Option[Map[String, Val]]"),
+            MatchExpr(Ident("pattern"), Cons(
+              PatCase("MetaPattern.PVar(name)", Call("Some", List(Call("Map", List(BinOp(Ident("name"), "->", Ident("value"))))))),
+              Cons(PatCase("MetaPattern.PCon(name, args)", Call("matchPCon", List(Ident("name"), Ident("args"), Ident("value")))),
+              Cons(PatCase("MetaPattern.PApp(func, arg)", Ident("None")),
+              Cons(PatCase("MetaPattern.PSubst(_, _, _)", Ident("None")),
+              Nil)))))
+          )
+        ),
+        Cons(BlankLine, Cons(
+          Comment("Match constructor pattern against value",
+            DefMethodN("matchPCon", List(Param("name", "String"), Param("args", "List[MetaPattern]"), Param("value", "Val")), TypeName("Option[Map[String, Val]]"),
+              MatchExpr(Ident("value"), Cons(
+                GuardedCase("VCon(vname, vargs)", Ident("vname == name && args.length == vargs.length"),
+                  Call("matchArgs", List(Ident("args"), Ident("vargs")))
+                ),
+                Cons(GuardedCase("VStr(s)", Ident("args.isEmpty && name == s"),
+                  Call("Some", List(FieldAccess(Ident("Map"), "empty")))
+                ),
+                Cons(PatCase("_", Ident("None")),
+                Nil))))
+            )
+          ),
+          Cons(BlankLine, Cons(
+            Comment("Match list of patterns against list of values",
+              DefMethodN("matchArgs", List(Param("pats", "List[MetaPattern]"), Param("vals", "List[Val]")), TypeName("Option[Map[String, Val]]"),
+                MatchExpr(TupleExpr(List(Ident("pats"), Ident("vals"))), Cons(
+                  PatCase("(Nil, Nil)", Call("Some", List(FieldAccess(Ident("Map"), "empty")))),
+                  Cons(PatCase("(p :: ps, v :: vs)", 
+                    MethodCall(Call("matchPattern", List(Ident("p"), Ident("v"))), "flatMap", List(
+                      Lambda("b1", MethodCall(Call("matchArgs", List(Ident("ps"), Ident("vs"))), "map", List(
+                        Lambda("b2", BinOp(Ident("b1"), "++", Ident("b2")))
+                      )))
+                    ))
+                  ),
+                  Cons(PatCase("_", Ident("None")),
+                  Nil))))
+              )
+            ),
+            Nil
+          ))
+        ))
+      )
+    )
   }
-  
-  rule Pat2Scala.con {
-    PCon(name, pats) ↦ 
-      PatCon(StringLit("VCon"),
-        PatCon(StringLit("Seq"), Pat2Scala.forward(pats)))
-  }
-  
-  rule Pat2Scala.wild {
-    PWild ↦ PatWild
-  }
-  
+
   // ==========================================================================
-  // Rules: Expr → Scala Expr
+  // Substitution - cases from phi.phi Pattern constructors  
   // ==========================================================================
   
-  rule Expr2Scala.var {
-    EVar(name) ↦ 
-      App(Var(StringLit("env.get")), Var(name))
-  }
-  
-  rule Expr2Scala.con {
-    ECon(name, args) ↦
-      App(Var(StringLit("VCon")), 
-        Var(name),
-        App(Var(StringLit("List")), Expr2Scala.forward(args)))
-  }
-  
-  rule Expr2Scala.app {
-    EApp(f, x) ↦
-      App(Expr2Scala.forward(f), Expr2Scala.forward(x))
-  }
-  
-  rule Expr2Scala.match {
-    EMatch(scrut, cases) ↦
-      Match(Expr2Scala.forward(scrut), Expr2Scala.forward(cases))
-  }
-  
-  rule Expr2Scala.case {
-    ECase(pat, body) ↦
-      CaseClause(Pat2Scala.forward(pat), Expr2Scala.forward(body))
-  }
-  
-  // ==========================================================================
-  // Rules: Result → Option[Val]
-  // ==========================================================================
-  
-  rule Result2Scala.ok {
-    ROk(val, env) ↦ 
-      App(Var(StringLit("Some")), Val2Scala.forward(val))
-  }
-  
-  rule Result2Scala.fail {
-    RFail ↦ Var(StringLit("None"))
+  rule GenInterp.substituteMethod {
+    _ ↦ Cons(
+      BlankLine,
+      Cons(
+        Comment("========== Substitution (MetaPattern → bindings → Val) ==========",
+          DefMethodN("substitute", List(Param("expr", "MetaPattern"), Param("bindings", "Map[String, Val]")), TypeName("Val"),
+            MatchExpr(Ident("expr"), Cons(
+              PatCase("MetaPattern.PVar(name)", 
+                MethodCall(MethodCall(Ident("bindings"), "get", List(Ident("name"))), "getOrElse", List(Call("VCon", List(Ident("name"), Ident("Nil")))))
+              ),
+              Cons(PatCase("MetaPattern.PCon(name, args)", Call("substPCon", List(Ident("name"), Ident("args"), Ident("bindings")))),
+              Cons(PatCase("MetaPattern.PApp(func, arg)", Call("substPApp", List(Ident("func"), Ident("arg"), Ident("bindings")))),
+              Cons(PatCase("MetaPattern.PSubst(body, varName, replacement)", Call("substPSubst", List(Ident("body"), Ident("varName"), Ident("replacement"), Ident("bindings")))),
+              Nil)))))
+          )
+        ),
+        Cons(BlankLine, Cons(
+          Comment("Substitute in constructor - handles special cases",
+            DefMethodN("substPCon", List(Param("name", "String"), Param("args", "List[MetaPattern]"), Param("bindings", "Map[String, Val]")), TypeName("Val"),
+              LetIn("transformedArgs", MethodCall(Ident("args"), "map", List(Lambda("a", Call("substitute", List(Ident("a"), Ident("bindings")))))),
+                // Scala: if (name == "StrConcat") VStr(transformedArgs.map(extractString).mkString("")) else if (name == "") VStr(transformedArgs.map(extractString).mkString("")) else VCon(name, transformedArgs)
+                IfExpr(BinOp(Ident("name"), "==", StrLit("StrConcat")),
+                  Call("VStr", List(MethodCall(MethodCall(Ident("transformedArgs"), "map", List(Ident("extractString"))), "mkString", List(StrLit(""))))),
+                  IfExpr(BinOp(Ident("name"), "==", StrLit("")),
+                    Call("VStr", List(MethodCall(MethodCall(Ident("transformedArgs"), "map", List(Ident("extractString"))), "mkString", List(StrLit(""))))),
+                    Call("VCon", List(Ident("name"), Ident("transformedArgs")))
+                  )
+                )
+              )
+            )
+          ),
+          Cons(BlankLine, Cons(
+            Comment("Substitute in application",
+              DefMethodN("substPApp", List(Param("func", "MetaPattern"), Param("arg", "MetaPattern"), Param("bindings", "Map[String, Val]")), TypeName("Val"),
+                Call("VCon", List(StrLit("App"), Call("List", List(Call("substitute", List(Ident("func"), Ident("bindings"))), Call("substitute", List(Ident("arg"), Ident("bindings")))))))
+              )
+            ),
+            Cons(BlankLine, Cons(
+              Comment("Substitute with local binding",
+                DefMethodN("substPSubst", List(Param("body", "MetaPattern"), Param("varName", "String"), Param("replacement", "MetaPattern"), Param("bindings", "Map[String, Val]")), TypeName("Val"),
+                  LetIn("replacementVal", Call("substitute", List(Ident("replacement"), Ident("bindings"))),
+                    Call("substitute", List(Ident("body"), Ident("bindings + (varName -> replacementVal)")))
+                  )
+                )
+              ),
+              Cons(BlankLine, Cons(
+                Comment("Extract string from Val",
+                  DefMethodN("extractString", List(Param("v", "Val")), TypeName("String"),
+                    MatchExpr(Ident("v"), Cons(
+                      PatCase("VStr(s)", Ident("s")),
+                      Cons(PatCase("VCon(s, Nil)", Ident("s")),
+                      Cons(PatCase("_", MethodCall0(Ident("v"), "toString")),
+                      Nil))))
+                  )
+                ),
+                Nil
+              ))
+            ))
+          ))
+        ))
+      )
+    )
   }
 }
