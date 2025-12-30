@@ -1,0 +1,432 @@
+// =============================================================================
+// Φ-Core: The Algebraic Foundation in Phi
+// =============================================================================
+// This is the meta-circular definition: Phi defining its own core.
+// 
+// The key insight: everything is a tree with annotations.
+//   Zipper     = Cofree[V, (Val, Path)]
+//   Attributed = Cofree[V, Attr]
+//   Versioned  = Cofree[V, Hash]
+
+language Core {
+
+  // ==========================================================================
+  // FOUNDATION: Four Fundamental Sorts
+  // ==========================================================================
+  
+  sort Functor       // F[_]   - structure-preserving maps
+  sort Monad         // M[_]   - sequenced computations
+  sort Comonad       // W[_]   - context-dependent computations
+  sort Natural       // ~>     - polymorphic transformations
+  
+  // ==========================================================================
+  // PATTERN FUNCTOR: One Layer of Val
+  // ==========================================================================
+  
+  sort V             // Pattern functor - one layer of syntax
+  
+  constructor C : String → List[V] → V       // Constructor: Foo(a, b)
+  constructor S : String → V                  // String literal
+  constructor I : Int → V                     // Integer literal
+  constructor L : List[V] → V                 // List: [a, b, c]
+  
+  // ==========================================================================
+  // RECURSIVE STRUCTURES
+  // ==========================================================================
+  
+  sort Fix           // μ[F]      - fixed point (recursive types)
+  sort Free          // Fr[F,A]   - free monad (effect sequences)
+  sort Cofree        // Co[F,A]   - cofree comonad (annotated trees)
+  
+  constructor μ : V → Fix                              // Fix point
+  constructor Pu : Val → Free                          // Pure value
+  constructor Su : V → Free                            // Suspended effect
+  constructor Co : Val → V → Cofree                    // Annotation + children
+  
+  // ==========================================================================
+  // OPTICS: Compositional Access
+  // ==========================================================================
+  
+  sort Lens          // Ln[S,A]   - exactly one focus
+  sort Prism         // Pr[S,A]   - maybe one focus (case match)
+  sort Traversal     // Tr[S,A]   - zero or more foci
+  
+  constructor Ln : Val → Val → Lens                    // get, set
+  constructor Pr : Val → Val → Prism                   // getOption, reverseGet
+  
+  // ==========================================================================
+  // TRANSFORMS
+  // ==========================================================================
+  
+  sort Xform         // X[A,B]    - bidirectional mapping
+  sort Edit          // Ed[A]     - algebraic change
+  
+  constructor X : Val → Val → Xform                    // forward, backward
+  constructor Ins : Val → Edit                         // Insert
+  constructor Del : Edit                               // Delete
+  constructor Rep : Val → Edit                         // Replace
+  constructor Seq : Edit → Edit → Edit                 // Sequence
+  
+  // ==========================================================================
+  // VALIDATED: Parallel Error Accumulation
+  // ==========================================================================
+  
+  sort Validated
+  
+  constructor Ok : Val → Validated                     // Success
+  constructor No : List[Val] → Validated               // Errors (accumulated)
+  
+  // ==========================================================================
+  // CONTENT ADDRESSING
+  // ==========================================================================
+  
+  sort Hash
+  sort Store
+  
+  constructor H : String → Hash                        // Opaque hash
+  constructor Sto : List[Val] → Store                  // Hash-consed storage
+  
+  // ==========================================================================
+  // SPECIALIZED COFREE: Zipper and Attributed
+  // ==========================================================================
+  
+  sort Loc           // (Val, Path)
+  sort Zipper        // Cofree[V, Loc]
+  sort Attr          // Map[String, Any]
+  sort Attributed    // Cofree[V, Attr]
+  
+  constructor Loc : Val → List[Int] → Loc              // Value + path
+  constructor Attr : List[Val] → Attr                  // Key-value pairs
+
+  // ==========================================================================
+  // V: Project/Embed (Val ↔ V[Val])
+  // ==========================================================================
+  
+  xform Project : Val ⇄ V
+  
+  rule Project.con {
+    VCon(name, args) ↦ C(name, args)
+  }
+  
+  rule Project.str {
+    VStr(s) ↦ S(s)
+  }
+  
+  rule Project.int {
+    VInt(n) ↦ I(n)
+  }
+  
+  rule Project.list {
+    VList(elems) ↦ L(elems)
+  }
+  
+  // ==========================================================================
+  // μ: Recursion Schemes
+  // ==========================================================================
+  
+  // Catamorphism: fold bottom-up with algebra
+  xform Cata(algebra: V → Val) : Val ⇄ Val
+  
+  rule Cata.apply {
+    val ↦ algebra(MapChildren(Project.forward(val), Cata.forward))
+  }
+  
+  // Anamorphism: unfold top-down with coalgebra
+  xform Ana(coalgebra: Val → V) : Val ⇄ Val
+  
+  rule Ana.apply {
+    seed ↦ Project.backward(MapChildren(coalgebra(seed), Ana.forward))
+  }
+  
+  // Hylomorphism: fused unfold-then-fold
+  xform Hylo(algebra: V → Val, coalgebra: Val → V) : Val ⇄ Val
+  
+  rule Hylo.apply {
+    seed ↦ algebra(MapChildren(coalgebra(seed), Hylo.forward))
+  }
+  
+  // ==========================================================================
+  // Co: Universal Attribute Grammar
+  // ==========================================================================
+  
+  // The key insight: ONE function for ALL attribute grammars
+  xform Annotate(inherit: Val → Val → Val, synthesize: Val → Val → List[Val] → Val, initial: Val) : Val ⇄ Cofree
+  
+  rule Annotate.apply {
+    val ↦ 
+      let childInherited = inherit(val, inherited) in
+      let structure = Project.forward(val) in
+      let children = MapChildren(structure, Annotate.forward(childInherited)) in
+      let synthesized = synthesize(val, childInherited, ExtractHeads(children)) in
+      Co(synthesized, children)
+  }
+  
+  // Forget annotations, recover Val
+  xform Forget : Cofree ⇄ Val
+  
+  rule Forget.apply {
+    Co(_, children) ↦ Project.backward(MapChildren(children, Forget.forward))
+  }
+  
+  // ==========================================================================
+  // Op: Optics for Val
+  // ==========================================================================
+  
+  // Lens into nth argument
+  xform Arg(n: Int) : Val ⇄ Val
+  
+  rule Arg.get {
+    VCon(_, args) ↦ Nth(args, n)
+  }
+  
+  rule Arg.set {
+    val ↦ VCon(name, Update(args, n, val))
+  }
+  
+  // Prism matching constructor
+  xform Con(name: String) : Val ⇄ List[Val]
+  
+  rule Con.get {
+    VCon(n, args) | n = name ↦ Ok(args)
+    _ ↦ No([])
+  }
+  
+  rule Con.rev {
+    args ↦ VCon(name, args)
+  }
+  
+  // Traversal over children
+  xform Children : Val ⇄ List[Val]
+  
+  rule Children.all {
+    VCon(_, args) ↦ args
+    VList(elems) ↦ elems
+    _ ↦ []
+  }
+  
+  rule Children.mod {
+    val ↦ Project.backward(MapChildren(Project.forward(val), f))
+  }
+  
+  // Transform everywhere (bottom-up)
+  xform Everywhere(f: Val → Val) : Val ⇄ Val
+  
+  rule Everywhere.apply {
+    val ↦ f(Children.mod(val, Everywhere.forward))
+  }
+  
+  // ==========================================================================
+  // X: Bidirectional Transform
+  // ==========================================================================
+  
+  xform Compose : Xform → Xform → Xform
+  
+  rule Compose.apply {
+    X(f1, b1), X(f2, b2) ↦ X(
+      λa. f2(f1(a)),
+      λc. b1(b2(c))
+    )
+  }
+  
+  xform Invert : Xform ⇄ Xform
+  
+  rule Invert.apply {
+    X(fwd, bwd) ↦ X(bwd, fwd)
+  }
+  
+  // ==========================================================================
+  // Ed: Edit Algebra
+  // ==========================================================================
+  
+  xform ApplyEdit : Edit → Term → Term
+  
+  rule ApplyEdit.ins {
+    Ins(v), Hole(_) ↦ Done(v)
+    Ins(_), t ↦ t
+  }
+  
+  rule ApplyEdit.del {
+    Del, _ ↦ Hole(None)
+  }
+  
+  rule ApplyEdit.rep {
+    Rep(v), _ ↦ Done(v)
+  }
+  
+  rule ApplyEdit.seq {
+    Seq(a, b), t ↦ ApplyEdit.forward(b, ApplyEdit.forward(a, t))
+  }
+  
+  // ==========================================================================
+  // Vd: Validated (Parallel Errors)
+  // ==========================================================================
+  
+  xform VdMap : Validated → Val → Validated
+  
+  rule VdMap.ok {
+    Ok(a), f ↦ Ok(f(a))
+  }
+  
+  rule VdMap.no {
+    No(errs), _ ↦ No(errs)
+  }
+  
+  xform VdZip : Validated → Validated → Validated
+  
+  rule VdZip.both_ok {
+    Ok(a), Ok(b) ↦ Ok(Pair(a, b))
+  }
+  
+  rule VdZip.both_no {
+    No(e1), No(e2) ↦ No(Concat(e1, e2))   // Accumulate!
+  }
+  
+  rule VdZip.left_no {
+    No(e), _ ↦ No(e)
+  }
+  
+  rule VdZip.right_no {
+    _, No(e) ↦ No(e)
+  }
+  
+  // ==========================================================================
+  // Z: Zipper Operations
+  // ==========================================================================
+  
+  xform ZipFrom : Val ⇄ Zipper
+  
+  rule ZipFrom.apply {
+    val ↦ 
+      let go = λv. λpath.
+        Co(Loc(v, path), MapChildrenIndexed(Project.forward(v), λc. λi. go(c, Append(path, i))))
+      in go(val, [])
+  }
+  
+  xform ZipNav : Zipper → List[Int] → Zipper
+  
+  rule ZipNav.nil {
+    z, [] ↦ Ok(z)
+  }
+  
+  rule ZipNav.cons {
+    Co(_, C(_, args)), [i | rest] | i < Length(args) ↦ ZipNav.forward(Nth(args, i), rest)
+    Co(_, L(elems)), [i | rest] | i < Length(elems) ↦ ZipNav.forward(Nth(elems, i), rest)
+    _, _ ↦ No([])
+  }
+  
+  xform ZipMod : Zipper → Val → Zipper
+  
+  rule ZipMod.apply {
+    Co(Loc(v, path), children), f ↦ Co(Loc(f(v), path), children)
+  }
+  
+  xform ZipToVal : Zipper ⇄ Val
+  
+  rule ZipToVal.apply {
+    z ↦ Forget.forward(z)
+  }
+  
+  // ==========================================================================
+  // A: Attributed Tree Operations
+  // ==========================================================================
+  
+  // Inherit down (top-down attributes)
+  xform InheritDown(compute: Val → Attr → Attr) : Val ⇄ Attributed
+  
+  rule InheritDown.apply {
+    val ↦ Annotate.forward(val, compute, λ_. λa. λ_. a, EmptyAttr)
+  }
+  
+  // Synthesize up (bottom-up attributes)
+  xform SynthesizeUp(compute: Val → List[Attr] → Attr) : Val ⇄ Attributed
+  
+  rule SynthesizeUp.apply {
+    val ↦ Annotate.forward(val, λ_. λ_. Unit, λv. λ_. λcs. compute(v, cs), Unit)
+  }
+  
+  // ==========================================================================
+  // H: Content Addressing
+  // ==========================================================================
+  
+  xform HashOf : Val ⇄ Hash
+  
+  rule HashOf.apply {
+    val ↦ H(Hex(HashCode(Show.forward(val))))
+  }
+  
+  // ==========================================================================
+  // Yo: Yoneda (Map Fusion)
+  // ==========================================================================
+  
+  sort Yoneda
+  
+  constructor Yo : Val → Val → Yoneda     // (continuation, value)
+  
+  xform YoLift : Val ⇄ Yoneda
+  
+  rule YoLift.apply {
+    fa ↦ Yo(Identity, fa)
+  }
+  
+  xform YoMap : Yoneda → Val → Yoneda
+  
+  rule YoMap.apply {
+    Yo(k, fa), g ↦ Yo(Compose(g, k), fa)   // Fuse maps into continuation
+  }
+  
+  xform YoLower : Yoneda ⇄ Val
+  
+  rule YoLower.apply {
+    Yo(k, fa) ↦ Map(fa, k)                  // Apply fused maps once
+  }
+  
+  // ==========================================================================
+  // Φ: Unified Entry Point
+  // ==========================================================================
+  
+  // Usage: 
+  //   Φ.cata(algebra)(val)
+  //   Φ.everywhere(f)(val)
+  //   Φ.arg(0).get(val)
+  //   Φ.zip(val) |> Φ.nav([0, 1]) |> Φ.mod(f) |> Φ.toVal
+  
+  xform Φ.cata : Val → Val → Val
+  rule Φ.cata { algebra, val ↦ Cata.forward(algebra, val) }
+  
+  xform Φ.ana : Val → Val → Val
+  rule Φ.ana { coalgebra, seed ↦ Ana.forward(coalgebra, seed) }
+  
+  xform Φ.everywhere : Val → Val → Val
+  rule Φ.everywhere { f, val ↦ Everywhere.forward(f, val) }
+  
+  xform Φ.children : Val ⇄ List[Val]
+  rule Φ.children { val ↦ Children.all.forward(val) }
+  
+  xform Φ.arg : Int → Lens
+  rule Φ.arg { n ↦ Ln(Arg.get(n), Arg.set(n)) }
+  
+  xform Φ.con : String → Prism
+  rule Φ.con { name ↦ Pr(Con.get(name), Con.rev(name)) }
+  
+  xform Φ.zip : Val ⇄ Zipper
+  rule Φ.zip { val ↦ ZipFrom.forward(val) }
+  
+  xform Φ.nav : Zipper → List[Int] → Zipper
+  rule Φ.nav { z, path ↦ ZipNav.forward(z, path) }
+  
+  xform Φ.mod : Zipper → Val → Zipper
+  rule Φ.mod { z, f ↦ ZipMod.forward(z, f) }
+  
+  xform Φ.toVal : Zipper ⇄ Val
+  rule Φ.toVal { z ↦ ZipToVal.forward(z) }
+  
+  xform Φ.inherit : Val → Val → Attributed
+  rule Φ.inherit { compute, val ↦ InheritDown.forward(compute, val) }
+  
+  xform Φ.synthesize : Val → Val → Attributed
+  rule Φ.synthesize { compute, val ↦ SynthesizeUp.forward(compute, val) }
+  
+  xform Φ.hash : Val ⇄ Hash
+  rule Φ.hash { val ↦ HashOf.forward(val) }
+
+}
