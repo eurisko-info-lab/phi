@@ -1,0 +1,271 @@
+// ===========================================================
+// Higher-Kinded Types — Native Hello HKT Support
+// ===========================================================
+// Uses: Kind system, polymorphic constructors, type classes
+// ===========================================================
+
+language HKT {
+
+  // =========================================================
+  // Kind System (Built into phi.phi)
+  // =========================================================
+  // *           = kind of types
+  // * → *       = type constructors (List, Maybe)
+  // * → * → *   = binary constructors (Either, Pair)
+  // (* → *) → * = higher-order (Fix, Free, Yoneda)
+
+  // =========================================================
+  // Fundamental Type Classes
+  // =========================================================
+
+  class Functor[F: * → *] {
+    map : ∀[A, B] (A → B) → F[A] → F[B]
+  }
+
+  class Applicative[F: * → *] extends Functor[F] {
+    pure  : ∀[A] A → F[A]
+    ap    : ∀[A, B] F[A → B] → F[A] → F[B]
+  }
+
+  class Monad[M: * → *] extends Applicative[M] {
+    flatMap : ∀[A, B] (A → M[B]) → M[A] → M[B]
+  }
+
+  class Comonad[W: * → *] extends Functor[W] {
+    extract : ∀[A] W[A] → A
+    extend  : ∀[A, B] (W[A] → B) → W[A] → W[B]
+  }
+
+  class Traverse[T: * → *] extends Functor[T] {
+    traverse : ∀[F: * → *, A, B] [F: Applicative] (A → F[B]) → T[A] → F[T[B]]
+  }
+
+  class Foldable[T: * → *] {
+    foldMap : ∀[M, A] [M: Monoid] (A → M) → T[A] → M
+  }
+
+  // =========================================================
+  // Common Type Constructors (* → *)
+  // =========================================================
+
+  sort Maybe[_]
+  constructor Nothing : ∀[A] Maybe[A]
+  constructor Just    : ∀[A] A → Maybe[A]
+
+  sort List[_]
+  constructor Nil  : ∀[A] List[A]
+  constructor Cons : ∀[A] A → List[A] → List[A]
+
+  sort Id[_]           // Identity functor
+  constructor Id : ∀[A] A → Id[A]
+
+  // =========================================================
+  // Binary Type Constructors (* → * → *)
+  // =========================================================
+
+  sort Either[_,_]
+  constructor Left  : ∀[A, B] A → Either[A, B]
+  constructor Right : ∀[A, B] B → Either[A, B]
+
+  sort Pair[_,_]
+  constructor Pair : ∀[A, B] A → B → Pair[A, B]
+
+  sort Reader[_,_]     // Reader[R,A] = R → A
+  constructor Reader : ∀[R, A] (R → A) → Reader[R, A]
+
+  sort Writer[_,_]     // Writer[W,A] = (W, A)
+  constructor Writer : ∀[W, A] W → A → Writer[W, A]
+
+  sort State[_,_]      // State[S,A] = S → (S, A)
+  constructor State : ∀[S, A] (S → Pair[S, A]) → State[S, A]
+
+  // =========================================================
+  // Higher-Order Constructors ((* → *) → *)
+  // =========================================================
+
+  sort Fix[_]          // Fix[F] = F[Fix[F]]
+  constructor In : ∀[F: * → *] F[Fix[F]] → Fix[F]
+
+  sort Free[_,_]       // Free[F,A] = free monad
+  constructor Pure : ∀[F: * → *, A] A → Free[F, A]
+  constructor Roll : ∀[F: * → *, A] F[Free[F, A]] → Free[F, A]
+
+  sort Cofree[_,_]     // Cofree[F,A] = cofree comonad
+  constructor Cofree : ∀[F: * → *, A] A → F[Cofree[F, A]] → Cofree[F, A]
+
+  sort Yoneda[_,_]     // Yoneda[F,A] ≅ F[A] (for Functor F)
+  constructor Yoneda : ∀[F: * → *, A] (∀[B] (A → B) → F[B]) → Yoneda[F, A]
+
+  sort Coyoneda[_,_]   // Coyoneda[F,A] makes any F a Functor
+  constructor Coyoneda : ∀[F: * → *, A, B] F[B] → (B → A) → Coyoneda[F, A]
+
+  // =========================================================
+  // Type Class Instances
+  // =========================================================
+
+  instance Functor Maybe {
+    map(_, Nothing)  ↦ Nothing
+    map(f, Just(a))  ↦ Just(f(a))
+  }
+
+  instance Monad Maybe {
+    pure(a)              ↦ Just(a)
+    flatMap(_, Nothing)  ↦ Nothing
+    flatMap(f, Just(a))  ↦ f(a)
+  }
+
+  instance Functor List {
+    map(_, Nil)        ↦ Nil
+    map(f, Cons(x,xs)) ↦ Cons(f(x), map(f, xs))
+  }
+
+  instance Monad List {
+    pure(a)             ↦ Cons(a, Nil)
+    flatMap(f, xs)      ↦ concat(map(f, xs))
+  }
+
+  instance Functor (Either[E, _]) {
+    map(_, Left(e))   ↦ Left(e)
+    map(f, Right(a))  ↦ Right(f(a))
+  }
+
+  instance Functor (Reader[R, _]) {
+    map(f, Reader(g)) ↦ Reader(λr. f(g(r)))
+  }
+
+  instance Monad (Reader[R, _]) {
+    pure(a)                   ↦ Reader(λ_. a)
+    flatMap(f, Reader(g))     ↦ Reader(λr. runReader(f(g(r)), r))
+  }
+
+  instance [F: Functor] Functor Free[F, _] {
+    map(f, Pure(a))  ↦ Pure(f(a))
+    map(f, Roll(fa)) ↦ Roll(map(λx. map(f, x), fa))
+  }
+
+  instance [F: Functor] Monad Free[F, _] {
+    pure(a)              ↦ Pure(a)
+    flatMap(f, Pure(a))  ↦ f(a)
+    flatMap(f, Roll(fa)) ↦ Roll(map(λx. flatMap(f, x), fa))
+  }
+
+  instance [F: Functor] Comonad Cofree[F, _] {
+    extract(Cofree(a, _))      ↦ a
+    extend(f, Cofree(a, fs))   ↦ Cofree(f(Cofree(a, fs)), map(extend(f, _), fs))
+  }
+
+  // Yoneda is always a Functor (no constraint on F needed!)
+  instance Functor Yoneda[F, _] {
+    map(f, Yoneda(k)) ↦ Yoneda(λg. k(λa. g(f(a))))
+  }
+
+  // Coyoneda makes ANY type constructor a Functor
+  instance Functor Coyoneda[F, _] {
+    map(f, Coyoneda(fb, g)) ↦ Coyoneda(fb, λb. f(g(b)))
+  }
+
+  // =========================================================
+  // Yoneda Lemma Isomorphism
+  // =========================================================
+
+  xform YonedaLift : ∀[F: * → *, A] [F: Functor] F[A] ⇄ Yoneda[F, A]
+  rule YonedaLift.forward {
+    fa ↦ Yoneda(λf. map(f, fa))
+  }
+  rule YonedaLift.backward {
+    Yoneda(k) ↦ k(λx. x)
+  }
+
+  xform CoyonedaLower : ∀[F: * → *, A] [F: Functor] Coyoneda[F, A] ⇄ F[A]
+  rule CoyonedaLower.forward {
+    Coyoneda(fb, g) ↦ map(g, fb)
+  }
+  rule CoyonedaLower.backward {
+    fa ↦ Coyoneda(fa, λx. x)
+  }
+
+  // =========================================================
+  // Free Monad Interpretation
+  // =========================================================
+
+  xform FreeRun : ∀[F: * → *, M: * → *, A] [M: Monad] (∀[X] F[X] → M[X]) → Free[F, A] ⇄ M[A]
+  rule FreeRun {
+    nt, Pure(a)  ↦ pure(a)
+    nt, Roll(fa) ↦ flatMap(λx. FreeRun(nt, x), nt(fa))
+  }
+
+  // =========================================================
+  // Recursion Schemes (using Fix)
+  // =========================================================
+
+  xform Cata : ∀[F: * → *, A] [F: Functor] (F[A] → A) → Fix[F] ⇄ A
+  rule Cata {
+    alg, In(fa) ↦ alg(map(Cata(alg, _), fa))
+  }
+
+  xform Ana : ∀[F: * → *, A] [F: Functor] (A → F[A]) → A ⇄ Fix[F]
+  rule Ana {
+    coalg, a ↦ In(map(Ana(coalg, _), coalg(a)))
+  }
+
+  xform Hylo : ∀[F: * → *, A, B] [F: Functor] (F[B] → B) → (A → F[A]) → A ⇄ B
+  rule Hylo {
+    alg, coalg, a ↦ alg(map(Hylo(alg, coalg, _), coalg(a)))
+  }
+
+  // =========================================================
+  // Monad Transformers
+  // =========================================================
+
+  sort MaybeT[_,_]     // MaybeT[M,A] = M[Maybe[A]]
+  constructor MaybeT : ∀[M: * → *, A] M[Maybe[A]] → MaybeT[M, A]
+
+  sort ReaderT[_,_,_]  // ReaderT[R,M,A] = R → M[A]
+  constructor ReaderT : ∀[R, M: * → *, A] (R → M[A]) → ReaderT[R, M, A]
+
+  sort StateT[_,_,_]   // StateT[S,M,A] = S → M[(S,A)]
+  constructor StateT : ∀[S, M: * → *, A] (S → M[Pair[S, A]]) → StateT[S, M, A]
+
+  instance [M: Monad] Monad MaybeT[M, _] {
+    pure(a) ↦ MaybeT(pure(Just(a)))
+    flatMap(f, MaybeT(mma)) ↦ MaybeT(flatMap(λma.
+      case ma of
+        Nothing → pure(Nothing)
+        Just(a) → runMaybeT(f(a))
+    , mma))
+  }
+
+  // =========================================================
+  // Kind Polymorphism Examples
+  // =========================================================
+
+  // Bifunctor: * → * → * with mapping in both positions
+  class Bifunctor[F: * → * → *] {
+    bimap : ∀[A, B, C, D] (A → C) → (B → D) → F[A, B] → F[C, D]
+  }
+
+  instance Bifunctor Either {
+    bimap(f, _, Left(a))  ↦ Left(f(a))
+    bimap(_, g, Right(b)) ↦ Right(g(b))
+  }
+
+  instance Bifunctor Pair {
+    bimap(f, g, Pair(a, b)) ↦ Pair(f(a), g(b))
+  }
+
+  // Profunctor: contravariant in first, covariant in second
+  class Profunctor[P: * → * → *] {
+    dimap : ∀[A, B, C, D] (C → A) → (B → D) → P[A, B] → P[C, D]
+  }
+
+  instance Profunctor (→) {
+    dimap(f, g, h) ↦ λc. g(h(f(c)))
+  }
+
+  // =========================================================
+  // Strategies
+  // =========================================================
+
+  strategy normalize := repeat (YonedaLift.forward | CoyonedaLower.forward)
+  strategy interpret := repeat (FreeRun | Cata | Ana)
+}

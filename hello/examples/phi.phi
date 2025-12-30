@@ -33,10 +33,24 @@ language Phi {
   // Declarations
   // ==========================================================================
   constructor SortDecl : String → Decl
+  constructor KindedSortDecl : String → Kind → Decl      // sort F[_] (kind * → *)
   constructor ConstructorDecl : String → Type → Decl
   constructor GrammarDecl : String → List[SyntaxRule] → Decl
   constructor XformDecl : String → String → String → Decl
   constructor RuleDecl : String → List[RuleCase] → Decl
+  
+  // Typeclass declarations
+  constructor ClassDecl : String → List[TypeParam] → List[ClassMember] → Decl
+  constructor InstanceDecl : String → Type → List[InstanceMember] → Decl
+  
+  // ==========================================================================
+  // Typeclass Members
+  // ==========================================================================
+  sort ClassMember
+  sort InstanceMember
+  
+  constructor MethodSig : String → Type → ClassMember           // method signature
+  constructor MethodImpl : String → Pattern → Pattern → InstanceMember  // method implementation
 
   // ==========================================================================
   // Types
@@ -47,6 +61,26 @@ language Phi {
   constructor Product : Type → Type → Type
   constructor TypeApp : String → List[Type] → Type
   constructor TypeVar : String → Type
+  
+  // Higher-kinded types: F[_], F[_, _], etc.
+  constructor TypeCon : String → Int → Type              // Name, arity (F[_] = arity 1)
+  constructor KindArrow : Kind → Kind → Kind             // * → * → *
+  constructor KindStar : Kind                            // * (concrete type)
+  
+  // Typeclass constraints: [F: Functor], [M: Monad]
+  constructor Constrained : List[Constraint] → Type → Type
+  constructor Constraint : String → String → Constraint  // (TypeVar, Typeclass)
+  
+  // Forall: ∀F[_]. ∀A. F[A] → A
+  constructor Forall : List[TypeParam] → Type → Type
+  constructor TypeParam : String → Kind → TypeParam      // Name, kind
+  
+  // ==========================================================================
+  // Kinds (types of types)
+  // ==========================================================================
+  sort Kind
+  sort Constraint
+  sort TypeParam
 
   // ==========================================================================
   // Grammar Rules
@@ -94,10 +128,13 @@ language Phi {
 
   grammar decl {
     "sort" IDENT => SortDecl(IDENT)
+    "sort" IDENT "[" "_"+ "]" => KindedSortDecl(IDENT, _)        // sort F[_]
     "constructor" IDENT ":" type => ConstructorDecl(IDENT, type)
     "grammar" IDENT "{" syntaxRule* "}" => GrammarDecl(IDENT, syntaxRule)
     "xform" IDENT ":" IDENT "⇄" IDENT => XformDecl(IDENT, IDENT, IDENT)
     "rule" qualifiedName "{" ruleCase "}" => RuleDecl(qualifiedName, ruleCase)
+    "class" IDENT "[" typeParam+ "]" "{" classMember* "}" => ClassDecl(IDENT, typeParam, classMember)
+    "instance" IDENT type "{" instanceMember* "}" => InstanceDecl(IDENT, type, instanceMember)
   }
   
   // Qualified name: IDENT or IDENT.IDENT.IDENT...
@@ -110,6 +147,32 @@ language Phi {
     type "→" type => Arrow(type, type)
     "List" "[" type "]" => ListOf(type)
     type "×" type => Product(type, type)
+    IDENT "[" "_"+ "]" => TypeCon(IDENT, _)             // F[_], M[_,_]
+    "∀" "[" typeParam+ "]" type => Forall(typeParam, type)
+    "[" constraint+ "]" "⇒" type => Constrained(constraint, type)
+  }
+  
+  grammar typeParam {
+    IDENT ":" kind => TypeParam(IDENT, kind)
+    IDENT => TypeParam(IDENT, KindStar)
+  }
+  
+  grammar kind {
+    "*" => KindStar
+    kind "→" kind => KindArrow(kind, kind)
+    "(" kind ")" => kind
+  }
+  
+  grammar constraint {
+    IDENT ":" IDENT => Constraint(IDENT, IDENT)          // F: Functor
+  }
+  
+  grammar classMember {
+    IDENT ":" type => MethodSig(IDENT, type)            // map : (A → B) → F[A] → F[B]
+  }
+  
+  grammar instanceMember {
+    pattern "↦" pattern => MethodImpl("", pattern, pattern)   // method implementation
   }
 
   grammar syntaxRule {

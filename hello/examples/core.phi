@@ -11,92 +11,192 @@
 language Core {
 
   // ==========================================================================
-  // FOUNDATION: Four Fundamental Sorts
+  // FOUNDATION: Four Fundamental Type Classes
   // ==========================================================================
   
-  sort Functor       // F[_]   - structure-preserving maps
-  sort Monad         // M[_]   - sequenced computations
-  sort Comonad       // W[_]   - context-dependent computations
-  sort Natural       // ~>     - polymorphic transformations
+  sort F[_]          // Functor    - structure-preserving maps
+  sort M[_]          // Monad      - sequenced computations  
+  sort W[_]          // Comonad    - context-dependent computations
+  sort Nat[_,_]      // ~>         - polymorphic transformations
+  
+  // Type class definitions with proper higher-kinded types
+  class Functor[F: * → *] {
+    map : ∀[A, B] (A → B) → F[A] → F[B]
+  }
+  
+  class Monad[M: * → *] extends Functor {
+    pure  : ∀[A] A → M[A]
+    flatMap : ∀[A, B] (A → M[B]) → M[A] → M[B]
+  }
+  
+  class Comonad[W: * → *] extends Functor {
+    extract : ∀[A] W[A] → A
+    extend  : ∀[A, B] (W[A] → B) → W[A] → W[B]
+  }
+  
+  // Natural transformation: F ~> G (polymorphic function between functors)
+  constructor Nat : ∀[F: * → *, G: * → *] (∀[A] F[A] → G[A]) → Nat[F, G]
+  
+  // Natural transformation composition
+  xform NatCompose : ∀[F: * → *, G: * → *, H: * → *] Nat[F, G] → Nat[G, H] ⇄ Nat[F, H]
+  rule NatCompose {
+    Nat(fg), Nat(gh) ↦ Nat(λfa. gh(fg(fa)))
+  }
   
   // ==========================================================================
   // PATTERN FUNCTOR: One Layer of Val
   // ==========================================================================
   
-  sort V             // Pattern functor - one layer of syntax
+  sort V[_]          // Pattern functor - one layer (kind: * → *)
   
-  constructor C : String → List[V] → V       // Constructor: Foo(a, b)
-  constructor S : String → V                  // String literal
-  constructor I : Int → V                     // Integer literal
-  constructor L : List[V] → V                 // List: [a, b, c]
+  constructor C : ∀[A] String → List[A] → V[A]    // Constructor: Foo(a, b)
+  constructor S : ∀[A] String → V[A]               // String literal
+  constructor I : ∀[A] Int → V[A]                  // Integer literal
+  constructor L : ∀[A] List[A] → V[A]              // List: [a, b, c]
+  
+  // V is a Functor
+  instance Functor V[_] {
+    map(f, C(n, xs)) ↦ C(n, xs.map(f))
+    map(f, S(s))     ↦ S(s)
+    map(f, I(i))     ↦ I(i)
+    map(f, L(xs))    ↦ L(xs.map(f))
+  }
   
   // ==========================================================================
   // RECURSIVE STRUCTURES
   // ==========================================================================
   
-  sort Fix           // μ[F]      - fixed point (recursive types)
-  sort Free          // Fr[F,A]   - free monad (effect sequences)
-  sort Cofree        // Co[F,A]   - cofree comonad (annotated trees)
+  sort Fix[_]        // μ[F]      - fixed point (recursive types)
+  sort Free[_,_]     // Fr[F,A]   - free monad (effect sequences)
+  sort Cofree[_,_]   // Co[F,A]   - cofree comonad (annotated trees)
   
-  constructor μ : V → Fix                              // Fix point
-  constructor Pu : Val → Free                          // Pure value
-  constructor Su : V → Free                            // Suspended effect
-  constructor Co : Val → V → Cofree                    // Annotation + children
+  constructor μ : ∀[F: * → *] F[Fix[F]] → Fix[F]           // Fix point
+  constructor Pu : ∀[F, A] A → Free[F, A]                   // Pure value
+  constructor Su : ∀[F: * → *, A] F[Free[F, A]] → Free[F, A]  // Suspended
+  constructor Co : ∀[F: * → *, A] A → F[Cofree[F, A]] → Cofree[F, A]
+  
+  // Free[F,_] is a Monad when F is a Functor
+  instance [F: Functor] Monad Free[F, _] {
+    pure(a)           ↦ Pu(a)
+    flatMap(f, Pu(a)) ↦ f(a)
+    flatMap(f, Su(k)) ↦ Su(k.map(flatMap(f, _)))
+  }
+  
+  // Cofree[F,_] is a Comonad when F is a Functor
+  instance [F: Functor] Comonad Cofree[F, _] {
+    extract(Co(a, _))    ↦ a
+    extend(f, Co(a, fs)) ↦ Co(f(Co(a, fs)), fs.map(extend(f, _)))
+  }
+  
+  // Free.run: Interpret Free monad with a natural transformation
+  xform FreeRun : ∀[F: * → *, M: * → *, A] [M: Monad] (F ~> M) → Free[F, A] ⇄ M[A]
+  rule FreeRun {
+    nt, Pu(a)  ↦ pure(a)                              // Pure → M.pure
+    nt, Su(fa) ↦ flatMap(λx. FreeRun(nt, x), nt(fa))  // Transform then recurse
+  }
+  
+  // Free.foldMap: Same as run but with different emphasis
+  xform FreeFoldMap : ∀[F: * → *, M: * → *, A] [M: Monad] (F ~> M) → Free[F, A] ⇄ M[A]
+  rule FreeFoldMap { nt, free ↦ FreeRun(nt, free) }
   
   // ==========================================================================
-  // OPTICS: Compositional Access
+  // OPTICS: Compositional Access (Polymorphic)
   // ==========================================================================
   
-  sort Lens          // Ln[S,A]   - exactly one focus
-  sort Prism         // Pr[S,A]   - maybe one focus (case match)
-  sort Traversal     // Tr[S,A]   - zero or more foci
+  sort Lens[_,_]      // Ln[S,A]   - exactly one focus
+  sort Prism[_,_]     // Pr[S,A]   - maybe one focus (case match)
+  sort Traversal[_,_] // Tr[S,A]   - zero or more foci
   
-  constructor Ln : Val → Val → Lens                    // get, set
-  constructor Pr : Val → Val → Prism                   // getOption, reverseGet
+  constructor Ln : ∀[S, A] (S → A) → ((A → A) → S → S) → Lens[S, A]
+  constructor Pr : ∀[S, A] (S → Validated[A]) → (A → S) → Prism[S, A]
+  constructor Tr : ∀[S, A] (S → List[A]) → ((A → A) → S → S) → Traversal[S, A]
   
   // ==========================================================================
-  // TRANSFORMS
+  // TRANSFORMS: Bidirectional Mapping
   // ==========================================================================
   
-  sort Xform         // X[A,B]    - bidirectional mapping
-  sort Edit          // Ed[A]     - algebraic change
+  sort Xform[_,_]     // X[A,B]    - bidirectional mapping
+  sort Edit[_]        // Ed[A]     - algebraic change
+  sort Term[_]        // Term with holes for partial edits
   
-  constructor X : Val → Val → Xform                    // forward, backward
-  constructor Ins : Val → Edit                         // Insert
-  constructor Del : Edit                               // Delete
-  constructor Rep : Val → Edit                         // Replace
-  constructor Seq : Edit → Edit → Edit                 // Sequence
+  constructor X : ∀[A, B] (A → B) → (B → A) → Xform[A, B]
+  constructor Ins : ∀[A] A → Edit[A]                   // Insert
+  constructor Del : ∀[A] Edit[A]                       // Delete
+  constructor Rep : ∀[A] A → Edit[A]                   // Replace
+  constructor Seq : ∀[A] Edit[A] → Edit[A] → Edit[A]   // Sequence
+  constructor Done : ∀[A] A → Term[A]                  // Complete value
+  constructor Hole : ∀[A] Validated[String] → Term[A]  // Incomplete (with reason)
   
   // ==========================================================================
   // VALIDATED: Parallel Error Accumulation
   // ==========================================================================
   
-  sort Validated
+  sort Validated[_]
   
-  constructor Ok : Val → Validated                     // Success
-  constructor No : List[Val] → Validated               // Errors (accumulated)
+  constructor Ok : ∀[A] A → Validated[A]                    // Success
+  constructor No : ∀[A] List[String] → Validated[A]         // Errors (accumulated)
+  
+  // Validated is Functor + Applicative (not Monad - errors parallel!)
+  instance Functor Validated[_] {
+    map(f, Ok(a))  ↦ Ok(f(a))
+    map(_, No(es)) ↦ No(es)
+  }
+  
+  // Applicative instance: parallel error accumulation
+  xform VdPure : ∀[A] A ⇄ Validated[A]
+  rule VdPure { a ↦ Ok(a) }
+  
+  xform VdZip : ∀[A, B] Validated[A] → Validated[B] ⇄ Validated[A × B]
+  rule VdZip {
+    Ok(a), Ok(b)   ↦ Ok((a, b))
+    No(e1), No(e2) ↦ No(Concat(e1, e2))   // Accumulate both!
+    No(e), _       ↦ No(e)
+    _, No(e)       ↦ No(e)
+  }
   
   // ==========================================================================
-  // CONTENT ADDRESSING
+  // CONTENT ADDRESSING & STORE
   // ==========================================================================
   
   sort Hash
-  sort Store
+  sort Store[_]       // Sto[A]   - hash-addressed storage
   
   constructor H : String → Hash                        // Opaque hash
-  constructor Sto : List[Val] → Store                  // Hash-consed storage
+  constructor Sto : ∀[A] (Hash → Validated[A]) → Store[A]  // Lookup function
+  
+  // Store is a Comonad: extract at current position, extend to all positions
+  instance Comonad Store[_] {
+    extract(Sto(lookup, h))       ↦ lookup(h)
+    extend(f, Sto(lookup, h))     ↦ Sto(λh'. f(Sto(lookup, h')), h)
+  }
+  
+  // Store operations
+  xform StoLookup : ∀[A] Store[A] → Hash ⇄ Validated[A]
+  rule StoLookup { Sto(lookup), h ↦ lookup(h) }
+  
+  xform StoSeek : ∀[A] Store[A] → Hash ⇄ Store[A]
+  rule StoSeek { Sto(lookup, _), h ↦ Sto(lookup, h) }
+  
+  xform StoPeek : ∀[A] Store[A] → Hash ⇄ Validated[A]
+  rule StoPeek { Sto(lookup, _), h ↦ lookup(h) }
   
   // ==========================================================================
   // SPECIALIZED COFREE: Zipper and Attributed
   // ==========================================================================
   
   sort Loc           // (Val, Path)
-  sort Zipper        // Cofree[V, Loc]
+  sort Zipper        // Cofree[V, Loc] = navigable tree
   sort Attr          // Map[String, Any]
-  sort Attributed    // Cofree[V, Attr]
+  sort Attributed    // Cofree[V, Attr] = tree with attributes
   
   constructor Loc : Val → List[Int] → Loc              // Value + path
-  constructor Attr : List[Val] → Attr                  // Key-value pairs
+  constructor Attr : List[(String, Val)] → Attr        // Key-value pairs
+  
+  // Type aliases for clarity (using Fix, Free, Cofree from above)
+  // type Val        = Fix[V]
+  // type Zipper     = Cofree[V, Loc]
+  // type Attributed = Cofree[V, Attr]
+  // type Versioned  = Cofree[V, Hash]
 
   // ==========================================================================
   // V: Project/Embed (Val ↔ V[Val])
@@ -216,29 +316,32 @@ language Core {
   }
   
   // ==========================================================================
-  // X: Bidirectional Transform
+  // X: Bidirectional Transform (Polymorphic)
   // ==========================================================================
   
-  xform Compose : Xform → Xform → Xform
+  xform XCompose : ∀[A, B, C] Xform[A, B] → Xform[B, C] ⇄ Xform[A, C]
   
-  rule Compose.apply {
+  rule XCompose {
     X(f1, b1), X(f2, b2) ↦ X(
       λa. f2(f1(a)),
       λc. b1(b2(c))
     )
   }
   
-  xform Invert : Xform ⇄ Xform
+  xform XInvert : ∀[A, B] Xform[A, B] ⇄ Xform[B, A]
   
-  rule Invert.apply {
+  rule XInvert {
     X(fwd, bwd) ↦ X(bwd, fwd)
   }
+  
+  xform XId : ∀[A] Xform[A, A]
+  rule XId { X(λx. x, λx. x) }
   
   // ==========================================================================
   // Ed: Edit Algebra
   // ==========================================================================
   
-  xform ApplyEdit : Edit → Term → Term
+  xform ApplyEdit : ∀[A] Edit[A] → Term[A] ⇄ Term[A]
   
   rule ApplyEdit.ins {
     Ins(v), Hole(_) ↦ Done(v)
@@ -257,37 +360,6 @@ language Core {
     Seq(a, b), t ↦ ApplyEdit.forward(b, ApplyEdit.forward(a, t))
   }
   
-  // ==========================================================================
-  // Vd: Validated (Parallel Errors)
-  // ==========================================================================
-  
-  xform VdMap : Validated → Val → Validated
-  
-  rule VdMap.ok {
-    Ok(a), f ↦ Ok(f(a))
-  }
-  
-  rule VdMap.no {
-    No(errs), _ ↦ No(errs)
-  }
-  
-  xform VdZip : Validated → Validated → Validated
-  
-  rule VdZip.both_ok {
-    Ok(a), Ok(b) ↦ Ok(Pair(a, b))
-  }
-  
-  rule VdZip.both_no {
-    No(e1), No(e2) ↦ No(Concat(e1, e2))   // Accumulate!
-  }
-  
-  rule VdZip.left_no {
-    No(e), _ ↦ No(e)
-  }
-  
-  rule VdZip.right_no {
-    _, No(e) ↦ No(e)
-  }
   
   // ==========================================================================
   // Z: Zipper Operations
@@ -358,26 +430,32 @@ language Core {
   // Yo: Yoneda (Map Fusion)
   // ==========================================================================
   
-  sort Yoneda
+  sort Yoneda[_,_]   // Yo[F,A] - Yoneda embedding for map fusion
   
-  constructor Yo : Val → Val → Yoneda     // (continuation, value)
+  // Yoneda lemma: Yo[F,A] ≅ F[A] when F is a Functor
+  constructor Yo : ∀[F: * → *, A] (∀[B] (A → B) → F[B]) → Yoneda[F, A]
   
-  xform YoLift : Val ⇄ Yoneda
-  
-  rule YoLift.apply {
-    fa ↦ Yo(Identity, fa)
+  // Lift F[A] into Yoneda[F,A]
+  xform YoLift : ∀[F: * → *, A] [F: Functor] F[A] ⇄ Yoneda[F, A]
+  rule YoLift {
+    fa ↦ Yo(λf. map(f, fa))
   }
   
-  xform YoMap : Yoneda → Val → Yoneda
-  
-  rule YoMap.apply {
-    Yo(k, fa), g ↦ Yo(Compose(g, k), fa)   // Fuse maps into continuation
+  // Map over Yoneda fuses into continuation (no underlying map!)
+  xform YoMap : ∀[F: * → *, A, B] Yoneda[F, A] → (A → B) ⇄ Yoneda[F, B]
+  rule YoMap {
+    Yo(k), g ↦ Yo(λf. k(λa. f(g(a))))    // Fuse g into continuation
   }
   
-  xform YoLower : Yoneda ⇄ Val
+  // Lower Yoneda back to F (applies all fused maps once)
+  xform YoLower : ∀[F: * → *, A] Yoneda[F, A] ⇄ F[A]
+  rule YoLower {
+    Yo(k) ↦ k(λx. x)                      // Apply identity to get F[A]
+  }
   
-  rule YoLower.apply {
-    Yo(k, fa) ↦ Map(fa, k)                  // Apply fused maps once
+  // Yoneda[F,_] is always a Functor (without F needing to be!)
+  instance Functor Yoneda[F, _] {
+    map(f, yo) ↦ YoMap(yo, f)
   }
   
   // ==========================================================================
@@ -402,31 +480,35 @@ language Core {
   xform Φ.children : Val ⇄ List[Val]
   rule Φ.children { val ↦ Children.all.forward(val) }
   
-  xform Φ.arg : Int → Lens
+  xform Φ.arg : Int → Lens[Val, Val]
   rule Φ.arg { n ↦ Ln(Arg.get(n), Arg.set(n)) }
   
-  xform Φ.con : String → Prism
+  xform Φ.con : String → Prism[Val, List[Val]]
   rule Φ.con { name ↦ Pr(Con.get(name), Con.rev(name)) }
   
   xform Φ.zip : Val ⇄ Zipper
   rule Φ.zip { val ↦ ZipFrom.forward(val) }
   
-  xform Φ.nav : Zipper → List[Int] → Zipper
+  xform Φ.nav : Zipper → List[Int] ⇄ Validated[Zipper]
   rule Φ.nav { z, path ↦ ZipNav.forward(z, path) }
   
-  xform Φ.mod : Zipper → Val → Zipper
+  xform Φ.mod : Zipper → (Val → Val) ⇄ Zipper
   rule Φ.mod { z, f ↦ ZipMod.forward(z, f) }
   
   xform Φ.toVal : Zipper ⇄ Val
   rule Φ.toVal { z ↦ ZipToVal.forward(z) }
   
-  xform Φ.inherit : Val → Val → Attributed
+  xform Φ.inherit : (Val → Attr → Attr) → Val ⇄ Attributed
   rule Φ.inherit { compute, val ↦ InheritDown.forward(compute, val) }
   
-  xform Φ.synthesize : Val → Val → Attributed
+  xform Φ.synthesize : (Val → List[Attr] → Attr) → Val ⇄ Attributed
   rule Φ.synthesize { compute, val ↦ SynthesizeUp.forward(compute, val) }
   
   xform Φ.hash : Val ⇄ Hash
   rule Φ.hash { val ↦ HashOf.forward(val) }
+  
+  // Free interpretation
+  xform Φ.run : ∀[F: * → *, M: * → *, A] [M: Monad] (F ~> M) → Free[F, A] ⇄ M[A]
+  rule Φ.run { nt, free ↦ FreeRun(nt, free) }
 
 }

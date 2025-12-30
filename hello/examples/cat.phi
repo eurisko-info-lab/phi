@@ -1,0 +1,200 @@
+// ===========================================================
+// Category Theory Core — Optimized for Hello's HKT System
+// ===========================================================
+// Uses: higher-kinded types, type classes, polymorphic xforms
+// ===========================================================
+
+language Cat {
+
+  // =========================================================
+  // Foundational Kinds and Type Classes
+  // =========================================================
+
+  sort Cat[_,_]        // Category with objects and morphisms
+  sort Obj             // Objects
+  sort Hom[_,_]        // Hom[A,B] = morphisms from A to B
+  sort F[_]            // Functor (endofunctor for simplicity)
+  sort Nat[_,_]        // Nat[F,G] = natural transformation
+
+  // Category as a type class
+  class Category[C: * → * → *] {
+    id    : ∀[A] Hom[A, A]
+    comp  : ∀[A, B, C] Hom[A, B] → Hom[B, C] → Hom[A, C]
+  }
+
+  // Functor between categories
+  class Functor[F: * → *] {
+    map   : ∀[A, B] (A → B) → F[A] → F[B]
+  }
+
+  // Natural transformation: F ~> G
+  constructor Nat : ∀[F: * → *, G: * → *] (∀[A] F[A] → G[A]) → Nat[F, G]
+
+  // =========================================================
+  // Category Laws (as type class laws)
+  // =========================================================
+
+  // Identity laws
+  xform IdLeft : ∀[A, B] [C: Category] Hom[A, B] ⇄ Hom[A, B]
+  rule IdLeft {
+    comp(id, f) ↦ f
+  }
+
+  xform IdRight : ∀[A, B] [C: Category] Hom[A, B] ⇄ Hom[A, B]
+  rule IdRight {
+    comp(f, id) ↦ f
+  }
+
+  // Associativity
+  xform Assoc : ∀[A, B, C, D] [Cat: Category] Hom[A, B] → Hom[B, C] → Hom[C, D] ⇄ Hom[A, D]
+  rule Assoc {
+    comp(f, comp(g, h)) ↦ comp(comp(f, g), h)
+  }
+
+  // =========================================================
+  // Yoneda Lemma (Polymorphic)
+  // =========================================================
+
+  // Hom functor: Hom(A, -) : C → Set
+  sort HomF[_]         // HomF[A] = Hom(A, -)
+  
+  constructor HomF : ∀[A] (∀[B] Hom[A, B]) → HomF[A]
+
+  // Yoneda: Nat[Hom(A,-), F] ≅ F[A]
+  xform Yoneda : ∀[A, F: * → *] [F: Functor] Nat[HomF[A], F] ⇄ F[A]
+
+  rule Yoneda.forward {
+    Nat(α) ↦ α(id)                    // Apply nat trans to identity
+  }
+
+  rule Yoneda.backward {
+    fa ↦ Nat(λf. map(f, fa))          // Construct nat trans from element
+  }
+
+  // =========================================================
+  // Adjunctions (F ⊣ G)
+  // =========================================================
+
+  sort Adj[_,_]        // Adj[F,G] = F is left adjoint to G
+
+  constructor Adj : ∀[F: * → *, G: * → *] 
+    Nat[Id, Comp[G, F]] →              // unit: η : 1 → GF
+    Nat[Comp[F, G], Id] →              // counit: ε : FG → 1
+    Adj[F, G]
+
+  // Triangle identities (adjunction laws)
+  xform TriangleLeft : ∀[F: * → *, G: * → *, A] Adj[F, G] → F[A] ⇄ F[A]
+  rule TriangleLeft {
+    Adj(η, ε), fa ↦ map(ε, map(η, fa))  // Should equal id
+  }
+
+  // =========================================================
+  // Monads from Adjunctions
+  // =========================================================
+
+  // Every adjunction F ⊣ G gives a monad T = GF
+  xform MonadFromAdj : ∀[F: * → *, G: * → *] Adj[F, G] ⇄ Monad[Comp[G, F]]
+  rule MonadFromAdj {
+    Adj(η, ε) ↦ Monad(η, μ)           // where μ = GεF
+  }
+
+  // =========================================================
+  // Free-Forgetful Adjunction
+  // =========================================================
+
+  sort Free[_]         // Free functor
+  sort Forget[_]       // Forgetful functor
+
+  // Free ⊣ Forget for monoids
+  instance Adjunction Free Forget {
+    unit(a)   ↦ singleton(a)           // η : A → UFA
+    counit(m) ↦ fold(m)                // ε : FUA → A
+  }
+
+  // =========================================================
+  // Kan Extensions
+  // =========================================================
+
+  sort Lan[_,_,_]      // Left Kan extension: Lan_K F
+  sort Ran[_,_,_]      // Right Kan extension: Ran_K F
+
+  // Lan_K F B = ∫^A Hom(KA, B) × FA (coend formula)
+  // Ran_K F B = ∫_A Hom(B, KA) → FA  (end formula)
+
+  // Yoneda as Kan extension: F ≅ Ran_Y Y
+  xform YonedaAsKan : ∀[F: * → *] F ⇄ Ran[Y, Y, F]
+
+  // =========================================================
+  // Limits and Colimits (Polymorphic)
+  // =========================================================
+
+  sort Lim[_]          // Lim[D] = limit of diagram D
+  sort Colim[_]        // Colim[D] = colimit of diagram D
+
+  // Universal property of limits
+  xform LimUniv : ∀[D: * → *, A] (∀[X] A → D[X]) ⇄ (A → Lim[D])
+
+  // Density theorem: F ≅ Colim_{A,f:YA→F} YA
+  xform Density : ∀[F: * → *] [F: Functor] F ⇄ Colim[Comma[Y, F]]
+
+  // =========================================================
+  // 2-Categories (Higher Structure)
+  // =========================================================
+
+  sort TwoCat[_,_,_]   // 2-category: objects, 1-cells, 2-cells
+  sort OneCell[_,_]    // 1-morphism
+  sort TwoCell[_,_]    // 2-morphism (natural transformation)
+
+  // Horizontal composition of 2-cells
+  xform HComp : ∀[F, G, H, K] TwoCell[F, G] → TwoCell[H, K] ⇄ TwoCell[Comp[F,H], Comp[G,K]]
+
+  // Vertical composition of 2-cells  
+  xform VComp : ∀[F, G, H] TwoCell[F, G] → TwoCell[G, H] ⇄ TwoCell[F, H]
+
+  // Interchange law
+  xform Interchange : ∀[A, B, C, D] TwoCell × TwoCell × TwoCell × TwoCell ⇄ TwoCell
+  rule Interchange {
+    (α, β, γ, δ) ↦ HComp(VComp(α, γ), VComp(β, δ))  // = VComp(HComp(α,β), HComp(γ,δ))
+  }
+
+  // =========================================================
+  // Monoidal Categories
+  // =========================================================
+
+  class Monoidal[C: * → * → *] extends Category[C] {
+    tensor : ∀[A, B] C[A, B] → C[A, B] → C[A, B]
+    unit   : Obj
+    assoc  : ∀[A, B, C] Iso[Tensor[Tensor[A,B], C], Tensor[A, Tensor[B,C]]]
+    lunit  : ∀[A] Iso[Tensor[Unit, A], A]
+    runit  : ∀[A] Iso[Tensor[A, Unit], A]
+  }
+
+  // Mac Lane coherence: all diagrams commute
+  xform Coherence : ∀[C: * → * → *] [C: Monoidal] TensorExpr[C] ⇄ TensorExpr[C]
+  rule Coherence {
+    e ↦ normalize(e)                   // Canonical form exists
+  }
+
+  // =========================================================
+  // Example Instances
+  // =========================================================
+
+  // Set is a category
+  instance Category Set {
+    id         ↦ λx. x
+    comp(f, g) ↦ λx. g(f(x))
+  }
+
+  // List is a functor
+  instance Functor List {
+    map(f, Nil)       ↦ Nil
+    map(f, Cons(x,xs)) ↦ Cons(f(x), map(f, xs))
+  }
+
+  // =========================================================
+  // Strategies
+  // =========================================================
+
+  strategy normalize := repeat (IdLeft | IdRight | Assoc | Yoneda.forward)
+  strategy simplify  := repeat (TriangleLeft | Coherence)
+}

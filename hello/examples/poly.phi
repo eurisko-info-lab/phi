@@ -1,0 +1,318 @@
+// ===========================================================
+// Polymorphic Types — Hello's Native Parametricity
+// ===========================================================
+// Uses: parameterized sorts, polymorphic constructors, 
+//       type class instances, higher-kinded types
+// ===========================================================
+
+language Poly {
+
+  // =========================================================
+  // Type Classes for Algebraic Structures
+  // =========================================================
+
+  class Eq[A] {
+    eq : A → A → Bool
+  }
+
+  class Ord[A] extends Eq[A] {
+    compare : A → A → Ordering
+  }
+
+  class Monoid[M] {
+    empty  : M
+    append : M → M → M
+  }
+
+  class Semigroup[S] {
+    combine : S → S → S
+  }
+
+  // =========================================================
+  // Option Type: Option[A] = None | Some(A)
+  // =========================================================
+
+  sort Option[_]
+
+  constructor None : ∀[A] Option[A]
+  constructor Some : ∀[A] A → Option[A]
+
+  instance Functor Option {
+    map(_, None)    ↦ None
+    map(f, Some(a)) ↦ Some(f(a))
+  }
+
+  instance Applicative Option {
+    pure(a)              ↦ Some(a)
+    ap(None, _)          ↦ None
+    ap(_, None)          ↦ None
+    ap(Some(f), Some(a)) ↦ Some(f(a))
+  }
+
+  instance Monad Option {
+    flatMap(_, None)    ↦ None
+    flatMap(f, Some(a)) ↦ f(a)
+  }
+
+  instance [A: Eq] Eq Option[A] {
+    eq(None, None)       ↦ True
+    eq(Some(a), Some(b)) ↦ eq(a, b)
+    eq(_, _)             ↦ False
+  }
+
+  instance [A: Monoid] Monoid Option[A] {
+    empty                    ↦ None
+    append(None, x)          ↦ x
+    append(x, None)          ↦ x
+    append(Some(a), Some(b)) ↦ Some(append(a, b))
+  }
+
+  // =========================================================
+  // List Type: List[A] = Nil | Cons(A, List[A])
+  // =========================================================
+
+  sort List[_]
+
+  constructor Nil  : ∀[A] List[A]
+  constructor Cons : ∀[A] A → List[A] → List[A]
+
+  // Syntactic sugar: [a, b, c]
+  grammar list {
+    "[" "]"           => Nil
+    "[" elem+ "]"     => foldr(Cons, Nil, elem)
+  }
+
+  instance Functor List {
+    map(_, Nil)        ↦ Nil
+    map(f, Cons(x,xs)) ↦ Cons(f(x), map(f, xs))
+  }
+
+  instance Applicative List {
+    pure(a)        ↦ Cons(a, Nil)
+    ap(fs, xs)     ↦ flatMap(λf. map(f, xs), fs)
+  }
+
+  instance Monad List {
+    flatMap(_, Nil)        ↦ Nil
+    flatMap(f, Cons(x,xs)) ↦ append(f(x), flatMap(f, xs))
+  }
+
+  instance Foldable List {
+    foldMap(_, Nil)        ↦ empty
+    foldMap(f, Cons(x,xs)) ↦ append(f(x), foldMap(f, xs))
+  }
+
+  instance Traverse List {
+    traverse(_, Nil)        ↦ pure(Nil)
+    traverse(f, Cons(x,xs)) ↦ ap(map(Cons, f(x)), traverse(f, xs))
+  }
+
+  instance [A: Eq] Eq List[A] {
+    eq(Nil, Nil)             ↦ True
+    eq(Cons(x,xs), Cons(y,ys)) ↦ and(eq(x,y), eq(xs,ys))
+    eq(_, _)                 ↦ False
+  }
+
+  instance Monoid List[A] {
+    empty             ↦ Nil
+    append(Nil, ys)   ↦ ys
+    append(Cons(x,xs), ys) ↦ Cons(x, append(xs, ys))
+  }
+
+  // =========================================================
+  // Pair Type: Pair[A,B] = (A, B)
+  // =========================================================
+
+  sort Pair[_,_]
+
+  constructor Pair : ∀[A, B] A → B → Pair[A, B]
+
+  xform Fst : ∀[A, B] Pair[A, B] ⇄ A
+  rule Fst { Pair(a, _) ↦ a }
+
+  xform Snd : ∀[A, B] Pair[A, B] ⇄ B
+  rule Snd { Pair(_, b) ↦ b }
+
+  instance Bifunctor Pair {
+    bimap(f, g, Pair(a, b)) ↦ Pair(f(a), g(b))
+  }
+
+  instance [B] Functor Pair[_, B] {
+    map(f, Pair(a, b)) ↦ Pair(f(a), b)
+  }
+
+  instance [A: Eq, B: Eq] Eq Pair[A, B] {
+    eq(Pair(a1,b1), Pair(a2,b2)) ↦ and(eq(a1,a2), eq(b1,b2))
+  }
+
+  instance [A: Monoid, B: Monoid] Monoid Pair[A, B] {
+    empty                         ↦ Pair(empty, empty)
+    append(Pair(a1,b1), Pair(a2,b2)) ↦ Pair(append(a1,a2), append(b1,b2))
+  }
+
+  // =========================================================
+  // Either Type: Either[A,B] = Left(A) | Right(B)
+  // =========================================================
+
+  sort Either[_,_]
+
+  constructor Left  : ∀[A, B] A → Either[A, B]
+  constructor Right : ∀[A, B] B → Either[A, B]
+
+  instance Bifunctor Either {
+    bimap(f, _, Left(a))  ↦ Left(f(a))
+    bimap(_, g, Right(b)) ↦ Right(g(b))
+  }
+
+  instance [E] Functor Either[E, _] {
+    map(_, Left(e))  ↦ Left(e)
+    map(f, Right(a)) ↦ Right(f(a))
+  }
+
+  instance [E] Applicative Either[E, _] {
+    pure(a)               ↦ Right(a)
+    ap(Left(e), _)        ↦ Left(e)
+    ap(_, Left(e))        ↦ Left(e)
+    ap(Right(f), Right(a)) ↦ Right(f(a))
+  }
+
+  instance [E] Monad Either[E, _] {
+    flatMap(_, Left(e))  ↦ Left(e)
+    flatMap(f, Right(a)) ↦ f(a)
+  }
+
+  // =========================================================
+  // Validated: Parallel Error Accumulation
+  // =========================================================
+
+  sort Validated[_,_]
+
+  constructor Invalid : ∀[E, A] E → Validated[E, A]
+  constructor Valid   : ∀[E, A] A → Validated[E, A]
+
+  instance [E] Functor Validated[E, _] {
+    map(_, Invalid(e)) ↦ Invalid(e)
+    map(f, Valid(a))   ↦ Valid(f(a))
+  }
+
+  // NOT a Monad! But IS an Applicative (for parallel validation)
+  instance [E: Semigroup] Applicative Validated[E, _] {
+    pure(a)                     ↦ Valid(a)
+    ap(Invalid(e1), Invalid(e2)) ↦ Invalid(combine(e1, e2))  // Accumulate!
+    ap(Invalid(e), _)           ↦ Invalid(e)
+    ap(_, Invalid(e))           ↦ Invalid(e)
+    ap(Valid(f), Valid(a))      ↦ Valid(f(a))
+  }
+
+  // =========================================================
+  // NonEmpty List: NonEmpty[A] = (A, List[A])
+  // =========================================================
+
+  sort NonEmpty[_]
+
+  constructor NonEmpty : ∀[A] A → List[A] → NonEmpty[A]
+
+  xform Head : ∀[A] NonEmpty[A] ⇄ A
+  rule Head { NonEmpty(h, _) ↦ h }
+
+  xform Tail : ∀[A] NonEmpty[A] ⇄ List[A]
+  rule Tail { NonEmpty(_, t) ↦ t }
+
+  xform ToList : ∀[A] NonEmpty[A] ⇄ List[A]
+  rule ToList { NonEmpty(h, t) ↦ Cons(h, t) }
+
+  instance Functor NonEmpty {
+    map(f, NonEmpty(h, t)) ↦ NonEmpty(f(h), map(f, t))
+  }
+
+  instance Semigroup NonEmpty[A] {
+    combine(NonEmpty(h1, t1), ne2) ↦ NonEmpty(h1, append(t1, toList(ne2)))
+  }
+
+  // NonEmpty has no empty, so not a Monoid!
+  // But it IS a Semigroup
+
+  // =========================================================
+  // Identity: Id[A] = A
+  // =========================================================
+
+  sort Id[_]
+
+  constructor Id : ∀[A] A → Id[A]
+
+  xform RunId : ∀[A] Id[A] ⇄ A
+  rule RunId { Id(a) ↦ a }
+
+  instance Functor Id {
+    map(f, Id(a)) ↦ Id(f(a))
+  }
+
+  instance Applicative Id {
+    pure(a)          ↦ Id(a)
+    ap(Id(f), Id(a)) ↦ Id(f(a))
+  }
+
+  instance Monad Id {
+    flatMap(f, Id(a)) ↦ f(a)
+  }
+
+  instance Comonad Id {
+    extract(Id(a))    ↦ a
+    extend(f, Id(a))  ↦ Id(f(Id(a)))
+  }
+
+  // =========================================================
+  // Const: Const[C,A] = C (ignores A)
+  // =========================================================
+
+  sort Const[_,_]
+
+  constructor Const : ∀[C, A] C → Const[C, A]
+
+  xform GetConst : ∀[C, A] Const[C, A] ⇄ C
+  rule GetConst { Const(c) ↦ c }
+
+  instance Functor Const[C, _] {
+    map(_, Const(c)) ↦ Const(c)    // Ignores f!
+  }
+
+  instance [C: Monoid] Applicative Const[C, _] {
+    pure(_)               ↦ Const(empty)
+    ap(Const(c1), Const(c2)) ↦ Const(append(c1, c2))
+  }
+
+  // =========================================================
+  // Polymorphic Functions with Constraints
+  // =========================================================
+
+  // map : ∀[F: Functor, A, B] (A → B) → F[A] → F[B]
+  xform Map : ∀[F: * → *, A, B] [F: Functor] (A → B) → F[A] ⇄ F[B]
+  rule Map { f, fa ↦ map(f, fa) }
+
+  // sequence : ∀[T: Traverse, F: Applicative, A] T[F[A]] → F[T[A]]
+  xform Sequence : ∀[T: * → *, F: * → *, A] [T: Traverse, F: Applicative] T[F[A]] ⇄ F[T[A]]
+  rule Sequence { tfa ↦ traverse(λx. x, tfa) }
+
+  // fold : ∀[T: Foldable, M: Monoid] T[M] → M
+  xform Fold : ∀[T: * → *, M] [T: Foldable, M: Monoid] T[M] ⇄ M
+  rule Fold { tm ↦ foldMap(λx. x, tm) }
+
+  // =========================================================
+  // Example Uses
+  // =========================================================
+
+  def maybeInt : Option[Int] = Some(42)
+  def noneStr  : Option[String] = None
+
+  def listPair : List[Pair[Int, String]] = 
+    Cons(Pair(1, "one"), Cons(Pair(2, "two"), Nil))
+
+  def eitherResult : Either[String, Int] = Right(42)
+
+  def validated : Validated[List[String], Int] =
+    ap(ap(pure(λx. λy. x + y), Valid(1)), Valid(2))
+
+  def validatedErrors : Validated[List[String], Int] =
+    ap(ap(pure(λx. λy. x + y), Invalid(["err1"])), Invalid(["err2"]))
+    // Result: Invalid(["err1", "err2"]) -- both errors!
+}
