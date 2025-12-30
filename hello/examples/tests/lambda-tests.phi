@@ -1,0 +1,31 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// Lambda Calculus Tests
+// ═══════════════════════════════════════════════════════════════════════════
+// Tests for lambda calculus term operations
+// Uses simple parser format
+
+sort Term
+
+Term = Var(name: String)
+     | Lam(param: String, body: Term)
+     | App(func: Term, arg: Term)
+
+// Test: Variable identity
+xform test_var_identity : Term -> Term {
+  Var(x) => Var(x)
+}
+
+// Test: Lambda identity
+xform test_lam_identity : Term -> Term {
+  Lam(x, body) => Lam(x, body)
+}
+
+// Test: Application identity
+xform test_app_identity : Term -> Term {
+  App(f, a) => App(f, a)
+}
+
+// Example: Eta reduction simplified
+xform example_eta_simple : Term -> Term {
+  Lam(x, App(f, Var(y))) => f
+}

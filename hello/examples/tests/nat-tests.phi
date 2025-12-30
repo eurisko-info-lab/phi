@@ -1,0 +1,30 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// Natural Number Tests
+// ═══════════════════════════════════════════════════════════════════════════
+// Tests for Peano natural number operations
+// Uses simple parser format
+
+sort Nat
+
+Nat = Zero
+    | Succ(pred: Nat)
+
+// Test: Zero is zero
+xform test_zero_identity : Nat -> Nat {
+  Zero => Zero
+}
+
+// Test: Successor preserves structure
+xform test_succ_identity : Nat -> Nat {
+  Succ(n) => Succ(n)
+}
+
+// Example: Predecessor function (on Succ)
+xform example_pred_succ : Nat -> Nat {
+  Succ(n) => n
+}
+
+// Example: Predecessor function (on Zero)
+xform example_pred_zero : Nat -> Nat {
+  Zero => Zero
+}
