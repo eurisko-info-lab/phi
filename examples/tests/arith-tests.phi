@@ -1,0 +1,52 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// Arithmetic Expression Tests
+// ═══════════════════════════════════════════════════════════════════════════
+// Tests for arithmetic expression evaluation and simplification
+// Uses simple parser format (sort declarations + constructor = syntax)
+
+sort Expr
+
+Expr = Lit(value: Int)
+     | Add(left: Expr, right: Expr)
+     | Mul(left: Expr, right: Expr)
+     | Neg(expr: Expr)
+
+// Test: Identity transform preserves structure
+xform test_lit_identity : Expr -> Expr {
+  Lit(n) => Lit(n)
+}
+
+// Test: Zero is additive identity (left)
+xform test_add_zero_left : Expr -> Expr {
+  Add(Lit(0), e) => e
+}
+
+// Test: Zero is additive identity (right)
+xform test_add_zero_right : Expr -> Expr {
+  Add(e, Lit(0)) => e
+}
+
+// Test: One is multiplicative identity (left)
+xform test_mul_one_left : Expr -> Expr {
+  Mul(Lit(1), e) => e
+}
+
+// Test: One is multiplicative identity (right)
+xform test_mul_one_right : Expr -> Expr {
+  Mul(e, Lit(1)) => e
+}
+
+// Test: Zero annihilates multiplication (left)
+xform test_mul_zero_left : Expr -> Expr {
+  Mul(Lit(0), e) => Lit(0)
+}
+
+// Test: Zero annihilates multiplication (right)
+xform test_mul_zero_right : Expr -> Expr {
+  Mul(e, Lit(0)) => Lit(0)
+}
+
+// Example: Double negation elimination
+xform example_double_neg : Expr -> Expr {
+  Neg(Neg(e)) => e
+}

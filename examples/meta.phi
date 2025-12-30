@@ -1,223 +1,280 @@
-// =============================================================
-// Meta-Phi: Phi's own meta-language constructs as data
-// =============================================================
+// =============================================================================
+// Meta: The Language of Interpreters
+// =============================================================================
+// Defines the semantic primitives for pattern matching, substitution,
+// and evaluation. This is the "runtime" that phi2scala.phi targets.
 //
-// This defines the data types for constructs that appear as
-// syntax sugar in .phi files. The `syntax` mechanism (when added)
-// will desugar surface syntax to these constructors.
+// Code Generation Structure:
+//   phi/meta/           <- Data types (stable, hand-written or rarely regenerated)
+//     Val.scala         <- Val, Env, Pat, Result enums
+//     Syntax.scala      <- Expr enum
+//     Core.scala        <- Dispatcher (just delegates to gen/)
+//   phi/meta/gen/       <- Operations (generated from rules below)
+//     Eval.scala        <- Expr.eval extensions (from xform Eval)
+//     Match.scala       <- Pat.matchWith extensions (from xform Match)
+//     Show.scala        <- *.show extensions (from xform Show)
 //
-// =============================================================
+// Each xform generates a file in gen/. Each rule generates an extension method.
 
 language Meta {
-
-  // =============================================================
-  // Builtins (assumed primitive)
-  // =============================================================
+  // ==========================================================================
+  // Core Semantic Sorts (→ enums in Val.scala, Syntax.scala)
+  // ==========================================================================
+  sort Val           // Runtime values
+  sort Env           // Variable bindings  
+  sort Pat           // Patterns for matching
+  sort Expr          // Expressions to evaluate
+  sort Result        // Match/eval results
   
-  sort String
-  sort Term
-  sort List[A]
+  // ==========================================================================
+  // Values - The Universal AST
+  // ==========================================================================
+  constructor VCon : String → List[Val] → Val        // Constructor application
+  constructor VStr : String → Val                     // String literal
+  constructor VInt : Int → Val                        // Integer literal
+  constructor VList : List[Val] → Val                 // List value
   
-  // Variable reference in terms
-  constructor Var : String → Term
+  // ==========================================================================
+  // Environments
+  // ==========================================================================
+  constructor EmptyEnv : Env
+  constructor Bind : String → Val → Env → Env
   
-  // =============================================================
-  // Core: Names, Types, Terms
-  // =============================================================
+  // ==========================================================================
+  // Patterns
+  // ==========================================================================
+  constructor PVar : String → Pat                     // Variable pattern
+  constructor PCon : String → List[Pat] → Pat         // Constructor pattern
+  constructor PWild : Pat                             // Wildcard
+  constructor PLit : Val → Pat                        // Literal pattern
   
-  sort Name
-  constructor MkName : String → Name
+  // ==========================================================================
+  // Expressions
+  // ==========================================================================
+  constructor EVar : String → Expr                    // Variable reference
+  constructor ECon : String → List[Expr] → Expr       // Constructor call
+  constructor EApp : Expr → Expr → Expr               // Application
+  constructor ELam : String → Expr → Expr             // Lambda
+  constructor ELet : String → Expr → Expr → Expr      // Let binding
+  constructor EMatch : Expr → List[Expr] → Expr       // Pattern match
+  constructor ECase : Pat → Expr → Expr               // Case clause
   
-  sort Type
-  constructor TyVar  : Name → Type
-  constructor TyApp  : Name → List[Type] → Type
-  constructor TyArr  : Type → Type → Type
-  constructor TyProd : Type → Type → Type
-  constructor TyList : Type → Type
+  // ==========================================================================
+  // Results
+  // ==========================================================================
+  constructor ROk : Val → Env → Result                // Successful match
+  constructor RFail : Result                          // Match failure
   
-  // =============================================================
-  // Equations and Laws
-  // =============================================================
-  //
-  // law Category {
-  //   Comp(Id, f) ≡ f
-  //   Comp(f, Id) ≡ f
-  // }
-  //
-  // desugars to:
-  //
-  // def Category : Law = MkLaw("Category", [
-  //   Eq(Comp(Id, f), f),
-  //   Eq(Comp(f, Id), f)
-  // ])
+  // ==========================================================================
+  // Grammars for Reading/Writing Values
+  // ==========================================================================
+  grammar val {
+    IDENT "(" val* ")" => VCon(IDENT, val)
+    IDENT => VCon(IDENT, List)
+    STRING => VStr(STRING)
+    INT => VInt(INT)
+    "[" val* "]" => VList(val)
+  }
   
-  sort Equation
-  constructor Eq : Term → Term → Equation
+  grammar pat {
+    IDENT "(" pat* ")" => PCon(IDENT, pat)
+    IDENT => PVar(IDENT)
+    "_" => PWild
+    STRING => PLit(VStr(STRING))
+  }
   
-  sort Law
-  constructor MkLaw : Name → List[Equation] → Law
+  grammar expr {
+    IDENT => EVar(IDENT)
+    IDENT "(" expr* ")" => ECon(IDENT, expr)
+    expr expr => EApp(expr, expr)
+    "λ" IDENT "." expr => ELam(IDENT, expr)
+    "let" IDENT "=" expr "in" expr => ELet(IDENT, expr, expr)
+    "match" expr "{" case* "}" => EMatch(expr, case)
+  }
   
-  // =============================================================
-  // Type Aliases
-  // =============================================================
-  //
-  // alias Path[A] := I → Term[A]
-  //
-  // desugars to:
-  //
-  // def Path : Alias = MkAlias("Path", ["A"], TyArr(TyVar("I"), TyApp("Term", [TyVar("A")])))
+  grammar case {
+    pat "=>" expr => ECase(pat, expr)
+  }
   
-  sort Alias
-  constructor MkAlias : Name → List[Name] → Type → Alias
+  // ==========================================================================
+  // Core Operations (each xform → gen/*.scala)
+  // ==========================================================================
   
-  // =============================================================
-  // Theorems with Quantifiers
-  // =============================================================
-  //
-  // theorem MapId : forall A. Map(Pure(x), id) ≡ Pure(x)
-  //
-  // desugars to:
-  //
-  // def MapId : Theorem = MkTheorem("MapId", ["A"], Eq(Map(Pure(x), id), Pure(x)))
+  // Pattern matching: (Pat, Val, Env) → Result
+  // → gen/Match.scala: extension (pat: Pat) def matchWith(value: Val, env: Env): Result
+  xform Match(value: Val, env: Env) : Pat ⇄ Result
   
-  sort Theorem
-  constructor MkTheorem : Name → List[Name] → Equation → Theorem
+  // Evaluation: (Expr, Env) → Val  
+  // → gen/Eval.scala: extension (expr: Expr) def eval(env: Env): Val
+  xform Eval(env: Env) : Expr ⇄ Val
   
-  // Can also have theorem as implication
-  sort Prop
-  constructor PropEq   : Equation → Prop
-  constructor PropAll  : Name → Prop → Prop
-  constructor PropImpl : Prop → Prop → Prop
-  constructor PropAnd  : Prop → Prop → Prop
+  // Pretty printing: Val|Pat|Expr → String
+  // → gen/Show.scala: extension (v: Val) def show: String, etc.
+  // NOTE: When a grammar exists for a sort, Show is derived from the grammar
+  //       (bidirectional: parse ↔ render). Only sorts without grammars need
+  //       explicit Show rules.
+  xform Show : Val ⇄ String
   
-  constructor MkTheorem2 : Name → Prop → Theorem
+  // Substitution: (Expr, Env) → Expr
+  // → gen/Subst.scala (future)
+  xform Subst(env: Env) : Expr ⇄ Expr
   
-  // =============================================================
-  // Axes (Lambda Cube)
-  // =============================================================
-  //
-  // axis → : Term → Type
-  //
-  // desugars to:
-  //
-  // def arrow : Axis = MkAxis("→", TyVar("Term"), TyVar("Type"))
+  // ==========================================================================
+  // Match Rules
+  // ==========================================================================
   
-  sort Axis
-  constructor MkAxis : Name → Type → Type → Axis
+  // Variable matches anything, binds it
+  rule Match.var {
+    PVar(name) ↦ ROk(val, Bind(name, val, env))
+  }
   
-  // The lambda cube corners are combinations of axes
-  sort Corner
-  constructor MkCorner : List[Axis] → Corner
+  // Constructor matches if names equal and args match
+  rule Match.con {
+    PCon(name, pats) ↦ 
+      Match.args(pats, args, env)
+  }
   
-  // =============================================================
-  // Syntax Declarations (Meta-circular!)
-  // =============================================================
-  //
-  // syntax law name "{" equations "}" := MkLaw(name, equations)
-  //
-  // A syntax declaration IS an xform from surface syntax to data.
-  // The pattern is a sequence of literal strings and metavariables.
-  // The RHS is a constructor application.
+  // Wildcard matches anything, binds nothing
+  rule Match.wild {
+    PWild ↦ ROk(val, env)
+  }
   
-  sort Pattern
-  constructor PLit  : String → Pattern
-  constructor PVar  : Name → Pattern
-  constructor PSeq  : List[Pattern] → Pattern
-  constructor PRep  : Pattern → Pattern           // Repetition (like *)
-  constructor PSep  : Pattern → String → Pattern  // Separated list
+  // Literal matches if equal
+  rule Match.lit {
+    PLit(expected) ↦ ROk(val, env)
+  }
   
-  sort SyntaxDecl
-  constructor MkSyntax : Pattern → Term → SyntaxDecl
+  // ==========================================================================
+  // Eval Rules
+  // ==========================================================================
   
-  // Example: syntax for law
-  // syntax law name "{" equations "}" := MkLaw(name, equations)
-  //
-  // Pattern: PSeq([PLit("law"), PVar("name"), PLit("{"), 
-  //               PSep(PVar("equation"), newline), PLit("}")])
-  // RHS: MkLaw(name, equations)
+  // Variable lookup
+  rule Eval.var {
+    EVar(name) ↦ Lookup(name, env)
+  }
   
-  def lawSyntax : SyntaxDecl = MkSyntax(
-    PSeq([PLit("law"), PVar("name"), PLit("{"), 
-          PSep(PVar("eq"), "\n"), PLit("}")]),
-    MkLaw(Var("name"), Var("eq"))
-  )
+  // Constructor: evaluate args, build value
+  rule Eval.con {
+    ECon(name, args) ↦ VCon(name, Eval.list(args, env))
+  }
   
-  def eqSyntax : SyntaxDecl = MkSyntax(
-    PSeq([PVar("lhs"), PLit("≡"), PVar("rhs")]),
-    Eq(Var("lhs"), Var("rhs"))
-  )
+  // Application: evaluate both, apply
+  rule Eval.app {
+    EApp(func, arg) ↦ Apply(Eval.forward(func), Eval.forward(arg))
+  }
   
-  def aliasSyntax : SyntaxDecl = MkSyntax(
-    PSeq([PLit("alias"), PVar("name"), PLit(":="), PVar("type")]),
-    MkAlias(Var("name"), [], Var("type"))
-  )
+  // Lambda: create closure
+  rule Eval.lam {
+    ELam(param, body) ↦ VClosure(param, body, env)
+  }
   
-  // =============================================================
-  // Parsing as Xform
-  // =============================================================
-  //
-  // A SyntaxDecl defines a bidirectional transformation:
-  // - forward: parse surface syntax → data
-  // - backward: data → pretty print surface syntax
+  // Match: evaluate scrutinee, try cases
+  rule Eval.match {
+    EMatch(scrutinee, cases) ↦ TryCases(Eval.forward(scrutinee), cases, env)
+  }
   
-  xform ParseSyntax : String × SyntaxDecl ⇄ Term
+  // Let binding: evaluate value, extend env, evaluate body
+  rule Eval.let {
+    ELet(name, value, body) ↦ Eval.forward(body, Bind(name, Eval.forward(value), env))
+  }
   
-  // The syntax declarations form a grammar
-  sort Grammar
-  constructor MkGrammar : List[SyntaxDecl] → Grammar
+  // Case clause (shouldn't be evaluated directly)
+  rule Eval.case {
+    ECase(pattern, body) ↦ Error("ECase evaluated directly")
+  }
   
-  xform ParseGrammar : String × Grammar ⇄ Term
+  // ==========================================================================
+  // Show Rules (→ gen/Show.scala)
+  // ==========================================================================
   
-  // =============================================================
-  // Examples: Using the data types directly
-  // =============================================================
+  // --------------------------------------------------------------------------
+  // Val.show
+  // --------------------------------------------------------------------------
+  rule Show.vcon {
+    VCon(name, args) ↦ ShowCon(name, args)
+  }
   
-  // This is what "law Category { ... }" desugars to:
-  def categoryLaw : Law = MkLaw(
-    MkName("Category"),
-    [Eq(Var("Comp(Id, f)"), Var("f")),
-     Eq(Var("Comp(f, Id)"), Var("f")),
-     Eq(Var("Comp(Comp(f,g), h)"), Var("Comp(f, Comp(g,h))"))]
-  )
+  rule Show.vstr {
+    VStr(s) ↦ ShowStr(s)
+  }
   
-  // This is what "alias Path[A] := I → Term[A]" desugars to:
-  def pathAlias : Alias = MkAlias(
-    MkName("Path"),
-    [MkName("A")],
-    TyArr(TyVar(MkName("I")), TyApp(MkName("Term"), [TyVar(MkName("A"))]))
-  )
+  rule Show.vint {
+    VInt(n) ↦ Show.int(n)
+  }
   
-  // This is what "axis → : Term → Type" desugars to:
-  def arrowAxis : Axis = MkAxis(
-    MkName("→"),
-    TyVar(MkName("Term")),
-    TyVar(MkName("Type"))
-  )
+  rule Show.vlist {
+    VList(elems) ↦ Concat("[", Show.join(elems, ", "), "]")
+  }
   
-  // =============================================================
-  // Meta-circularity: Phi syntax as Grammar
-  // =============================================================
-  //
-  // The core Phi syntax (sort, constructor, xform, rule, def, etc.)
-  // can itself be expressed as a Grammar of SyntaxDecls.
-  // This allows extending Phi's syntax within Phi itself!
+  // --------------------------------------------------------------------------
+  // Pat.show
+  // --------------------------------------------------------------------------
+  rule Show.pvar {
+    PVar(name) ↦ name
+  }
   
-  def sortSyntax : SyntaxDecl = MkSyntax(
-    PSeq([PLit("sort"), PVar("name")]),
-    Var("SortDecl(name)")
-  )
+  rule Show.pcon {
+    PCon(name, args) ↦ ShowCon(name, args)
+  }
   
-  def constructorSyntax : SyntaxDecl = MkSyntax(
-    PSeq([PLit("constructor"), PVar("name"), PLit(":"), PVar("type")]),
-    Var("ConstructorDecl(name, type)")
-  )
+  rule Show.pwild {
+    PWild ↦ "_"
+  }
   
-  def phiGrammar : Grammar = MkGrammar([
-    sortSyntax,
-    constructorSyntax,
-    lawSyntax,
-    eqSyntax,
-    aliasSyntax
-  ])
-
+  rule Show.plit {
+    PLit(value) ↦ Show.forward(value)
+  }
+  
+  // --------------------------------------------------------------------------
+  // Expr.show
+  // --------------------------------------------------------------------------
+  rule Show.evar {
+    EVar(name) ↦ name
+  }
+  
+  rule Show.econ {
+    ECon(name, args) ↦ ShowCon(name, args)
+  }
+  
+  rule Show.eapp {
+    EApp(func, arg) ↦ Concat("(", Show.forward(func), " ", Show.forward(arg), ")")
+  }
+  
+  rule Show.elam {
+    ELam(param, body) ↦ Concat("λ", param, ". ", Show.forward(body))
+  }
+  
+  rule Show.elet {
+    ELet(name, value, body) ↦ Concat("let ", name, " = ", Show.forward(value), " in ", Show.forward(body))
+  }
+  
+  rule Show.ematch {
+    EMatch(scrutinee, cases) ↦ Concat("match ", Show.forward(scrutinee), " { ", Show.join(cases, "; "), " }")
+  }
+  
+  rule Show.ecase {
+    ECase(pattern, body) ↦ Concat(Show.forward(pattern), " => ", Show.forward(body))
+  }
+  
+  // --------------------------------------------------------------------------
+  // Env.show (no grammar for Env)
+  // --------------------------------------------------------------------------
+  rule Show.emptyenv {
+    EmptyEnv ↦ "{}"
+  }
+  
+  rule Show.bind {
+    Bind(name, value, rest) ↦ Concat("{", name, " -> ", Show.forward(value), ", ", Show.forward(rest), "}")
+  }
+  
+  // --------------------------------------------------------------------------
+  // Result.show (no grammar for Result)
+  // --------------------------------------------------------------------------
+  rule Show.ok {
+    ROk(val, env) ↦ Concat("ROk(", Show.forward(val), ", ", Show.forward(env), ")")
+  }
+  
+  rule Show.fail {
+    RFail ↦ "RFail"
+  }
 }

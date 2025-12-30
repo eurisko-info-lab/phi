@@ -1,114 +1,244 @@
-// =======================================================
-// STLC + Nat in Phi syntax
-// =======================================================
+// ===========================================================
+// STLC + Nat — Typed Lambda Calculus with Recursion Schemes
+// ===========================================================
+// Uses: polymorphic types, recursion schemes, HKT
+// ===========================================================
 
 language STLCNat {
 
-  // -----------------------
-  // Sorts
-  // -----------------------
+  // =========================================================
+  // Types (as a recursive structure)
+  // =========================================================
+
   sort Type
+
+  constructor Unit : Type
+  constructor Nat  : Type
+  constructor Arr  : Type → Type → Type
+  constructor Prod : Type → Type → Type
+
+  // Type equality (for type checking)
+  xform TypeEq : Type → Type ⇄ Bool
+  rule TypeEq {
+    Unit, Unit           ↦ True
+    Nat, Nat             ↦ True
+    Arr(a1,b1), Arr(a2,b2) ↦ and(TypeEq(a1,a2), TypeEq(b1,b2))
+    Prod(a1,b1), Prod(a2,b2) ↦ and(TypeEq(a1,a2), TypeEq(b1,b2))
+    _, _                 ↦ False
+  }
+
+  // =========================================================
+  // Terms (using Fix for recursion)
+  // =========================================================
+
   sort Term
 
-  // -----------------------
-  // Type constructors
-  // -----------------------
-  constructor Unit : Type
-  constructor Nat : Type
-  constructor Arr : Type -> Type -> Type
+  // Base terms
+  constructor TmUnit : Term
+  constructor TmZero : Term
+  constructor TmSucc : Term → Term
+  constructor TmVar  : String → Term
 
-  // -----------------------
-  // Term constructors  
-  // -----------------------
-  constructor unit : Term
-  constructor zero : Term
-  constructor succ : Term -> Term
-  constructor lam : (x : Term) -> Type -> Term -> Term
-  constructor app : Term -> Term -> Term
-  constructor NatRec : (n : Term) -> (base : Term) -> (step : Term) -> Term
-  constructor pair : Term -> Term -> Term
-  constructor fst : Term -> Term
-  constructor snd : Term -> Term
+  // Lambda calculus
+  constructor TmLam : String → Type → Term → Term
+  constructor TmApp : Term → Term → Term
 
-  // -----------------------
-  // Reduction rules
-  // -----------------------
-  
-  rule BetaReduce {
-    app(lam(x, _, body), v) |-> body[x := v]
+  // Pairs
+  constructor TmPair : Term → Term → Term
+  constructor TmFst  : Term → Term
+  constructor TmSnd  : Term → Term
+
+  // Recursion on Nat
+  constructor TmRec  : Term → Term → Term → Term
+
+  // =========================================================
+  // Reduction Rules (Small-step)
+  // =========================================================
+
+  // Substitution
+  xform Subst : String → Term → Term ⇄ Term
+  rule Subst {
+    x, v, TmVar(y) | x = y   ↦ v
+    x, _, TmVar(y) | x ≠ y   ↦ TmVar(y)
+    x, _, TmLam(y,t,b) | x = y ↦ TmLam(y, t, b)     // Shadowed
+    x, v, TmLam(y,t,b) | x ≠ y ↦ TmLam(y, t, Subst(x, v, b))
+    x, v, TmApp(f, a)        ↦ TmApp(Subst(x,v,f), Subst(x,v,a))
+    x, v, TmSucc(n)          ↦ TmSucc(Subst(x, v, n))
+    x, v, TmPair(a, b)       ↦ TmPair(Subst(x,v,a), Subst(x,v,b))
+    x, v, TmFst(p)           ↦ TmFst(Subst(x, v, p))
+    x, v, TmSnd(p)           ↦ TmSnd(Subst(x, v, p))
+    x, v, TmRec(n, z, s)     ↦ TmRec(Subst(x,v,n), Subst(x,v,z), Subst(x,v,s))
+    _, _, t                  ↦ t
   }
 
-  rule NatRecZero {
-    NatRec(zero, z, _) |-> z
+  // Beta reduction
+  xform Beta : Term ⇄ Term
+  rule Beta {
+    TmApp(TmLam(x, _, body), v) ↦ Subst(x, v, body)
   }
 
-  rule NatRecSucc {
-    NatRec(succ(n), z, s) |-> app(app(s, n), NatRec(n, z, s))
+  // Pair projections
+  xform ProjFst : Term ⇄ Term
+  rule ProjFst { TmFst(TmPair(a, _)) ↦ a }
+
+  xform ProjSnd : Term ⇄ Term
+  rule ProjSnd { TmSnd(TmPair(_, b)) ↦ b }
+
+  // Nat recursion
+  xform RecZero : Term ⇄ Term
+  rule RecZero { TmRec(TmZero, z, _) ↦ z }
+
+  xform RecSucc : Term ⇄ Term
+  rule RecSucc { 
+    TmRec(TmSucc(n), z, s) ↦ TmApp(TmApp(s, n), TmRec(n, z, s))
   }
 
-  rule FstPair {
-    fst(pair(a, _)) |-> a
+  // =========================================================
+  // Type Checking (Bidirectional)
+  // =========================================================
+
+  sort Ctx
+  constructor Empty : Ctx
+  constructor Bind  : String → Type → Ctx → Ctx
+
+  xform Lookup : Ctx → String ⇄ Option[Type]
+  rule Lookup {
+    Empty, _               ↦ None
+    Bind(x, t, _), y | x=y ↦ Some(t)
+    Bind(_, _, ctx), y     ↦ Lookup(ctx, y)
   }
 
-  rule SndPair {
-    snd(pair(_, b)) |-> b
+  // Type inference
+  xform Infer : Ctx → Term ⇄ Option[Type]
+  rule Infer {
+    _, TmUnit              ↦ Some(Unit)
+    _, TmZero              ↦ Some(Nat)
+    ctx, TmSucc(n)         ↦ 
+      case Infer(ctx, n) of
+        Some(Nat) → Some(Nat)
+        _         → None
+    ctx, TmVar(x)          ↦ Lookup(ctx, x)
+    ctx, TmLam(x, t, body) ↦
+      case Infer(Bind(x, t, ctx), body) of
+        Some(s) → Some(Arr(t, s))
+        None    → None
+    ctx, TmApp(f, a)       ↦
+      case Infer(ctx, f) of
+        Some(Arr(t, s)) → 
+          case Check(ctx, a, t) of
+            True → Some(s)
+            False → None
+        _ → None
+    ctx, TmPair(a, b)      ↦
+      case (Infer(ctx, a), Infer(ctx, b)) of
+        (Some(ta), Some(tb)) → Some(Prod(ta, tb))
+        _                    → None
+    ctx, TmFst(p)          ↦
+      case Infer(ctx, p) of
+        Some(Prod(t, _)) → Some(t)
+        _                → None
+    ctx, TmSnd(p)          ↦
+      case Infer(ctx, p) of
+        Some(Prod(_, t)) → Some(t)
+        _                → None
+    ctx, TmRec(n, z, s)    ↦
+      case (Infer(ctx, n), Infer(ctx, z)) of
+        (Some(Nat), Some(t)) →
+          case Infer(ctx, s) of
+            Some(Arr(Nat, Arr(t2, t3))) | TypeEq(t,t2) && TypeEq(t,t3) → Some(t)
+            _ → None
+        _ → None
   }
 
-  // -----------------------
-  // Normalization strategy
-  // -----------------------
-  strategy normalize := repeat (BetaReduce | NatRecZero | NatRecSucc | FstPair | SndPair)
+  // Type checking (against expected type)
+  xform Check : Ctx → Term → Type ⇄ Bool
+  rule Check {
+    ctx, term, expected ↦
+      case Infer(ctx, term) of
+        Some(actual) → TypeEq(actual, expected)
+        None         → False
+  }
 
-  // -----------------------
-  // Standard library
-  // -----------------------
+  // =========================================================
+  // Standard Library (Church-style with types)
+  // =========================================================
 
-  // add m n = NatRec m n (λ_.λacc. succ acc)
-  def add = lam(m, Nat, lam(n, Nat, 
-    NatRec(m, n, lam(ii, Nat, lam(acc, Nat, succ(acc))))))
+  // Identity: λx:A. x
+  def id : ∀[A] Arr(A, A) = TmLam("x", A, TmVar("x"))
 
-  // fibStep p = pair (snd p) (add (fst p) (snd p))
-  def fibStep = lam(p, Nat, 
-    pair(snd(p), app(app(add, fst(p)), snd(p))))
+  // Compose: λf:B→C. λg:A→B. λx:A. f (g x)
+  def compose : ∀[A,B,C] Arr(Arr(B,C), Arr(Arr(A,B), Arr(A,C))) =
+    TmLam("f", Arr(B,C), TmLam("g", Arr(A,B), TmLam("x", A,
+      TmApp(TmVar("f"), TmApp(TmVar("g"), TmVar("x"))))))
 
-  // fib n = fst (NatRec n (pair 0 1) (λ_.λp. fibStep p))
-  def fib = lam(fn, Nat, 
-    fst(NatRec(fn, pair(0, 1), lam(k, Nat, lam(fp, Nat, app(fibStep, fp))))))
-
-  // mult m n = NatRec m 0 (λ_.λacc. add n acc)
-  def mult = lam(mm, Nat, lam(nn, Nat,
-    NatRec(mm, 0, lam(ii, Nat, lam(aa, Nat, app(app(add, nn), aa))))))
-
-  // fact n = NatRec n 1 (λk.λacc. mult (succ k) acc)
-  def fact = lam(fn, Nat,
-    NatRec(fn, 1, lam(fk, Nat, lam(fa, Nat, app(app(mult, succ(fk)), fa)))))
-
-  // -----------------------
   // Numerals
-  // -----------------------
-  def one   = succ(zero)
-  def two   = succ(one)
-  def three = succ(two)
-  def four  = succ(three)
-  def five  = succ(four)
-  def six   = succ(five)
-  def seven = succ(six)
-  def eight = succ(seven)
-  def nine  = succ(eight)
-  def ten   = succ(nine)
+  def zero  = TmZero
+  def one   = TmSucc(zero)
+  def two   = TmSucc(one)
+  def three = TmSucc(two)
+  def four  = TmSucc(three)
+  def five  = TmSucc(four)
 
-  // -----------------------
+  // add : Nat → Nat → Nat
+  // add m n = rec m n (λ_.λacc. succ acc)
+  def add : Arr(Nat, Arr(Nat, Nat)) =
+    TmLam("m", Nat, TmLam("n", Nat,
+      TmRec(TmVar("m"), TmVar("n"),
+        TmLam("_", Nat, TmLam("acc", Nat, TmSucc(TmVar("acc")))))))
+
+  // mult : Nat → Nat → Nat
+  // mult m n = rec m 0 (λ_.λacc. add n acc)
+  def mult : Arr(Nat, Arr(Nat, Nat)) =
+    TmLam("m", Nat, TmLam("n", Nat,
+      TmRec(TmVar("m"), TmZero,
+        TmLam("_", Nat, TmLam("acc", Nat,
+          TmApp(TmApp(add, TmVar("n")), TmVar("acc")))))))
+
+  // fact : Nat → Nat
+  // fact n = rec n 1 (λk.λacc. mult (succ k) acc)
+  def fact : Arr(Nat, Nat) =
+    TmLam("n", Nat,
+      TmRec(TmVar("n"), one,
+        TmLam("k", Nat, TmLam("acc", Nat,
+          TmApp(TmApp(mult, TmSucc(TmVar("k"))), TmVar("acc"))))))
+
+  // pred : Nat → Nat (using pairs)
+  // pred n = fst (rec n (0,0) (λ_.λp. (snd p, succ (snd p))))
+  def pred : Arr(Nat, Nat) =
+    TmLam("n", Nat,
+      TmFst(TmRec(TmVar("n"), 
+        TmPair(TmZero, TmZero),
+        TmLam("_", Nat, TmLam("p", Prod(Nat, Nat),
+          TmPair(TmSnd(TmVar("p")), TmSucc(TmSnd(TmVar("p")))))))))
+
+  // fib : Nat → Nat (using pairs)
+  // fib n = fst (rec n (0,1) (λ_.λp. (snd p, add (fst p) (snd p))))
+  def fib : Arr(Nat, Nat) =
+    TmLam("n", Nat,
+      TmFst(TmRec(TmVar("n"),
+        TmPair(TmZero, one),
+        TmLam("_", Nat, TmLam("p", Prod(Nat, Nat),
+          TmPair(TmSnd(TmVar("p")),
+            TmApp(TmApp(add, TmFst(TmVar("p"))), TmSnd(TmVar("p")))))))))
+
+  // =========================================================
   // Tests
-  // -----------------------
-  def test_add = app(app(add, two), three)
-  def test_fib5 = app(fib, five)
-  def test_fib7 = app(fib, seven)
-  def test_fact5 = app(fact, five)
+  // =========================================================
 
-  // -----------------------
-  // Type examples (to use all constructors)
-  // -----------------------
-  def type_unit : Type = Unit
-  def type_nat_to_nat : Type = Arr(Nat, Nat)
-  def term_unit : Term = unit
+  def test_add_2_3 = TmApp(TmApp(add, two), three)        // should reduce to 5
+  def test_mult_3_4 = TmApp(TmApp(mult, three), four)     // should reduce to 12
+  def test_fact_5 = TmApp(fact, five)                      // should reduce to 120
+  def test_fib_7 = TmApp(fib, TmSucc(TmSucc(five)))        // should reduce to 13
+
+  // Type check examples
+  def check_add = Infer(Empty, add)     // Should be Some(Arr(Nat, Arr(Nat, Nat)))
+  def check_fib = Infer(Empty, fib)     // Should be Some(Arr(Nat, Nat))
+
+  // =========================================================
+  // Normalization Strategy
+  // =========================================================
+
+  strategy step := Beta | RecZero | RecSucc | ProjFst | ProjSnd
+  strategy normalize := repeat step
+  strategy typecheck := Infer(Empty, _)
 }

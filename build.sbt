@@ -1,37 +1,45 @@
-ThisBuild / version := "0.1.0-SNAPSHOT"
-ThisBuild / scalaVersion := "3.7.4"
+// ═══════════════════════════════════════════════════════════════════════════
+// Φ-Hello: Algebraic Metaprogramming Framework
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// A minimal but complete demonstration of:
+//   - Algebraic data types and pattern functors
+//   - Recursion schemes (cata, ana, hylo, para)
+//   - Free/Cofree structures for effects and annotations
+//   - Bidirectional parsing and syntax
+//   - .phi language specifications
+//
+// ═══════════════════════════════════════════════════════════════════════════
 
-val http4sVersion = "0.23.30"
-val circeVersion = "0.14.10"
+val scala3Version = "3.7.4"
 
-lazy val root = (project in file("."))
+lazy val root = project
+  .in(file("."))
   .settings(
-    name := "phi",
+    name := "phi-hello",
+    version := "0.1.0",
+    
+    scalaVersion := scala3Version,
+    
+    // Compiler options for best Scala 3 experience
+    scalacOptions ++= Seq(
+      "-deprecation",           // Warn about deprecations
+      "-feature",               // Warn about advanced features
+      "-unchecked",             // Enable additional warnings
+    ),
+    
+    // Dependencies
     libraryDependencies ++= Seq(
-      // HTTP server
-      "org.http4s" %% "http4s-ember-server" % http4sVersion,
-      "org.http4s" %% "http4s-ember-client" % http4sVersion,
-      "org.http4s" %% "http4s-dsl" % http4sVersion,
-      "org.http4s" %% "http4s-circe" % http4sVersion,
-      
-      // JSON
-      "io.circe" %% "circe-core" % circeVersion,
-      "io.circe" %% "circe-generic" % circeVersion,
-      "io.circe" %% "circe-parser" % circeVersion,
-      
-      // Parser combinators
+      // Parser combinators for .phi file parsing
       "org.scala-lang.modules" %% "scala-parser-combinators" % "2.4.0",
       
       // Testing
-      "org.scalatest" %% "scalatest" % "3.2.19" % Test,
-      "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
-      "org.scalacheck" %% "scalacheck" % "1.18.1" % Test
+      "org.scalameta" %% "munit" % "1.0.0" % Test,
     ),
     
-    // Enable warnings
-    scalacOptions ++= Seq(
-      "-deprecation",
-      "-feature",
-      "-unchecked"
-    )
+    // Test framework
+    testFrameworks += new TestFramework("munit.Framework"),
+    
+    // Main class for running
+    Compile / mainClass := Some("phi.Run"),
   )

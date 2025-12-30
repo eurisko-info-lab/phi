@@ -1,0 +1,514 @@
+// =============================================================================
+// Φ-Core: The Algebraic Foundation in Phi
+// =============================================================================
+// This is the meta-circular definition: Phi defining its own core.
+// 
+// The key insight: everything is a tree with annotations.
+//   Zipper     = Cofree[V, (Val, Path)]
+//   Attributed = Cofree[V, Attr]
+//   Versioned  = Cofree[V, Hash]
+
+language Core {
+
+  // ==========================================================================
+  // FOUNDATION: Four Fundamental Type Classes
+  // ==========================================================================
+  
+  sort F[_]          // Functor    - structure-preserving maps
+  sort M[_]          // Monad      - sequenced computations  
+  sort W[_]          // Comonad    - context-dependent computations
+  sort Nat[_,_]      // ~>         - polymorphic transformations
+  
+  // Type class definitions with proper higher-kinded types
+  class Functor[F: * → *] {
+    map : ∀[A, B] (A → B) → F[A] → F[B]
+  }
+  
+  class Monad[M: * → *] extends Functor {
+    pure  : ∀[A] A → M[A]
+    flatMap : ∀[A, B] (A → M[B]) → M[A] → M[B]
+  }
+  
+  class Comonad[W: * → *] extends Functor {
+    extract : ∀[A] W[A] → A
+    extend  : ∀[A, B] (W[A] → B) → W[A] → W[B]
+  }
+  
+  // Natural transformation: F ~> G (polymorphic function between functors)
+  constructor Nat : ∀[F: * → *, G: * → *] (∀[A] F[A] → G[A]) → Nat[F, G]
+  
+  // Natural transformation composition
+  xform NatCompose : ∀[F: * → *, G: * → *, H: * → *] Nat[F, G] → Nat[G, H] ⇄ Nat[F, H]
+  rule NatCompose {
+    Nat(fg), Nat(gh) ↦ Nat(λfa. gh(fg(fa)))
+  }
+  
+  // ==========================================================================
+  // PATTERN FUNCTOR: One Layer of Val
+  // ==========================================================================
+  
+  sort V[_]          // Pattern functor - one layer (kind: * → *)
+  
+  constructor C : ∀[A] String → List[A] → V[A]    // Constructor: Foo(a, b)
+  constructor S : ∀[A] String → V[A]               // String literal
+  constructor I : ∀[A] Int → V[A]                  // Integer literal
+  constructor L : ∀[A] List[A] → V[A]              // List: [a, b, c]
+  
+  // V is a Functor
+  instance Functor V[_] {
+    map(f, C(n, xs)) ↦ C(n, xs.map(f))
+    map(f, S(s))     ↦ S(s)
+    map(f, I(i))     ↦ I(i)
+    map(f, L(xs))    ↦ L(xs.map(f))
+  }
+  
+  // ==========================================================================
+  // RECURSIVE STRUCTURES
+  // ==========================================================================
+  
+  sort Fix[_]        // μ[F]      - fixed point (recursive types)
+  sort Free[_,_]     // Fr[F,A]   - free monad (effect sequences)
+  sort Cofree[_,_]   // Co[F,A]   - cofree comonad (annotated trees)
+  
+  constructor μ : ∀[F: * → *] F[Fix[F]] → Fix[F]           // Fix point
+  constructor Pu : ∀[F, A] A → Free[F, A]                   // Pure value
+  constructor Su : ∀[F: * → *, A] F[Free[F, A]] → Free[F, A]  // Suspended
+  constructor Co : ∀[F: * → *, A] A → F[Cofree[F, A]] → Cofree[F, A]
+  
+  // Free[F,_] is a Monad when F is a Functor
+  instance [F: Functor] Monad Free[F, _] {
+    pure(a)           ↦ Pu(a)
+    flatMap(f, Pu(a)) ↦ f(a)
+    flatMap(f, Su(k)) ↦ Su(k.map(flatMap(f, _)))
+  }
+  
+  // Cofree[F,_] is a Comonad when F is a Functor
+  instance [F: Functor] Comonad Cofree[F, _] {
+    extract(Co(a, _))    ↦ a
+    extend(f, Co(a, fs)) ↦ Co(f(Co(a, fs)), fs.map(extend(f, _)))
+  }
+  
+  // Free.run: Interpret Free monad with a natural transformation
+  xform FreeRun : ∀[F: * → *, M: * → *, A] [M: Monad] (F ~> M) → Free[F, A] ⇄ M[A]
+  rule FreeRun {
+    nt, Pu(a)  ↦ pure(a)                              // Pure → M.pure
+    nt, Su(fa) ↦ flatMap(λx. FreeRun(nt, x), nt(fa))  // Transform then recurse
+  }
+  
+  // Free.foldMap: Same as run but with different emphasis
+  xform FreeFoldMap : ∀[F: * → *, M: * → *, A] [M: Monad] (F ~> M) → Free[F, A] ⇄ M[A]
+  rule FreeFoldMap { nt, free ↦ FreeRun(nt, free) }
+  
+  // ==========================================================================
+  // OPTICS: Compositional Access (Polymorphic)
+  // ==========================================================================
+  
+  sort Lens[_,_]      // Ln[S,A]   - exactly one focus
+  sort Prism[_,_]     // Pr[S,A]   - maybe one focus (case match)
+  sort Traversal[_,_] // Tr[S,A]   - zero or more foci
+  
+  constructor Ln : ∀[S, A] (S → A) → ((A → A) → S → S) → Lens[S, A]
+  constructor Pr : ∀[S, A] (S → Validated[A]) → (A → S) → Prism[S, A]
+  constructor Tr : ∀[S, A] (S → List[A]) → ((A → A) → S → S) → Traversal[S, A]
+  
+  // ==========================================================================
+  // TRANSFORMS: Bidirectional Mapping
+  // ==========================================================================
+  
+  sort Xform[_,_]     // X[A,B]    - bidirectional mapping
+  sort Edit[_]        // Ed[A]     - algebraic change
+  sort Term[_]        // Term with holes for partial edits
+  
+  constructor X : ∀[A, B] (A → B) → (B → A) → Xform[A, B]
+  constructor Ins : ∀[A] A → Edit[A]                   // Insert
+  constructor Del : ∀[A] Edit[A]                       // Delete
+  constructor Rep : ∀[A] A → Edit[A]                   // Replace
+  constructor Seq : ∀[A] Edit[A] → Edit[A] → Edit[A]   // Sequence
+  constructor Done : ∀[A] A → Term[A]                  // Complete value
+  constructor Hole : ∀[A] Validated[String] → Term[A]  // Incomplete (with reason)
+  
+  // ==========================================================================
+  // VALIDATED: Parallel Error Accumulation
+  // ==========================================================================
+  
+  sort Validated[_]
+  
+  constructor Ok : ∀[A] A → Validated[A]                    // Success
+  constructor No : ∀[A] List[String] → Validated[A]         // Errors (accumulated)
+  
+  // Validated is Functor + Applicative (not Monad - errors parallel!)
+  instance Functor Validated[_] {
+    map(f, Ok(a))  ↦ Ok(f(a))
+    map(_, No(es)) ↦ No(es)
+  }
+  
+  // Applicative instance: parallel error accumulation
+  xform VdPure : ∀[A] A ⇄ Validated[A]
+  rule VdPure { a ↦ Ok(a) }
+  
+  xform VdZip : ∀[A, B] Validated[A] → Validated[B] ⇄ Validated[A × B]
+  rule VdZip {
+    Ok(a), Ok(b)   ↦ Ok((a, b))
+    No(e1), No(e2) ↦ No(Concat(e1, e2))   // Accumulate both!
+    No(e), _       ↦ No(e)
+    _, No(e)       ↦ No(e)
+  }
+  
+  // ==========================================================================
+  // CONTENT ADDRESSING & STORE
+  // ==========================================================================
+  
+  sort Hash
+  sort Store[_]       // Sto[A]   - hash-addressed storage
+  
+  constructor H : String → Hash                        // Opaque hash
+  constructor Sto : ∀[A] (Hash → Validated[A]) → Store[A]  // Lookup function
+  
+  // Store is a Comonad: extract at current position, extend to all positions
+  instance Comonad Store[_] {
+    extract(Sto(lookup, h))       ↦ lookup(h)
+    extend(f, Sto(lookup, h))     ↦ Sto(λh'. f(Sto(lookup, h')), h)
+  }
+  
+  // Store operations
+  xform StoLookup : ∀[A] Store[A] → Hash ⇄ Validated[A]
+  rule StoLookup { Sto(lookup), h ↦ lookup(h) }
+  
+  xform StoSeek : ∀[A] Store[A] → Hash ⇄ Store[A]
+  rule StoSeek { Sto(lookup, _), h ↦ Sto(lookup, h) }
+  
+  xform StoPeek : ∀[A] Store[A] → Hash ⇄ Validated[A]
+  rule StoPeek { Sto(lookup, _), h ↦ lookup(h) }
+  
+  // ==========================================================================
+  // SPECIALIZED COFREE: Zipper and Attributed
+  // ==========================================================================
+  
+  sort Loc           // (Val, Path)
+  sort Zipper        // Cofree[V, Loc] = navigable tree
+  sort Attr          // Map[String, Any]
+  sort Attributed    // Cofree[V, Attr] = tree with attributes
+  
+  constructor Loc : Val → List[Int] → Loc              // Value + path
+  constructor Attr : List[(String, Val)] → Attr        // Key-value pairs
+  
+  // Type aliases for clarity (using Fix, Free, Cofree from above)
+  // type Val        = Fix[V]
+  // type Zipper     = Cofree[V, Loc]
+  // type Attributed = Cofree[V, Attr]
+  // type Versioned  = Cofree[V, Hash]
+
+  // ==========================================================================
+  // V: Project/Embed (Val ↔ V[Val])
+  // ==========================================================================
+  
+  xform Project : Val ⇄ V
+  
+  rule Project.con {
+    VCon(name, args) ↦ C(name, args)
+  }
+  
+  rule Project.str {
+    VStr(s) ↦ S(s)
+  }
+  
+  rule Project.int {
+    VInt(n) ↦ I(n)
+  }
+  
+  rule Project.list {
+    VList(elems) ↦ L(elems)
+  }
+  
+  // ==========================================================================
+  // μ: Recursion Schemes
+  // ==========================================================================
+  
+  // Catamorphism: fold bottom-up with algebra
+  xform Cata(algebra: V → Val) : Val ⇄ Val
+  
+  rule Cata.apply {
+    val ↦ algebra(MapChildren(Project.forward(val), Cata.forward))
+  }
+  
+  // Anamorphism: unfold top-down with coalgebra
+  xform Ana(coalgebra: Val → V) : Val ⇄ Val
+  
+  rule Ana.apply {
+    seed ↦ Project.backward(MapChildren(coalgebra(seed), Ana.forward))
+  }
+  
+  // Hylomorphism: fused unfold-then-fold
+  xform Hylo(algebra: V → Val, coalgebra: Val → V) : Val ⇄ Val
+  
+  rule Hylo.apply {
+    seed ↦ algebra(MapChildren(coalgebra(seed), Hylo.forward))
+  }
+  
+  // ==========================================================================
+  // Co: Universal Attribute Grammar
+  // ==========================================================================
+  
+  // The key insight: ONE function for ALL attribute grammars
+  xform Annotate(inherit: Val → Val → Val, synthesize: Val → Val → List[Val] → Val, initial: Val) : Val ⇄ Cofree
+  
+  rule Annotate.apply {
+    val ↦ 
+      let childInherited = inherit(val, inherited) in
+      let structure = Project.forward(val) in
+      let children = MapChildren(structure, Annotate.forward(childInherited)) in
+      let synthesized = synthesize(val, childInherited, ExtractHeads(children)) in
+      Co(synthesized, children)
+  }
+  
+  // Forget annotations, recover Val
+  xform Forget : Cofree ⇄ Val
+  
+  rule Forget.apply {
+    Co(_, children) ↦ Project.backward(MapChildren(children, Forget.forward))
+  }
+  
+  // ==========================================================================
+  // Op: Optics for Val
+  // ==========================================================================
+  
+  // Lens into nth argument
+  xform Arg(n: Int) : Val ⇄ Val
+  
+  rule Arg.get {
+    VCon(_, args) ↦ Nth(args, n)
+  }
+  
+  rule Arg.set {
+    val ↦ VCon(name, Update(args, n, val))
+  }
+  
+  // Prism matching constructor
+  xform Con(name: String) : Val ⇄ List[Val]
+  
+  rule Con.get {
+    VCon(n, args) | n = name ↦ Ok(args)
+    _ ↦ No([])
+  }
+  
+  rule Con.rev {
+    args ↦ VCon(name, args)
+  }
+  
+  // Traversal over children
+  xform Children : Val ⇄ List[Val]
+  
+  rule Children.all {
+    VCon(_, args) ↦ args
+    VList(elems) ↦ elems
+    _ ↦ []
+  }
+  
+  rule Children.mod {
+    val ↦ Project.backward(MapChildren(Project.forward(val), f))
+  }
+  
+  // Transform everywhere (bottom-up)
+  xform Everywhere(f: Val → Val) : Val ⇄ Val
+  
+  rule Everywhere.apply {
+    val ↦ f(Children.mod(val, Everywhere.forward))
+  }
+  
+  // ==========================================================================
+  // X: Bidirectional Transform (Polymorphic)
+  // ==========================================================================
+  
+  xform XCompose : ∀[A, B, C] Xform[A, B] → Xform[B, C] ⇄ Xform[A, C]
+  
+  rule XCompose {
+    X(f1, b1), X(f2, b2) ↦ X(
+      λa. f2(f1(a)),
+      λc. b1(b2(c))
+    )
+  }
+  
+  xform XInvert : ∀[A, B] Xform[A, B] ⇄ Xform[B, A]
+  
+  rule XInvert {
+    X(fwd, bwd) ↦ X(bwd, fwd)
+  }
+  
+  xform XId : ∀[A] Xform[A, A]
+  rule XId { X(λx. x, λx. x) }
+  
+  // ==========================================================================
+  // Ed: Edit Algebra
+  // ==========================================================================
+  
+  xform ApplyEdit : ∀[A] Edit[A] → Term[A] ⇄ Term[A]
+  
+  rule ApplyEdit.ins {
+    Ins(v), Hole(_) ↦ Done(v)
+    Ins(_), t ↦ t
+  }
+  
+  rule ApplyEdit.del {
+    Del, _ ↦ Hole(None)
+  }
+  
+  rule ApplyEdit.rep {
+    Rep(v), _ ↦ Done(v)
+  }
+  
+  rule ApplyEdit.seq {
+    Seq(a, b), t ↦ ApplyEdit.forward(b, ApplyEdit.forward(a, t))
+  }
+  
+  
+  // ==========================================================================
+  // Z: Zipper Operations
+  // ==========================================================================
+  
+  xform ZipFrom : Val ⇄ Zipper
+  
+  rule ZipFrom.apply {
+    val ↦ 
+      let go = λv. λpath.
+        Co(Loc(v, path), MapChildrenIndexed(Project.forward(v), λc. λi. go(c, Append(path, i))))
+      in go(val, [])
+  }
+  
+  xform ZipNav : Zipper → List[Int] → Zipper
+  
+  rule ZipNav.nil {
+    z, [] ↦ Ok(z)
+  }
+  
+  rule ZipNav.cons {
+    Co(_, C(_, args)), [i | rest] | i < Length(args) ↦ ZipNav.forward(Nth(args, i), rest)
+    Co(_, L(elems)), [i | rest] | i < Length(elems) ↦ ZipNav.forward(Nth(elems, i), rest)
+    _, _ ↦ No([])
+  }
+  
+  xform ZipMod : Zipper → Val → Zipper
+  
+  rule ZipMod.apply {
+    Co(Loc(v, path), children), f ↦ Co(Loc(f(v), path), children)
+  }
+  
+  xform ZipToVal : Zipper ⇄ Val
+  
+  rule ZipToVal.apply {
+    z ↦ Forget.forward(z)
+  }
+  
+  // ==========================================================================
+  // A: Attributed Tree Operations
+  // ==========================================================================
+  
+  // Inherit down (top-down attributes)
+  xform InheritDown(compute: Val → Attr → Attr) : Val ⇄ Attributed
+  
+  rule InheritDown.apply {
+    val ↦ Annotate.forward(val, compute, λ_. λa. λ_. a, EmptyAttr)
+  }
+  
+  // Synthesize up (bottom-up attributes)
+  xform SynthesizeUp(compute: Val → List[Attr] → Attr) : Val ⇄ Attributed
+  
+  rule SynthesizeUp.apply {
+    val ↦ Annotate.forward(val, λ_. λ_. Unit, λv. λ_. λcs. compute(v, cs), Unit)
+  }
+  
+  // ==========================================================================
+  // H: Content Addressing
+  // ==========================================================================
+  
+  xform HashOf : Val ⇄ Hash
+  
+  rule HashOf.apply {
+    val ↦ H(Hex(HashCode(Show.forward(val))))
+  }
+  
+  // ==========================================================================
+  // Yo: Yoneda (Map Fusion)
+  // ==========================================================================
+  
+  sort Yoneda[_,_]   // Yo[F,A] - Yoneda embedding for map fusion
+  
+  // Yoneda lemma: Yo[F,A] ≅ F[A] when F is a Functor
+  constructor Yo : ∀[F: * → *, A] (∀[B] (A → B) → F[B]) → Yoneda[F, A]
+  
+  // Lift F[A] into Yoneda[F,A]
+  xform YoLift : ∀[F: * → *, A] [F: Functor] F[A] ⇄ Yoneda[F, A]
+  rule YoLift {
+    fa ↦ Yo(λf. map(f, fa))
+  }
+  
+  // Map over Yoneda fuses into continuation (no underlying map!)
+  xform YoMap : ∀[F: * → *, A, B] Yoneda[F, A] → (A → B) ⇄ Yoneda[F, B]
+  rule YoMap {
+    Yo(k), g ↦ Yo(λf. k(λa. f(g(a))))    // Fuse g into continuation
+  }
+  
+  // Lower Yoneda back to F (applies all fused maps once)
+  xform YoLower : ∀[F: * → *, A] Yoneda[F, A] ⇄ F[A]
+  rule YoLower {
+    Yo(k) ↦ k(λx. x)                      // Apply identity to get F[A]
+  }
+  
+  // Yoneda[F,_] is always a Functor (without F needing to be!)
+  instance Functor Yoneda[F, _] {
+    map(f, yo) ↦ YoMap(yo, f)
+  }
+  
+  // ==========================================================================
+  // Φ: Unified Entry Point
+  // ==========================================================================
+  
+  // Usage: 
+  //   Φ.cata(algebra)(val)
+  //   Φ.everywhere(f)(val)
+  //   Φ.arg(0).get(val)
+  //   Φ.zip(val) |> Φ.nav([0, 1]) |> Φ.mod(f) |> Φ.toVal
+  
+  xform Φ.cata : Val → Val → Val
+  rule Φ.cata { algebra, val ↦ Cata.forward(algebra, val) }
+  
+  xform Φ.ana : Val → Val → Val
+  rule Φ.ana { coalgebra, seed ↦ Ana.forward(coalgebra, seed) }
+  
+  xform Φ.everywhere : Val → Val → Val
+  rule Φ.everywhere { f, val ↦ Everywhere.forward(f, val) }
+  
+  xform Φ.children : Val ⇄ List[Val]
+  rule Φ.children { val ↦ Children.all.forward(val) }
+  
+  xform Φ.arg : Int → Lens[Val, Val]
+  rule Φ.arg { n ↦ Ln(Arg.get(n), Arg.set(n)) }
+  
+  xform Φ.con : String → Prism[Val, List[Val]]
+  rule Φ.con { name ↦ Pr(Con.get(name), Con.rev(name)) }
+  
+  xform Φ.zip : Val ⇄ Zipper
+  rule Φ.zip { val ↦ ZipFrom.forward(val) }
+  
+  xform Φ.nav : Zipper → List[Int] ⇄ Validated[Zipper]
+  rule Φ.nav { z, path ↦ ZipNav.forward(z, path) }
+  
+  xform Φ.mod : Zipper → (Val → Val) ⇄ Zipper
+  rule Φ.mod { z, f ↦ ZipMod.forward(z, f) }
+  
+  xform Φ.toVal : Zipper ⇄ Val
+  rule Φ.toVal { z ↦ ZipToVal.forward(z) }
+  
+  xform Φ.inherit : (Val → Attr → Attr) → Val ⇄ Attributed
+  rule Φ.inherit { compute, val ↦ InheritDown.forward(compute, val) }
+  
+  xform Φ.synthesize : (Val → List[Attr] → Attr) → Val ⇄ Attributed
+  rule Φ.synthesize { compute, val ↦ SynthesizeUp.forward(compute, val) }
+  
+  xform Φ.hash : Val ⇄ Hash
+  rule Φ.hash { val ↦ HashOf.forward(val) }
+  
+  // Free interpretation
+  xform Φ.run : ∀[F: * → *, M: * → *, A] [M: Monad] (F ~> M) → Free[F, A] ⇄ M[A]
+  rule Φ.run { nt, free ↦ FreeRun(nt, free) }
+
+}

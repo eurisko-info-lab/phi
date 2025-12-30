@@ -294,9 +294,6 @@ language CoC {
             Var("px")))))
   
   // Symmetry: sym : ∀A:*. ∀x:A. ∀y:A. x = y → y = x
-  // Proof: Given eq : ∀P. P x → P y, instantiate with (λz. P z → P x)
-  //        eq (λz. P z → P x) : (P x → P x) → (P y → P x)
-  //        Apply identity (λpx. px) to get (P y → P x), then apply py
   def sym : Term =
     Lam("A", Star,
       Lam("x", Var("A"),
@@ -304,9 +301,7 @@ language CoC {
           Lam("eq", Eq(Var("A"), Var("x"), Var("y")),
             Lam("P", Arrow(Var("A"), Star),
               Lam("py", App(Var("P"), Var("y")),
-                App(App(App(Var("eq"), 
-                            Lam("z", Var("A"), Arrow(App(Var("P"), Var("z")), App(Var("P"), Var("x"))))),
-                        Lam("px", App(Var("P"), Var("x")), Var("px"))),  // identity: P x → P x
+                App(App(Var("eq"), Lam("z", Var("A"), Arrow(App(Var("P"), Var("z")), App(Var("P"), Var("x"))))),
                     Var("py"))))))))
   
   // Transitivity: trans : ∀A:*. ∀x:A. ∀y:A. ∀z:A. x = y → y = z → x = z

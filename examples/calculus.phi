@@ -1,152 +1,241 @@
-// =======================================================
-// Lambda Cube with Types and Categorical Reasoning in Phi
-// =======================================================
+// ===========================================================
+// Lambda Cube + Interaction Calculus — Categorical Foundation
+// ===========================================================
+// Uses: HKT, functors, natural transformations, reversible xforms
+// ===========================================================
 
-language LambdaCubeCats {
+language LambdaCube {
 
-// =====================================================
-// Core sorts
-// =====================================================
-sort Term
-sort Type
-sort Net
-sort Axes
-sort Corner
-sort Proof
-sort Functor
-sort NatTrans
+  // =========================================================
+  // Type Classes for Calculus Families
+  // =========================================================
 
-// =====================================================
-// Untyped Lambda Calculus (ULC) + Types
-// =====================================================
-constructor Var  : String → Term
-constructor Lam  : String → Term → Term
-constructor App  : Term → Term → Term
+  class Calculus[C: *] {
+    reduce : C → Option[C]
+    isNormal : C → Bool
+  }
 
-// Simple types for λ→ (corner LC_λ)
-constructor TyVar : String → Type
-constructor TyArr : Type → Type → Type
+  class Translatable[A: *, B: *] {
+    to   : A → B
+    from : B → A
+  }
 
-// β-reduction
-xform Beta : Term ⇄ Term
-rule Beta.forward {
-  App(Lam(x, b), v) ↦ Subst.forward((x,v), b)
-}
-xform Subst : (String × Term) × Term ⇄ Term
-rule Subst.forward {
-  ((x,v), Var(x)) ↦ v
-  ((x,_), Var(y)) ↦ Var(y) where x ≠ y
-  ((x,_), Lam(y,t)) ↦ Lam(y, t) where x = y
-  ((x,v), Lam(y,t)) ↦ Lam(y, Subst.forward((x,v), t)) where x ≠ y
-  ((x,v), App(f,a)) ↦ App(Subst.forward((x,v), f), Subst.forward((x,v), a))
-}
+  // =========================================================
+  // Untyped Lambda Calculus (ULC)
+  // =========================================================
 
-// Strategies depend on starting calculus
-strategy normalize := repeat (Beta.forward | Subst.forward)      // For LC terms
-strategy normalizeIC := repeat (Interact.forward | Subst.forward) // For IC nets
+  sort LC
 
-// =====================================================
-// Interaction Calculus (IC) + Typed
-// =====================================================
-constructor Node   : String × Term* → Net
-constructor Link   : Term → Term → Net
-constructor Active : Term → Term → Net
+  constructor Var : String → LC
+  constructor Lam : String → LC → LC
+  constructor App : LC → LC → LC
 
-xform Interact : Net ⇄ Net
-rule Interact.forward {
-  Active(Node("lam", Var(x), t), Link(v1,v2)) ↦
-    Active(LamToNet.forward(Subst.forward((x,v1), NetToLam.forward(t))), Link(v1,v2))
-}
+  // Substitution (capture-avoiding assumed)
+  xform LCSubst : String → LC → LC ⇄ LC
+  rule LCSubst {
+    x, v, Var(y) | x = y     ↦ v
+    x, _, Var(y) | x ≠ y     ↦ Var(y)
+    x, _, Lam(y, b) | x = y  ↦ Lam(y, b)
+    x, v, Lam(y, b) | x ≠ y  ↦ Lam(y, LCSubst(x, v, b))
+    x, v, App(f, a)          ↦ App(LCSubst(x,v,f), LCSubst(x,v,a))
+  }
 
-// =====================================================
-// Translation: Lambda → Interaction
-// =====================================================
-xform LamToNet : Term ⇄ Net
-rule LamToNet.forward {
-  Var(x) ↦ Node("var", Var(x))
-  Lam(x, t) ↦ Node("lam", Var(x), LamToNet.forward(t))
-  App(f, a) ↦ Node("app", LamToNet.forward(f), LamToNet.forward(a))
-}
+  // Beta reduction
+  xform LCBeta : LC ⇄ LC
+  rule LCBeta {
+    App(Lam(x, b), v) ↦ LCSubst(x, v, b)
+  }
 
-// Translation: Interaction → Lambda
-xform NetToLam : Net ⇄ Term
-rule NetToLam.forward {
-  Node("var", Var(x)) ↦ Var(x)
-  Node("lam", Var(x), t) ↦ Lam(x, NetToLam.forward(t))
-  Node("app", f, a) ↦ App(NetToLam.forward(f), NetToLam.forward(a))
-}
+  instance Calculus LC {
+    reduce(App(Lam(x,b), v))  ↦ Some(LCSubst(x, v, b))
+    reduce(_)                 ↦ None
+    isNormal(Var(_))          ↦ True
+    isNormal(Lam(_, b))       ↦ isNormal(b)
+    isNormal(App(Lam(_,_),_)) ↦ False
+    isNormal(App(f, a))       ↦ and(isNormal(f), isNormal(a))
+  }
 
-// =====================================================
-// Lambda Cube Axes & Types
-// =====================================================
-constructor TermAx     : Term → Axes          // terms
-constructor TypeAx     : Term → Type → Axes  // type dependencies
-constructor PolyAx     : Term → Axes          // polymorphism
-constructor DepAx      : Term → Type → Axes  // dependent types
+  // =========================================================
+  // Interaction Calculus (IC)
+  // =========================================================
 
-// Xforms for creating axes
-xform MkTermAx : Term ⇄ Axes
-xform MkPolyAx : Term ⇄ Axes
+  sort Net
 
-// =====================================================
-// Lambda Cube Corners + Types
-// =====================================================
-constructor LC_λ      : Term → Type → Corner
-constructor LC_λ2     : Term → Type → Corner
-constructor LC_λω     : Term → Type → Corner
-constructor LC_λP     : Term → Type → Type → Corner
-constructor LC_λP2    : Term → Type → Type → Corner
-constructor LC_λPω    : Term → Type → Type → Corner
-constructor LC_λω2    : Term → Type → Corner
-constructor LC_λC     : Term → Type → Type → Type → Corner
+  constructor Wire   : Net                          // Free port
+  constructor Era    : Net → Net                    // Eraser
+  constructor Dup    : Net → Net → Net → Net        // Duplicator
+  constructor Con    : Net → Net → Net              // Constructor (lam node)
+  constructor Link   : Net → Net → Net              // Wire connection
 
-// Xform for creating corners
-xform MkCorner : Term × Type ⇄ Corner
+  // Interaction rules
+  xform ICReduce : Net ⇄ Net
+  
+  // Era-Con: eraser meets constructor → erase both ports
+  rule ICReduce.eraCon {
+    Link(Era(p), Con(a, b)) ↦ Link(Era(Wire), Link(Era(Wire), Wire))
+  }
 
-// =====================================================
-// Functoriality: Translating terms preserves composition
-// =====================================================
-constructor F_LamToNet : Functor  // Type tag for the functor
+  // Dup-Con: duplicator meets constructor → swap and duplicate
+  rule ICReduce.dupCon {
+    Link(Dup(p, q, r), Con(a, b)) ↦ 
+      Link(Con(a1, b1), Link(Con(a2, b2), Wire))
+      where (a1, a2) = dup(a), (b1, b2) = dup(b)
+  }
 
-xform F_LamToNet : Term ⇄ Net     // The functor as a transform
-rule F_LamToNet.forward {
-  App(f,g) ↦ App(LamToNet.forward(f), LamToNet.forward(g))
-  Lam(x,t) ↦ LamToNet.forward(Lam(x,t))
-  Var(x) ↦ LamToNet.forward(Var(x))
-}
+  // Era-Era: two erasers → nothing
+  rule ICReduce.eraEra {
+    Link(Era(p), Era(q)) ↦ Wire
+  }
 
-// =====================================================
-// Naturality: translation commutes with substitution
-// =====================================================
-constructor Nat_LamToNet : NatTrans  // Type tag for the natural transformation
+  // Dup-Era: duplicator meets eraser → two erasers
+  rule ICReduce.dupEra {
+    Link(Dup(p, q, r), Era(s)) ↦ Link(Era(Wire), Era(Wire))
+  }
 
-xform Nat_LamToNet : Net ⇄ Net       // The nat trans as a transform
-rule Nat_LamToNet.forward {
-  LamToNet.forward(Subst.forward((_,v), t)) ↦
-    Interact.forward(Link(LamToNet.forward(v), LamToNet.forward(t)))
-}
+  instance Calculus Net {
+    reduce(Link(Era(_), Con(_,_)))    ↦ Some(Wire)
+    reduce(Link(Dup(_,_,_), Era(_)))  ↦ Some(Link(Era(Wire), Era(Wire)))
+    reduce(_)                         ↦ None
+    isNormal(Wire)                    ↦ True
+    isNormal(Era(_))                  ↦ True
+    isNormal(Con(a,b))                ↦ and(isNormal(a), isNormal(b))
+    isNormal(Dup(p,q,r))              ↦ and(isNormal(p), and(isNormal(q), isNormal(r)))
+    isNormal(Link(Era(_), Con(_,_)))  ↦ False
+    isNormal(Link(a, b))              ↦ and(isNormal(a), isNormal(b))
+  }
 
-// =====================================================
-// Example ULC term and translations
-// =====================================================
-def example_ulc : Term =
-  App(Lam("x", App(Var("x"), Var("x"))), Lam("y", Var("y")))
+  // =========================================================
+  // Translation: LC ↔ IC (Reversible)
+  // =========================================================
 
-def example_ic : Net = LamToNet.forward(example_ulc)
+  xform LCtoIC : LC ⇄ Net
+  rule LCtoIC.forward {
+    Var(x)     ↦ Wire                             // Free variable → wire
+    Lam(x, b)  ↦ Con(Wire, LCtoIC(b))             // Lambda → constructor
+    App(f, a)  ↦ Link(LCtoIC(f), LCtoIC(a))       // Application → link
+  }
+  rule LCtoIC.backward {
+    Wire           ↦ Var("_")                     // Wire → free var
+    Con(_, b)      ↦ Lam("x", ICtoLC(b))          // Constructor → lambda
+    Link(f, a)     ↦ App(ICtoLC(f), ICtoLC(a))    // Link → application
+  }
 
-def example_back_to_ulc : Term = NetToLam.forward(example_ic)
+  instance Translatable LC Net {
+    to   ↦ LCtoIC.forward
+    from ↦ LCtoIC.backward
+  }
 
-// =====================================================
-// Example axes and corners
-// =====================================================
-def example_axis : Axes = TermAx(example_ulc)
-def example_poly_axis : Axes = PolyAx(example_ulc)
-def example_corner : Corner = LC_λ(example_ulc, TyVar("A"))
+  // =========================================================
+  // Simply Typed Lambda Calculus (STLC)
+  // =========================================================
 
-// =====================================================
-// Proof: β-reduction preserved by translation
-// =====================================================
-def example_beta_preservation : Proof =
-  Nat_LamToNet.forward(App(Lam("x", Var("x")), Var("y"))) // example
+  sort SType
+  constructor TBase : String → SType              // Base type
+  constructor TArr  : SType → SType → SType       // Function type
 
+  sort STLC
+  constructor SVar : String → STLC
+  constructor SLam : String → SType → STLC → STLC
+  constructor SApp : STLC → STLC → STLC
+
+  // Embedding: STLC → LC (forget types)
+  xform STLCtoLC : STLC ⇄ LC
+  rule STLCtoLC.forward {
+    SVar(x)       ↦ Var(x)
+    SLam(x, _, b) ↦ Lam(x, STLCtoLC(b))
+    SApp(f, a)    ↦ App(STLCtoLC(f), STLCtoLC(a))
+  }
+
+  // =========================================================
+  // Lambda Cube Axes
+  // =========================================================
+
+  // Axis represents an edge in the lambda cube
+  sort Axis
+  constructor TermToTerm : Axis    // λ→ : terms depending on terms
+  constructor TypeToTerm : Axis    // λP : terms depending on types (polymorphism)
+  constructor TypeToType : Axis    // λω : types depending on types (type operators)
+  constructor TermToType : Axis    // λΠ : types depending on terms (dependent types)
+
+  // Cube corner = combination of axes
+  sort Corner
+  constructor LC_λ   : Corner                     // Simply typed: just →
+  constructor LC_λ2  : Corner                     // System F: → + P
+  constructor LC_λω  : Corner                     // System Fω: → + ω
+  constructor LC_λP  : Corner                     // LF: → + Π
+  constructor LC_λPω : Corner                     // Full λω: → + P + ω
+  constructor LC_λP2 : Corner                     // Dependent polymorphism
+  constructor LC_λPω2: Corner                     // Almost full cube
+  constructor LC_λC  : Corner                     // Calculus of Constructions
+
+  // Axes active in each corner
+  xform Axes : Corner ⇄ List[Axis]
+  rule Axes {
+    LC_λ    ↦ [TermToTerm]
+    LC_λ2   ↦ [TermToTerm, TypeToTerm]
+    LC_λω   ↦ [TermToTerm, TypeToType]
+    LC_λP   ↦ [TermToTerm, TermToType]
+    LC_λPω  ↦ [TermToTerm, TypeToTerm, TypeToType]
+    LC_λP2  ↦ [TermToTerm, TypeToTerm, TermToType]
+    LC_λPω2 ↦ [TermToTerm, TypeToTerm, TypeToType, TermToType]
+    LC_λC   ↦ [TermToTerm, TypeToTerm, TypeToType, TermToType]
+  }
+
+  // =========================================================
+  // System F (Polymorphism)
+  // =========================================================
+
+  sort F2Type
+  constructor F2Base  : String → F2Type
+  constructor F2Arr   : F2Type → F2Type → F2Type
+  constructor F2All   : String → F2Type → F2Type    // ∀α. T
+
+  sort F2Term
+  constructor F2Var   : String → F2Term
+  constructor F2Lam   : String → F2Type → F2Term → F2Term
+  constructor F2App   : F2Term → F2Term → F2Term
+  constructor F2TyLam : String → F2Term → F2Term    // Λα. t
+  constructor F2TyApp : F2Term → F2Type → F2Term    // t [T]
+
+  // Type substitution
+  xform F2TySubst : String → F2Type → F2Type ⇄ F2Type
+  rule F2TySubst {
+    α, s, F2Base(β) | α = β  ↦ s
+    α, _, F2Base(β) | α ≠ β  ↦ F2Base(β)
+    α, s, F2Arr(a, b)        ↦ F2Arr(F2TySubst(α,s,a), F2TySubst(α,s,b))
+    α, _, F2All(β, t) | α = β ↦ F2All(β, t)
+    α, s, F2All(β, t) | α ≠ β ↦ F2All(β, F2TySubst(α,s,t))
+  }
+
+  // Type-level beta
+  xform F2TyBeta : F2Term ⇄ F2Term
+  rule F2TyBeta {
+    F2TyApp(F2TyLam(α, t), s) ↦ F2TermTySubst(α, s, t)
+  }
+
+  // =========================================================
+  // Functoriality of Translation
+  // =========================================================
+
+  // Translation is a functor: preserves composition
+  // If we have terms t₁, t₂ and t₁ →β t₂ in LC
+  // then to(t₁) →* to(t₂) in IC
+
+  xform SimulationLemma : LC → LC ⇄ Bool
+  rule SimulationLemma {
+    t1, t2 | LCBeta(t1) = Some(t2) ↦ 
+      eventually(λn. n = LCtoIC(t2), reduce*(LCtoIC(t1)))
+  }
+
+  // =========================================================
+  // Normalization
+  // =========================================================
+
+  strategy lcNormalize  := repeat LCBeta
+  strategy icNormalize  := repeat ICReduce
+  strategy f2Normalize  := repeat (F2TyBeta | F2Beta)
+
+  // Cross-calculus normalization
+  strategy crossNormalize := 
+    LCtoIC.forward; icNormalize; LCtoIC.backward
 }

@@ -1,280 +1,200 @@
 // ===========================================================
-// Phi : Category Theory Core + Main Theorems with Lean 4 Comments
+// Category Theory Core — Optimized for Hello's HKT System
+// ===========================================================
+// Uses: higher-kinded types, type classes, polymorphic xforms
 // ===========================================================
 
-language PhiCategoryTheory {
+language Cat {
 
   // =========================================================
-  // Foundations
+  // Foundational Kinds and Type Classes
   // =========================================================
 
-  sort Category
-  sort Object
-  sort Morphism
-  sort Functor
-  sort NatTrans
-  sort Set
-  sort Diagram
-  sort Proof
+  sort Cat[_,_]        // Category with objects and morphisms
+  sort Obj             // Objects
+  sort Hom[_,_]        // Hom[A,B] = morphisms from A to B
+  sort F[_]            // Functor (endofunctor for simplicity)
+  sort Nat[_,_]        // Nat[F,G] = natural transformation
 
-  constructor Cat    : Category
-  constructor Obj    : Category → Object
-  constructor Hom    : Object → Object → Morphism
-  constructor Id     : Object → Morphism
-  constructor Comp   : Morphism → Morphism → Morphism
-
-  rule CategoryLaws.idLeft {
-    Comp(Id(_), f) ↦ f
+  // Category as a type class
+  class Category[C: * → * → *] {
+    id    : ∀[A] Hom[A, A]
+    comp  : ∀[A, B, C] Hom[A, B] → Hom[B, C] → Hom[A, C]
   }
+
+  // Functor between categories
+  class Functor[F: * → *] {
+    map   : ∀[A, B] (A → B) → F[A] → F[B]
+  }
+
+  // Natural transformation: F ~> G
+  constructor Nat : ∀[F: * → *, G: * → *] (∀[A] F[A] → G[A]) → Nat[F, G]
+
+  // =========================================================
+  // Category Laws (as type class laws)
+  // =========================================================
+
+  // Identity laws
+  xform IdLeft : ∀[A, B] [C: Category] Hom[A, B] ⇄ Hom[A, B]
+  rule IdLeft {
+    comp(id, f) ↦ f
+  }
+
+  xform IdRight : ∀[A, B] [C: Category] Hom[A, B] ⇄ Hom[A, B]
+  rule IdRight {
+    comp(f, id) ↦ f
+  }
+
+  // Associativity
+  xform Assoc : ∀[A, B, C, D] [Cat: Category] Hom[A, B] → Hom[B, C] → Hom[C, D] ⇄ Hom[A, D]
+  rule Assoc {
+    comp(f, comp(g, h)) ↦ comp(comp(f, g), h)
+  }
+
+  // =========================================================
+  // Yoneda Lemma (Polymorphic)
+  // =========================================================
+
+  // Hom functor: Hom(A, -) : C → Set
+  sort HomF[_]         // HomF[A] = Hom(A, -)
   
-  rule CategoryLaws.idRight {
-    Comp(f, Id(_)) ↦ f
-  }
-  
-  rule CategoryLaws.assoc {
-    Comp(f, Comp(g, h)) ↦ Comp(Comp(f, g), h)
-  }
+  constructor HomF : ∀[A] (∀[B] Hom[A, B]) → HomF[A]
 
-  /* <lean>
-  structure Category :=
-    (Obj : Type)
-    (Hom : Obj → Obj → Type)
-    (id : Π X, Hom X X)
-    (comp : Π {X Y Z}, Hom X Y → Hom Y Z → Hom X Z)
-    (id_comp' : ∀ {X Y} (f : Hom X Y), comp (id X) f = f)
-    (comp_id' : ∀ {X Y} (f : Hom X Y), comp f (id Y) = f)
-    (assoc' : ∀ {W X Y Z} (h : Hom W X) (g : Hom X Y) (f : Hom Y Z),
-                 comp (comp h g) f = comp h (comp g f))
-  </lean> */
-
-  // =========================================================
-  // Functors and Natural Transformations
-  // =========================================================
-
-  constructor Fun      : Category → Category → Functor
-  constructor MapObj   : Functor → Object → Object
-  constructor MapMor   : Functor → Morphism → Morphism
-
-  constructor Nat      : Functor → Functor → NatTrans
-  constructor Component : NatTrans → Object → Morphism
-
-  rule NatNaturality {
-    Comp(MapMor(_, f), Component(α, _))
-      ↦ Comp(Component(α, B), MapMor(F, f))
-  }
-
-  /* <lean>
-  structure Functor (C D : Category) :=
-    (obj : C.Obj → D.Obj)
-    (map : Π {X Y}, C.Hom X Y → D.Hom (obj X) (obj Y))
-    (map_id' : ∀ X, map (C.id X) = D.id (obj X))
-    (map_comp' : ∀ {X Y Z} (f : C.Hom X Y) (g : C.Hom Y Z),
-                   map (C.comp f g) = D.comp (map f) (map g))
-  </lean> */
-
-  // =========================================================
-  // Yoneda Lemma
-  // =========================================================
-
-  constructor HomF : Object → Functor        // Hom(-, A)
-
-  xform Yoneda : NatTrans ⇄ Object
+  // Yoneda: Nat[Hom(A,-), F] ≅ F[A]
+  xform Yoneda : ∀[A, F: * → *] [F: Functor] Nat[HomF[A], F] ⇄ F[A]
 
   rule Yoneda.forward {
-    Nat(HomF(A), F) ↦ MapObj(F, A)
+    Nat(α) ↦ α(id)                    // Apply nat trans to identity
   }
 
   rule Yoneda.backward {
-    MapObj(F, A) ↦ Nat(HomF(A), F)
+    fa ↦ Nat(λf. map(f, fa))          // Construct nat trans from element
   }
 
-  def YonedaExample : Proof =
-    Yoneda.forward(Nat(HomF(A), F))
-
-  /* <lean>
-  theorem yoneda {C : Category} (A : C.Obj) (F : C ⥤ Type) :
-    (NatTrans (HomF A) F) ≃ (F.obj A) := sorry
-  </lean> */
-
-  def UseYoneda1 : Proof =
-    Yoneda.forward(Nat(HomF(Obj1), Functor1))
-
   // =========================================================
-  // Adjunctions
+  // Adjunctions (F ⊣ G)
   // =========================================================
 
-  constructor Adj : Functor → Functor → Proof
-  constructor UnitNat : Functor → Functor → NatTrans
-  constructor CounitNat : Functor → Functor → NatTrans
-  constructor Free   : Functor
-  constructor Forget : Functor
+  sort Adj[_,_]        // Adj[F,G] = F is left adjoint to G
 
-  rule Adjunction {
-    Adj(F, G) ↦ pair(UnitNat(F, G), CounitNat(F, G))
+  constructor Adj : ∀[F: * → *, G: * → *] 
+    Nat[Id, Comp[G, F]] →              // unit: η : 1 → GF
+    Nat[Comp[F, G], Id] →              // counit: ε : FG → 1
+    Adj[F, G]
+
+  // Triangle identities (adjunction laws)
+  xform TriangleLeft : ∀[F: * → *, G: * → *, A] Adj[F, G] → F[A] ⇄ F[A]
+  rule TriangleLeft {
+    Adj(η, ε), fa ↦ map(ε, map(η, fa))  // Should equal id
   }
 
-  theorem GeneralAdjointFunctor : Functor → Proof
-
-  def FreeForgetfulAdjunction : Proof =
-    Adj(Free, Forget)
-
-  /* <lean>
-  structure Adjunction (F : C ⥤ D) (G : D ⥤ C) :=
-    (unit : 𝟭 C ⟶ F ⋙ G)
-    (counit : G ⋙ F ⟶ 𝟭 D)
-  </lean> */
-
-  def UseAdj1 : Proof =
-    Adj(Free, Forget)
-
   // =========================================================
-  // Beck Monadicity
+  // Monads from Adjunctions
   // =========================================================
 
-  constructor Monad : Functor → Proof
-  constructor ForgetMonoid : Functor
-
-  theorem Beck : Functor → Monad
-
-  def SetMonadic : Proof =
-    Beck(ForgetMonoid)
-
-  def UseBeck1 : Proof =
-    Beck(ForgetMonoid)
-
-  // =========================================================
-  // Density Theorem
-  // =========================================================
-
-  constructor Colim : Functor → Object
-  constructor Presheaf : Functor
-  constructor YonedaF : Functor
-
-  theorem Density : Functor → Proof
-
-  rule DensityRule {
-    _ ↦ Colim(HomF(A))
+  // Every adjunction F ⊣ G gives a monad T = GF
+  xform MonadFromAdj : ∀[F: * → *, G: * → *] Adj[F, G] ⇄ Monad[Comp[G, F]]
+  rule MonadFromAdj {
+    Adj(η, ε) ↦ Monad(η, μ)           // where μ = GεF
   }
 
-  def DensityExample : Proof =
-    Density(Presheaf)
-
-  def UseDensity1 : Proof =
-    Density(YonedaF)
-
   // =========================================================
-  // Gabriel-Ulmer Duality
+  // Free-Forgetful Adjunction
   // =========================================================
 
-  sort Theory
-  sort ModelCategory
+  sort Free[_]         // Free functor
+  sort Forget[_]       // Forgetful functor
 
-  constructor AlgebraicCategory : Category
-
-  constructor Models : Theory → Category
-
-  theorem GabrielUlmer : Category → Theory
-
-  def AlgebraicExample : Proof =
-    GabrielUlmer(AlgebraicCategory)
-
-  // =========================================================
-  // Brown Representability
-  // =========================================================
-
-  constructor CohomologyFunctor : Functor
-
-  theorem Brown : Functor → Proof
-
-  rule BrownRule {
-    _ ↦ HomF(X)
+  // Free ⊣ Forget for monoids
+  instance Adjunction Free Forget {
+    unit(a)   ↦ singleton(a)           // η : A → UFA
+    counit(m) ↦ fold(m)                // ε : FUA → A
   }
 
-  def CohomologyRep : Proof =
-    Brown(CohomologyFunctor)
-
   // =========================================================
-  // Mitchell Embedding
+  // Kan Extensions
   // =========================================================
 
-  sort Ring
-  sort Module
+  sort Lan[_,_,_]      // Left Kan extension: Lan_K F
+  sort Ran[_,_,_]      // Right Kan extension: Ran_K F
 
-  constructor Mod : Ring → Category
-  constructor AbelianCategory : Category
+  // Lan_K F B = ∫^A Hom(KA, B) × FA (coend formula)
+  // Ran_K F B = ∫_A Hom(B, KA) → FA  (end formula)
 
-  theorem Mitchell : Category → Proof
-
-  def AbelianEmbedding : Proof =
-    Mitchell(AbelianCategory)
+  // Yoneda as Kan extension: F ≅ Ran_Y Y
+  xform YonedaAsKan : ∀[F: * → *] F ⇄ Ran[Y, Y, F]
 
   // =========================================================
-  // Small Object Argument
+  // Limits and Colimits (Polymorphic)
   // =========================================================
 
-  constructor Factor : Morphism → Morphism → Morphism
-  constructor Cofibration : Morphism  // Cofibration part of factorization
-  constructor Fibration : Morphism    // Fibration part of factorization
+  sort Lim[_]          // Lim[D] = limit of diagram D
+  sort Colim[_]        // Colim[D] = colimit of diagram D
 
-  theorem SmallObject : Morphism → Proof
+  // Universal property of limits
+  xform LimUniv : ∀[D: * → *, A] (∀[X] A → D[X]) ⇄ (A → Lim[D])
 
-  rule SmallObjectRule {
-    _ ↦ Factor(Cofibration, Fibration)
+  // Density theorem: F ≅ Colim_{A,f:YA→F} YA
+  xform Density : ∀[F: * → *] [F: Functor] F ⇄ Colim[Comma[Y, F]]
+
+  // =========================================================
+  // 2-Categories (Higher Structure)
+  // =========================================================
+
+  sort TwoCat[_,_,_]   // 2-category: objects, 1-cells, 2-cells
+  sort OneCell[_,_]    // 1-morphism
+  sort TwoCell[_,_]    // 2-morphism (natural transformation)
+
+  // Horizontal composition of 2-cells
+  xform HComp : ∀[F, G, H, K] TwoCell[F, G] → TwoCell[H, K] ⇄ TwoCell[Comp[F,H], Comp[G,K]]
+
+  // Vertical composition of 2-cells  
+  xform VComp : ∀[F, G, H] TwoCell[F, G] → TwoCell[G, H] ⇄ TwoCell[F, H]
+
+  // Interchange law
+  xform Interchange : ∀[A, B, C, D] TwoCell × TwoCell × TwoCell × TwoCell ⇄ TwoCell
+  rule Interchange {
+    (α, β, γ, δ) ↦ HComp(VComp(α, γ), VComp(β, δ))  // = VComp(HComp(α,β), HComp(γ,δ))
   }
 
-  def ModelStructure : Proof =
-    SmallObject(f)
-
   // =========================================================
-  // Mac Lane Coherence
+  // Monoidal Categories
   // =========================================================
 
-  sort MonoidalCategory
-
-  constructor Tensor : Object → Object → Object
-  constructor MonoidalCat : Category
-
-  theorem Coherence : MonoidalCategory → Proof
-
-  rule CoherenceRule {
-    Tensor(Tensor(A, B), C) ↦ Tensor(A, Tensor(B, C))
+  class Monoidal[C: * → * → *] extends Category[C] {
+    tensor : ∀[A, B] C[A, B] → C[A, B] → C[A, B]
+    unit   : Obj
+    assoc  : ∀[A, B, C] Iso[Tensor[Tensor[A,B], C], Tensor[A, Tensor[B,C]]]
+    lunit  : ∀[A] Iso[Tensor[Unit, A], A]
+    runit  : ∀[A] Iso[Tensor[A, Unit], A]
   }
 
-  def Strictification : Proof =
-    Coherence(MonoidalCat)
+  // Mac Lane coherence: all diagrams commute
+  xform Coherence : ∀[C: * → * → *] [C: Monoidal] TensorExpr[C] ⇄ TensorExpr[C]
+  rule Coherence {
+    e ↦ normalize(e)                   // Canonical form exists
+  }
 
   // =========================================================
-  // Examples in Phi
+  // Example Instances
   // =========================================================
 
-  // Example categories, objects, functors for demonstrations
-  constructor CatA   : Category
-  constructor CatB   : Category
-  constructor ObjA   : Object
-  constructor ObjB   : Object
-  constructor ObjC   : Object
-  constructor Obj1   : Object
-  constructor Functor1 : Functor
-  constructor Functor2 : Functor
+  // Set is a category
+  instance Category Set {
+    id         ↦ λx. x
+    comp(f, g) ↦ λx. g(f(x))
+  }
 
-  def example_hom : Morphism =
-    Hom(Obj(CatA), Obj(CatB))
+  // List is a functor
+  instance Functor List {
+    map(f, Nil)       ↦ Nil
+    map(f, Cons(x,xs)) ↦ Cons(f(x), map(f, xs))
+  }
 
-  def example_compose : Morphism =
-    Comp(Hom(ObjA, ObjB), Hom(ObjB, ObjC))
+  // =========================================================
+  // Strategies
+  // =========================================================
 
-  def example_functor : Functor =
-    Fun(CatA, CatB)
-
-  def example_nat_trans : NatTrans =
-    Nat(Functor1, Functor2)
-
-  def example_yoneda : Proof =
-    Yoneda.forward(Nat(HomF(Obj1), Functor1))
-
-  def example_adj : Proof =
-    Adj(Free, Forget)
-
-  // Main normalization strategy
-  strategy normalize := repeat (CategoryLaws.idLeft | CategoryLaws.idRight | CategoryLaws.assoc | CoherenceRule)
+  strategy normalize := repeat (IdLeft | IdRight | Assoc | Yoneda.forward)
+  strategy simplify  := repeat (TriangleLeft | Coherence)
 }

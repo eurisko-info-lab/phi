@@ -1,0 +1,30 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// List Tests
+// ═══════════════════════════════════════════════════════════════════════════
+// Tests for list operations
+// Uses simple parser format
+
+sort List[A]
+
+List = Nil
+     | Cons(head: A, tail: List[A])
+
+// Test: Nil identity
+xform test_nil_identity : List -> List {
+  Nil => Nil
+}
+
+// Test: Cons preserves structure
+xform test_cons_identity : List -> List {
+  Cons(h, t) => Cons(h, t)
+}
+
+// Example: Head of list
+xform example_head : List -> A {
+  Cons(h, t) => h
+}
+
+// Example: Tail of list
+xform example_tail : List -> List {
+  Cons(h, t) => t
+}

@@ -1,11 +1,117 @@
-// Minimal test
-language Test {
-  sort Term
-  constructor zero : Term
-  constructor succ : Term -> Term
-  
-  def one = succ(zero)
-  def two = succ(one)
-  
-  def test_two = two
+// ===========================================================
+// Minimal Test — Hello Core Verification
+// ===========================================================
+// Uses: Basic HKT, type classes, instances
+// ===========================================================
+
+language Minimal {
+
+  // =========================================================
+  // Basic Type Classes
+  // =========================================================
+
+  class Functor[F: * → *] {
+    map : ∀[A, B] (A → B) → F[A] → F[B]
+  }
+
+  class Monoid[M] {
+    empty  : M
+    append : M → M → M
+  }
+
+  // =========================================================
+  // Natural Numbers (Peano)
+  // =========================================================
+
+  sort Nat
+
+  constructor Zero : Nat
+  constructor Succ : Nat → Nat
+
+  // Numerals
+  def one   = Succ(Zero)
+  def two   = Succ(one)
+  def three = Succ(two)
+  def four  = Succ(three)
+  def five  = Succ(four)
+
+  // Addition
+  xform Add : Nat → Nat ⇄ Nat
+  rule Add {
+    Zero, n     ↦ n
+    Succ(m), n  ↦ Succ(Add(m, n))
+  }
+
+  // Multiplication
+  xform Mul : Nat → Nat ⇄ Nat
+  rule Mul {
+    Zero, _     ↦ Zero
+    Succ(m), n  ↦ Add(n, Mul(m, n))
+  }
+
+  instance Monoid Nat {
+    empty       ↦ Zero
+    append(m,n) ↦ Add(m, n)
+  }
+
+  // =========================================================
+  // Maybe Type
+  // =========================================================
+
+  sort Maybe[_]
+
+  constructor Nothing : ∀[A] Maybe[A]
+  constructor Just    : ∀[A] A → Maybe[A]
+
+  instance Functor Maybe {
+    map(_, Nothing)  ↦ Nothing
+    map(f, Just(a))  ↦ Just(f(a))
+  }
+
+  // =========================================================
+  // List Type
+  // =========================================================
+
+  sort List[_]
+
+  constructor Nil  : ∀[A] List[A]
+  constructor Cons : ∀[A] A → List[A] → List[A]
+
+  instance Functor List {
+    map(_, Nil)        ↦ Nil
+    map(f, Cons(x,xs)) ↦ Cons(f(x), map(f, xs))
+  }
+
+  instance Monoid List[A] {
+    empty           ↦ Nil
+    append(Nil, ys) ↦ ys
+    append(Cons(x,xs), ys) ↦ Cons(x, append(xs, ys))
+  }
+
+  // Length
+  xform Length : ∀[A] List[A] ⇄ Nat
+  rule Length {
+    Nil        ↦ Zero
+    Cons(_,xs) ↦ Succ(Length(xs))
+  }
+
+  // =========================================================
+  // Tests
+  // =========================================================
+
+  def test_add = Add(two, three)           // Should be five
+  def test_mul = Mul(two, three)           // Should be six
+
+  def test_list : List[Nat] = Cons(one, Cons(two, Cons(three, Nil)))
+  def test_length = Length(test_list)      // Should be three
+
+  def test_map = map(Succ, test_list)      // Should be [2, 3, 4]
+
+  def test_maybe = map(Succ, Just(two))    // Should be Just(three)
+
+  // =========================================================
+  // Strategy
+  // =========================================================
+
+  strategy normalize := repeat (Add | Mul | Length)
 }
