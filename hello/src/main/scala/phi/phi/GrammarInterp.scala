@@ -103,3 +103,97 @@ case class GrammarParser(spec: LangSpec):
       
       case SyntaxArg.Hole =>
         VCon("?", Nil)
+
+  // ==========================================================================
+  // Rendering: Val → String (inverse of parsing)
+  // ==========================================================================
+  
+  /** Render a Val to a String using a named grammar */
+  def render(grammarName: String, value: Val): String =
+    spec.grammars.get(grammarName) match
+      case None => s"/* Unknown grammar: $grammarName */"
+      case Some(rules) =>
+        renderWithRules(rules, value).getOrElse(s"/* Cannot render: ${value} */")
+  
+  private def renderWithRules(rules: List[SyntaxRule], value: Val): Option[String] =
+    rules.view.flatMap(rule => tryRenderRule(rule, value)).headOption
+  
+  private def tryRenderRule(rule: SyntaxRule, value: Val): Option[String] =
+    // Try to match the value against the rule's result template
+    matchTemplate(rule.result, value) match
+      case Some(bindings) =>
+        // Render the pattern with bindings
+        Some(renderPattern(rule.pattern, bindings))
+      case None => None
+  
+  /** Match a value against a template, extracting bindings */
+  private def matchTemplate(template: SyntaxArg, value: Val): Option[Map[String, Val]] =
+    (template, value) match
+      case (SyntaxArg.Con(name, args), VCon(vname, vargs)) if name == vname && args.length == vargs.length =>
+        // Match constructor, recursively match args
+        args.zip(vargs).foldLeft(Option(Map.empty[String, Val])) { case (accOpt, (argTemplate, argVal)) =>
+          accOpt.flatMap { acc =>
+            matchTemplate(argTemplate, argVal).map(acc ++ _)
+          }
+        }
+      
+      case (SyntaxArg.Ref(name), v) =>
+        // Bind this value to the name
+        Some(Map(name -> v))
+      
+      case (SyntaxArg.Lit(lit), VCon(name, Nil)) if lit == name =>
+        Some(Map.empty)
+        
+      case (SyntaxArg.StrLit(s), VStr(vs)) if s == vs =>
+        Some(Map.empty)
+        
+      case (SyntaxArg.Wrap(wrapper, inner), VCon(w, List(v))) if wrapper == w =>
+        matchTemplate(inner, v)
+      
+      case _ => None
+  
+  /** Render a pattern with bindings */
+  private def renderPattern(pattern: List[SyntaxToken], bindings: Map[String, Val]): String =
+    pattern.map(renderToken(_, bindings)).mkString(" ")
+  
+  private def renderToken(tok: SyntaxToken, bindings: Map[String, Val]): String =
+    tok match
+      case SyntaxToken.Literal(kw) => kw
+      
+      case SyntaxToken.NonTerm("IDENT", _) =>
+        bindings.get("IDENT").map(extractIdent).getOrElse("???")
+      
+      case SyntaxToken.NonTerm("STRING", _) =>
+        bindings.get("STRING").map(v => "\"" + extractIdent(v) + "\"").getOrElse("\"???\"")
+      
+      case SyntaxToken.NonTerm("INT", _) =>
+        bindings.get("INT").map(extractIdent).getOrElse("0")
+      
+      case SyntaxToken.NonTerm(name, mod) =>
+        bindings.get(name) match
+          case Some(VList(items)) =>
+            // Render each item and join
+            items.map(v => renderNonTerm(name, v)).mkString(" ")
+          case Some(v) =>
+            // Check if there's a grammar for this, otherwise treat as identifier
+            if spec.grammars.contains(name) then
+              renderNonTerm(name, v)
+            else
+              extractIdent(v)  // Treat as identifier terminal
+          case None =>
+            s"/* missing: $name */"
+  
+  private def renderNonTerm(grammarName: String, value: Val): String =
+    // Look for grammar with exact name
+    spec.grammars.get(grammarName) match
+      case Some(rules) => 
+        renderWithRules(rules, value).getOrElse(s"/* cannot render $grammarName: $value */")
+      case None => 
+        extractIdent(value)
+  
+  private def extractIdent(v: Val): String = v match
+    case VCon("String", List(VCon(s, Nil))) => s
+    case VCon(s, Nil) => s
+    case VStr(s) => s
+    case VInt(n) => n.toString
+    case _ => v.toString

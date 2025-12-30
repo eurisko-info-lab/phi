@@ -1,43 +1,80 @@
 // =============================================================================
-// Scala: Target language spec (subset for Hello demo)
+// Scala: Target language spec for code generation
 // =============================================================================
+// Constructors define the AST. Grammars enable bidirectional rendering.
 
 language Scala {
   // ----- Sorts -----
+  sort ScalaFile
+  sort ScalaDecl
+  sort ScalaMember
   sort ScalaExpr
   sort ScalaStmt
-  sort ScalaDecl
-  sort ScalaFile
+  sort ScalaType
+  sort ScalaCase
   
-  // ----- Constructors -----
-  // File level
-  constructor ScalaObject : String → ScalaDecl → ScalaFile
+  // ----- File-level constructs -----
+  constructor ScalaPackage : String → List[ScalaDecl] → ScalaFile
   
-  // Declarations
-  constructor MainDef : ScalaStmt → ScalaDecl
+  // ----- Declarations -----
+  constructor ScalaImport : String → ScalaDecl
+  constructor ScalaObject : String → List[ScalaMember] → ScalaDecl
   
-  // Statements
+  // ----- Members (inside object/class) -----
+  constructor Comment : String → ScalaMember
+  constructor BlankLine : ScalaMember
+  constructor ExtensionOn : String → String → List[ScalaMember] → ScalaMember
+  constructor DefMethod : String → List[ScalaParam] → ScalaType → ScalaExpr → ScalaMember
+  constructor ValDef : String → ScalaExpr → ScalaMember
+  
+  // ----- Parameters -----
+  sort ScalaParam
+  constructor Param : String → ScalaType → ScalaParam
+  
+  // ----- Types -----
+  constructor TypeName : String → ScalaType
+  constructor TypeApp : String → List[ScalaType] → ScalaType
+  
+  // ----- Expressions -----
+  constructor Ident : String → ScalaExpr
+  constructor StringLit : String → ScalaExpr
+  constructor IntLit : Int → ScalaExpr
+  constructor App : ScalaExpr → List[ScalaExpr] → ScalaExpr
+  constructor MethodCall : ScalaExpr → String → List[ScalaExpr] → ScalaExpr
+  constructor MatchOn : ScalaExpr → List[ScalaCase] → ScalaExpr
+  constructor Lambda : String → ScalaExpr → ScalaExpr
+  constructor Block : List[ScalaExpr] → ScalaExpr
+  constructor Infix : ScalaExpr → String → ScalaExpr → ScalaExpr
+  
+  // ----- Pattern matching -----
+  constructor CaseOf : String → List[String] → ScalaExpr → ScalaCase
+  constructor CaseWild : ScalaExpr → ScalaCase
+  
+  // ----- Statements -----
   constructor PrintLn : ScalaExpr → ScalaStmt
   
-  // Expressions
-  constructor StringLit : String → ScalaExpr
-  constructor StringConcat : ScalaExpr → ScalaExpr → ScalaExpr
-  
-  // ----- Grammar: Render Scala code -----
+  // ----- Grammars for rendering -----
+  // Keywords must be quoted, identifiers are lowercase names
   grammar scalaFile {
-    "object" IDENT ":" scalaDecl => ScalaObject(IDENT, scalaDecl)
+    "package" pkgName scalaDecl* => ScalaPackage(pkgName, scalaDecl)
   }
   
   grammar scalaDecl {
-    "def" "main" "(" "args" ":" "Array" "[" "String" "]" ")" ":" "Unit" "=" scalaStmt => MainDef(scalaStmt)
+    "import" importPath => ScalaImport(importPath)
+    "object" objName ":" scalaMember* => ScalaObject(objName, scalaMember)
   }
   
-  grammar scalaStmt {
-    "println" "(" scalaExpr ")" => PrintLn(scalaExpr)
+  grammar scalaMember {
+    "extension" "(" paramName ":" typeName ")" scalaMember* => ExtensionOn(paramName, typeName, scalaMember)
+  }
+  
+  grammar scalaType {
+    typeName => TypeName(typeName)
   }
   
   grammar scalaExpr {
+    varName => Ident(varName)
     STRING => StringLit(STRING)
-    scalaExpr "+" scalaExpr => StringConcat(scalaExpr, scalaExpr)
+    INT => IntLit(INT)
   }
 }

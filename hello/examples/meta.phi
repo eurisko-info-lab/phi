@@ -3,13 +3,25 @@
 // =============================================================================
 // Defines the semantic primitives for pattern matching, substitution,
 // and evaluation. This is the "runtime" that phi2scala.phi targets.
+//
+// Code Generation Structure:
+//   phi/meta/           <- Data types (stable, hand-written or rarely regenerated)
+//     Val.scala         <- Val, Env, Pat, Result enums
+//     Syntax.scala      <- Expr enum
+//     Core.scala        <- Dispatcher (just delegates to gen/)
+//   phi/meta/gen/       <- Operations (generated from rules below)
+//     Eval.scala        <- Expr.eval extensions (from xform Eval)
+//     Match.scala       <- Pat.matchWith extensions (from xform Match)
+//     Show.scala        <- *.show extensions (from xform Show)
+//
+// Each xform generates a file in gen/. Each rule generates an extension method.
 
 language Meta {
   // ==========================================================================
-  // Core Semantic Sorts
+  // Core Semantic Sorts (→ enums in Val.scala, Syntax.scala)
   // ==========================================================================
   sort Val           // Runtime values
-  sort Env           // Variable bindings
+  sort Env           // Variable bindings  
   sort Pat           // Patterns for matching
   sort Expr          // Expressions to evaluate
   sort Result        // Match/eval results
@@ -85,16 +97,26 @@ language Meta {
   }
   
   // ==========================================================================
-  // Core Operations (defined as xforms for specification)
+  // Core Operations (each xform → gen/*.scala)
   // ==========================================================================
   
-  // Pattern matching: (Pat, Val) → Result
+  // Pattern matching: (Pat, Val, Env) → Result
+  // → gen/Match.scala: extension (pat: Pat) def matchWith(value: Val, env: Env): Result
   xform Match : Pat ⇄ Result
   
-  // Evaluation: (Expr, Env) → Val
+  // Evaluation: (Expr, Env) → Val  
+  // → gen/Eval.scala: extension (expr: Expr) def eval(env: Env): Val
   xform Eval : Expr ⇄ Val
   
+  // Pretty printing: Val|Pat|Expr → String
+  // → gen/Show.scala: extension (v: Val) def show: String, etc.
+  // NOTE: When a grammar exists for a sort, Show is derived from the grammar
+  //       (bidirectional: parse ↔ render). Only sorts without grammars need
+  //       explicit Show rules.
+  xform Show : Val ⇄ String
+  
   // Substitution: (Expr, Env) → Expr
+  // → gen/Subst.scala (future)
   xform Subst : Expr ⇄ Expr
   
   // ==========================================================================
@@ -149,5 +171,40 @@ language Meta {
   // Match: evaluate scrutinee, try cases
   rule Eval.match {
     EMatch(scrut, cases) ↦ TryCases(Eval.forward(scrut), cases, env)
+  }
+  
+  // Let binding: evaluate value, extend env, evaluate body
+  rule Eval.let {
+    ELet(name, value, body) ↦ Eval.forward(body, Bind(name, Eval.forward(value), env))
+  }
+  
+  // Case clause (shouldn't be evaluated directly)
+  rule Eval.case {
+    ECase(pat, body) ↦ Error("ECase evaluated directly")
+  }
+  
+  // ==========================================================================
+  // Show Rules (→ gen/Show.scala)
+  // ==========================================================================
+  // NOTE: Val, Pat, Expr have grammars above, so their Show is derived from
+  // the grammar (bidirectional rendering). These explicit rules are only
+  // needed for sorts WITHOUT grammars, or to override grammar-derived rendering.
+  
+  // Env.show (no grammar for Env)
+  rule Show.emptyenv {
+    EmptyEnv ↦ "{}"
+  }
+  
+  rule Show.bind {
+    Bind(name, value, rest) ↦ Concat("{", name, " -> ", Show.forward(value), ", ", Show.forward(rest), "}")
+  }
+  
+  // Result.show (no grammar for Result)
+  rule Show.ok {
+    ROk(val, env) ↦ Concat("ROk(", Show.forward(val), ", ", Show.forward(env), ")")
+  }
+  
+  rule Show.fail {
+    RFail ↦ "RFail"
   }
 }

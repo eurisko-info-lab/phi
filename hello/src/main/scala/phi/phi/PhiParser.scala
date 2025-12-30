@@ -46,7 +46,10 @@ object PhiParser extends RegexParsers:
     }
   
   def simpleType: Parser[LangType] =
-    ident ^^ { LangType.SortRef(_) } |
+    ident ~ opt("[" ~> repsep(typeExpr, ",") <~ "]") ^^ {
+      case name ~ Some(args) => LangType.TypeApp(name, args)
+      case name ~ None => LangType.SortRef(name)
+    } |
     "(" ~> typeExpr <~ ")"
   
   def flattenArrow(ty: LangType): (List[LangType], String) = ty match
@@ -54,6 +57,7 @@ object PhiParser extends RegexParsers:
       val (rest, ret) = flattenArrow(r)
       (l :: rest, ret)
     case LangType.SortRef(name) => (Nil, name)
+    case LangType.TypeApp(name, _) => (Nil, name)  // Return type can be parameterized
     case _ => (Nil, "Unknown")
   
   def grammarDecl: Parser[DeclFn] =
@@ -69,7 +73,7 @@ object PhiParser extends RegexParsers:
   
   def grammarToken: Parser[SyntaxToken] =
     string ^^ { SyntaxToken.Literal(_) } |
-    ident ^^ { name => SyntaxToken.NonTerm(name, None) }
+    ident ~ opt("*" | "+" | "?") ^^ { case name ~ mod => SyntaxToken.NonTerm(name, mod) }
   
   def syntaxArg: Parser[SyntaxArg] =
     ident ~ opt("(" ~> repsep(syntaxArg, ",") <~ ")") ^^ {
