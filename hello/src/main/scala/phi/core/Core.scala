@@ -4,7 +4,7 @@ import phi.meta.{Val, Term}
 import Val.*, Term.*
 
 /**
- * φ-CORE: Terminal density algebraic foundation.
+ * Φ-CORE: Terminal density algebraic foundation.
  * 
  * FOUNDATION: F M W ~> (functor, monad, comonad, natural transformation)
  * STRUCTURE:  V μ Fr Co (pattern functor, fix, free, cofree)
@@ -159,10 +159,10 @@ object A:
   def up(v: Val)(f: (Val, List[Attr]) => Attr): AVal = Co.ann[Unit, Attr](v)((_, _) => (), (v, _, cs) => f(v, cs), ())
 
 // ═══════════════════════════════════════════════════════════════════════════
-// φ: Unified exports
+// Φ: Unified exports
 // ═══════════════════════════════════════════════════════════════════════════
 
-object φ:
+object Φ:
   type Fix[X[_]] = μ[X]; val Fix = μ; type Free[X[_], A] = Fr[X, A]; val Free = Fr; type Cofree[X[_], A] = Co[X, A]; val Cofree = Co
   type ValF[A] = V[A]; val ValF = V; type Lens[S, A] = Ln[S, A]; val Lens = Ln; type Prism[S, A] = Pr[S, A]; val Prism = Pr; type Traversal[S, A] = Tr[S, A]
   type Xform[A, B] = X[A, B]; val Xform = X; type Edit[A] = Ed[A]; val Edit = Ed; type Validated[E, A] = Vd[E, A]; val Validated = Vd
