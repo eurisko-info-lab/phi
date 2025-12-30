@@ -997,7 +997,193 @@ class LangSpecParsingSpec extends munit.FunSuite:
   }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SECTION 16: Xform Tests
+// SECTION 16: Grammar Interpreter Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+class GrammarInterpSpec extends munit.FunSuite:
+  import Core.*
+  import Core.Val.*
+  import Lang.*
+  import Grammar.*
+
+  test("parse simple literal") {
+    val source = """
+      sort Token
+      Token = Star
+      grammar Token {
+        Star <- "*"
+      }
+    """
+    PhiParser.parseFile("test", source) match
+      case Right(spec) =>
+        val runner = LangRunner(spec)
+        runner.parse("Token", "*") match
+          case Right(v) => assertEquals(v, VCon("Star", Nil))
+          case Left(err) => fail(s"Parse error: $err")
+      case Left(err) => fail(s"Spec parse error: $err")
+  }
+
+  test("parse identifier terminal") {
+    val source = """
+      sort Term
+      Term = Var(name: String)
+      grammar Term {
+        Var <- IDENT
+      }
+    """
+    PhiParser.parseFile("test", source) match
+      case Right(spec) =>
+        val runner = LangRunner(spec)
+        runner.parse("Term", "foo") match
+          case Right(v) => assertEquals(v, VCon("Var", List(VStr("foo"))))
+          case Left(err) => fail(s"Parse error: $err")
+      case Left(err) => fail(s"Spec parse error: $err")
+  }
+
+  test("parse sequence with literal and terminal") {
+    val source = """
+      sort Term
+      Term = Var(name: String)
+      grammar Term {
+        Var <- "$" IDENT
+      }
+    """
+    PhiParser.parseFile("test", source) match
+      case Right(spec) =>
+        val runner = LangRunner(spec)
+        runner.parse("Term", "$ x") match
+          case Right(v) => assertEquals(v, VCon("Var", List(VStr("x"))))
+          case Left(err) => fail(s"Parse error: $err")
+      case Left(err) => fail(s"Spec parse error: $err")
+  }
+
+  test("parse nested terms") {
+    val source = """
+      sort Expr
+      Expr = Var(name: String)
+           | App(func: Expr, arg: Expr)
+      grammar Expr {
+        Var <- IDENT
+        App <- "(" Expr Expr ")"
+      }
+    """
+    PhiParser.parseFile("test", source) match
+      case Right(spec) =>
+        val runner = LangRunner(spec)
+        runner.parse("Expr", "( f x )") match
+          case Right(v) => 
+            assertEquals(v, VCon("App", List(
+              VCon("Var", List(VStr("f"))),
+              VCon("Var", List(VStr("x")))
+            )))
+          case Left(err) => fail(s"Parse error: $err")
+      case Left(err) => fail(s"Spec parse error: $err")
+  }
+
+  test("parse lambda calculus syntax") {
+    val source = """
+      sort Term
+      Term = Var(name: String)
+           | Lam(param: String, body: Term)
+           | App(func: Term, arg: Term)
+      grammar Term {
+        Lam <- "fn" IDENT "." Term
+        App <- "(" Term Term ")"
+        Var <- IDENT
+      }
+    """
+    PhiParser.parseFile("test", source) match
+      case Right(spec) =>
+        val runner = LangRunner(spec)
+        // Parse identity: fn x . x
+        runner.parse("Term", "fn x . x") match
+          case Right(v) => 
+            assertEquals(v, VCon("Lam", List(
+              VStr("x"),
+              VCon("Var", List(VStr("x")))
+            )))
+          case Left(err) => fail(s"Parse error: $err")
+      case Left(err) => fail(s"Spec parse error: $err")
+  }
+
+  test("parse with alternatives") {
+    val source = """
+      sort Universe
+      Universe = Type | Kind
+      grammar Universe {
+        Type <- "*"
+        Kind <- "Box"
+      }
+    """
+    PhiParser.parseFile("test", source) match
+      case Right(spec) =>
+        val runner = LangRunner(spec)
+        assertEquals(runner.parse("Universe", "*"), Right(VCon("Type", Nil)))
+        assertEquals(runner.parse("Universe", "Box"), Right(VCon("Kind", Nil)))
+      case Left(err) => fail(s"Spec parse error: $err")
+  }
+
+  test("render simple value") {
+    val source = """
+      sort Term
+      Term = Var(name: String)
+      grammar Term {
+        Var <- IDENT
+      }
+    """
+    PhiParser.parseFile("test", source) match
+      case Right(spec) =>
+        val runner = LangRunner(spec)
+        val v = VCon("Var", List(VStr("x")))
+        assertEquals(runner.render(v), "x")
+      case Left(err) => fail(s"Spec parse error: $err")
+  }
+
+  test("render with literals") {
+    val source = """
+      sort Term
+      Term = Lam(param: String, body: Term)
+           | Var(name: String)
+      grammar Term {
+        Lam <- "lam" IDENT "." Term
+        Var <- IDENT
+      }
+    """
+    PhiParser.parseFile("test", source) match
+      case Right(spec) =>
+        val runner = LangRunner(spec)
+        val lam = VCon("Lam", List(VStr("x"), VCon("Var", List(VStr("x")))))
+        assertEquals(runner.render(lam), "lam x . x")
+      case Left(err) => fail(s"Spec parse error: $err")
+  }
+
+  test("round-trip parse and render") {
+    val source = """
+      sort Term
+      Term = Var(name: String)
+           | App(func: Term, arg: Term)
+      grammar Term {
+        Var <- IDENT
+        App <- "(" Term Term ")"
+      }
+    """
+    PhiParser.parseFile("test", source) match
+      case Right(spec) =>
+        val runner = LangRunner(spec)
+        val input = "( f x )"
+        runner.parse("Term", input) match
+          case Right(parsed) =>
+            val rendered = runner.render(parsed)
+            // Re-parse and check equality
+            runner.parse("Term", rendered) match
+              case Right(reparsed) => assertEquals(parsed, reparsed)
+              case Left(err) => fail(s"Re-parse error: $err")
+          case Left(err) => fail(s"Parse error: $err")
+      case Left(err) => fail(s"Spec parse error: $err")
+  }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 17: Xform Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
 class XformSpec extends munit.FunSuite:

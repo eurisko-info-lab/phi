@@ -316,7 +316,8 @@ object Lang:
       }
     
     def grammarSeq: Parser[GrammarPat] =
-      rep1(grammarPostfix) ^^ {
+      // Only consume up to but not including an identifier followed by <-
+      rep1(not(ident ~ "<-") ~> grammarPostfix) ^^ {
         case List(single) => single
         case parts => GrammarPat.Seq(parts)
       }
