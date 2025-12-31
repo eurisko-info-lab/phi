@@ -1,0 +1,25 @@
+; RosettaVM Example: Factorial
+; Computes factorial of 5 = 120
+
+fn factorial(n) {
+    load 0           ; load n
+    push 1
+    le               ; n <= 1?
+    jf 2             ; if not, skip to recursion
+    push 1           ; base case: return 1
+    ret
+    
+    load 0           ; load n
+    dup              ; n n
+    push 1
+    sub              ; n (n-1)
+    call factorial   ; n factorial(n-1)
+    mul              ; n * factorial(n-1)
+    ret
+}
+
+fn main() {
+    push 5           ; compute 5!
+    call factorial
+    halt
+}

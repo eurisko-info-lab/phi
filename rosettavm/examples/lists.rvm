@@ -1,0 +1,28 @@
+; RosettaVM Example: List operations
+
+fn main() {
+    ; Create a list [1, 2, 3, 4, 5]
+    push 1
+    push 2
+    push 3
+    push 4
+    push 5
+    mklist 5
+    
+    ; Get the length
+    dup
+    len
+    print            ; prints 5
+    
+    ; Get first element
+    dup
+    head
+    print            ; prints 1
+    
+    ; Get the rest
+    tail
+    print            ; prints [2, 3, 4, 5]
+    
+    push "done"
+    halt
+}

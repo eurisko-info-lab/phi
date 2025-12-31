@@ -1,0 +1,15 @@
+[package]
+name = "rosettavm"
+version = "0.1.0"
+edition = "2021"
+description = "A content-addressed virtual machine for Port/Phi"
+license = "MIT"
+
+[dependencies]
+blake3 = "1.5"
+thiserror = "1.0"
+rustc-hash = "1.1"
+
+[profile.release]
+opt-level = 3
+lto = true

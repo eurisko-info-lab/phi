@@ -1,0 +1,8 @@
+; RosettaVM Example: Hello World
+
+fn main() {
+    push "Hello, RosettaVM!"
+    print
+    push 0
+    halt
+}

@@ -1,0 +1,294 @@
+// =======================================================
+// λProlog in Phi
+// Parser + Interpreter
+// Examples written in *actual λProlog syntax*
+// =======================================================
+
+language λProlog {
+
+  // =====================================================
+  // Core sorts
+  // =====================================================
+
+  sort Type
+  sort Term
+  sort Goal
+  sort Clause
+  sort Program
+
+  // =====================================================
+  // Types (simple types, implicit)
+  // =====================================================
+
+  constructor
+    TyConst : String → Type
+    TyArr   : Type → Type → Type
+
+  // =====================================================
+  // Terms (λProlog core)
+// =====================================================
+
+  constructor
+    Var   : String → Term
+    Const : String → Term
+    Lam   : String → Term → Term
+    App   : Term → Term → Term
+
+  // =====================================================
+  // Goals and clauses
+  // =====================================================
+
+  constructor
+    True  : Goal
+    And   : Goal → Goal → Goal
+    Call  : Term → Goal
+
+  constructor
+    Clause : Term → Goal → Clause
+    Program : Clause* → Program
+
+  // =====================================================
+  // Substitution
+  // =====================================================
+
+  xform Subst : (String × Term) × Term ⇄ Term
+
+  rule Subst.forward {
+    ((x,v), Var(x))       ↦ v
+    ((x,_), Var(y))       ↦ Var(y)          where x ≠ y
+    ((_,_), Const(c))     ↦ Const(c)
+    ((x,_), Lam(y,t))     ↦ Lam(y,t)         where x = y
+    ((x,v), Lam(y,t))     ↦ Lam(y, Subst.forward((x,v), t))
+      where x ≠ y
+    ((x,v), App(f,a))     ↦ App(Subst.forward((x,v), f),
+                               Subst.forward((x,v), a))
+  }
+
+  // =====================================================
+  // β-reduction
+  // =====================================================
+
+  change Beta : Term ⇄ Term
+
+  rule Beta {
+    App(Lam(x, b), v) ↦ Subst.forward((x,v), b)
+  }
+
+  strategy normalizeTerm := repeat Beta
+
+  // =====================================================
+  // Higher-order pattern unification (fragment)
+  // =====================================================
+
+  xform Unify : Term × Term ⇄ (String × Term)*
+
+  rule Unify.forward {
+    (Var(x), t) ↦ [(x,t)]
+    (t, Var(x)) ↦ [(x,t)]
+    (Const(c1), Const(c2)) ↦ [] where c1 = c2
+    (App(f1, a1), App(f2, a2)) ↦ s1 ++ s2
+      where s1 = Unify.forward(f1,f2)
+        and s2 = Unify.forward(a1,a2)
+  }
+
+  // =====================================================
+  // Goal solving
+  // =====================================================
+
+  xform Solve : Program × Goal ⇄ Goal
+
+  rule Solve.forward {
+    (_, True) ↦ True
+    (P, And(g1, g2)) ↦ And(Solve.forward(P,g1),
+                          Solve.forward(P,g2))
+    (Program(cs), Call(t)) ↦ SolveClauses.forward(cs, t)
+  }
+
+  xform SolveClauses : Clause* × Term ⇄ Goal
+
+  rule SolveClauses.forward {
+    ([Clause(h, b) | rest], t) ↦
+      Solve.forward(
+        Program([Clause(h, b) | rest]),
+        applySubsts.forward(Unify.forward(h,t), b)
+      )
+    ([ _ | rest ], t) ↦ SolveClauses.forward(rest, t)
+  }
+
+  // =====================================================
+  // Apply substitutions to goals
+  // =====================================================
+
+  xform applySubsts : (String × Term)* × Goal ⇄ Goal
+
+  rule applySubsts.forward {
+    ([], g) ↦ g
+    ([(x,t) | xs], g) ↦
+      applySubsts.forward(xs, substGoal.forward(x,t,g))
+  }
+
+  xform substGoal : String × Term × Goal ⇄ Goal
+
+  rule substGoal.forward {
+    (_, _, True) ↦ True
+    (x, t, And(g1, g2)) ↦ And(substGoal.forward(x,t,g1),
+                             substGoal.forward(x,t,g2))
+    (x, t, Call(tm)) ↦ Call(Subst.forward((x,t), tm))
+  }
+
+  // =====================================================
+  // Lexer
+  // =====================================================
+
+  token
+    IDENT
+    LAMBDA  "\\"
+    DOT     "."
+    COLON   ":"
+    ARROW   ":-"
+    LPAREN  "("
+    RPAREN  ")"
+    COMMA   ","
+    PERIOD  "."
+
+  // =====================================================
+  // Parser (real λProlog concrete syntax)
+  // =====================================================
+
+  syntax ident : String
+
+  syntax term : Term
+  syntax goal : Goal
+  syntax clause : Clause
+  syntax program : Program
+
+  grammar term {
+    IDENT                          => Var
+    IDENT IDENT                    => App
+    "(" term term ")"              => App
+    "\\" IDENT "." term            => Lam
+  }
+
+  grammar goal {
+    "true"                         => True
+    goal "," goal                  => And
+    term                           => Call
+  }
+
+  grammar clause {
+    term ":-" goal "."             => Clause
+    term "."                       => Clause(_, True)
+  }
+
+  grammar program {
+    clause*                        => Program
+  }
+
+  // =====================================================
+  // =================== EXAMPLES ========================
+  // Written in real λProlog syntax
+  // =====================================================
+
+  // -------------------------------------------------
+  // Example 1: Simple ancestor relation
+  // -------------------------------------------------
+  //
+  // parent alice.
+  // parent bob.
+  // ancestor X :- parent X.
+  // ancestor X :- parent Y, ancestor Y.
+  //
+
+  def example_program : Program =
+    parse program """
+      parent alice.
+      parent bob.
+      ancestor X :- parent X.
+      ancestor X :- parent Y, ancestor Y.
+    """
+
+  def example_query : Goal =
+    parse goal "ancestor alice."
+
+  def example_result : Goal =
+    Solve.forward(example_program, example_query)
+
+  // -------------------------------------------------
+  // Example 2: Higher-order programming - map
+  // -------------------------------------------------
+  // λProlog's key feature: lambdas as first-class data
+  //
+  // This demonstrates higher-order abstract syntax (HOAS)
+  // where object-language binders are represented using
+  // meta-language (λProlog) lambdas.
+
+  def example_map_prog : Program =
+    parse program """
+      map F nil nil.
+      map F (cons X Xs) (cons (F X) Ys) :- map F Xs Ys.
+    """
+
+  // Query: map (\x. succ x) (cons zero (cons zero nil)) Result
+  // Expected: Result = cons (succ zero) (cons (succ zero) nil)
+  
+  def example_map_query : Goal =
+    parse goal "map (\x. succ x) (cons zero (cons zero nil)) Result"
+
+  // -------------------------------------------------
+  // Example 3: Type inference (simply-typed λ-calculus)
+  // -------------------------------------------------
+  // This is the classic λProlog example: implementing
+  // type inference using HOAS.
+
+  def example_typeof_prog : Program =
+    parse program """
+      typeof (app M N) T :- typeof M (arrow S T), typeof N S.
+      typeof c_zero nat.
+      typeof c_succ (arrow nat nat).
+    """
+
+  // Query: typeof (app c_succ c_zero) T
+  // Expected: T = nat
+  
+  def example_typeof_query : Goal =
+    parse goal "typeof (app c_succ c_zero) T"
+
+  // -------------------------------------------------
+  // Example 4: Lambda term evaluation (call-by-value)
+  // -------------------------------------------------
+
+  def example_eval_prog : Program =
+    parse program """
+      eval (app M N) V :- eval M (abs F), eval N V1, eval (F V1) V.
+      eval (abs F) (abs F).
+      eval c_zero c_zero.
+      eval (c_succ N) (c_succ V) :- eval N V.
+    """
+
+  // Query: eval (app (abs \x. c_succ x) c_zero) V
+  // This applies the successor function to zero
+  // Expected: V = c_succ c_zero
+  
+  def example_eval_query : Goal =
+    parse goal "eval (app (abs \x. c_succ x) c_zero) V"
+
+  // -------------------------------------------------
+  // Example 5: CPS transformation
+  // -------------------------------------------------
+  // Continuation-passing style transformation of λ-terms
+  // This demonstrates λProlog's ability to manipulate
+  // higher-order syntax transformations.
+
+  def example_cps_prog : Program =
+    parse program """
+      cps (app M N) K :- cps M (\m. cps N (\n. app (app m n) K)).
+      cps (abs F) K :- app K (abs \x. abs \k. cps (F x) k).
+      cps (var X) K :- app K (var X).
+    """
+
+  // Query: cps (abs \x. var x) Result
+  // CPS transform the identity function
+  
+  def example_cps_query : Goal =
+    parse goal "cps (abs \x. var x) Result"
+}

@@ -1,0 +1,308 @@
+// =============================================================================
+// RosettaVM Specification in Phi
+// =============================================================================
+// The bytecode target for Phi programs.
+// Based on the Rust implementation in rosettavm/
+//
+// This file defines ONLY the types and structures.
+// Transformations are in phi2rvm.phi
+
+language RVM {
+
+  // ===========================================================================
+  // Core Types
+  // ===========================================================================
+
+  sort Hash      // 256-bit content hash (BLAKE3)
+  sort Val       // Runtime values
+  sort Instr     // Instructions
+  sort Code      // Code blocks
+  sort Literal   // Compile-time literals
+
+  // ===========================================================================
+  // Hashes (content-addressed identifiers)
+  // ===========================================================================
+
+  constructor
+    Hash : String → Hash    // 64-char hex string
+
+  // Special hashes
+  def hashUnit : Hash = Hash("1111111111111111111111111111111111111111111111111111111111111111")
+  def hashNil  : Hash = Hash("0000000000000000000000000000000000000000000000000000000000000000")
+
+  // ===========================================================================
+  // Literals (compile-time constants)
+  // ===========================================================================
+
+  constructor
+    LInt   : Int → Literal
+    LStr   : String → Literal
+    LBool  : Bool → Literal
+    LFloat : Float → Literal
+    LHash  : Hash → Literal
+    LUnit  : Literal
+    LNil   : Literal
+
+  // ===========================================================================
+  // Runtime Values
+  // ===========================================================================
+
+  constructor
+    VInt      : Int → Val
+    VStr      : String → Val
+    VBool     : Bool → Val
+    VFloat    : Float → Val
+    VList     : Val* → Val
+    VTuple    : Val* → Val
+    VRecord   : (String × Val)* → Val
+    VCon      : Hash × Int × Val* → Val       // type hash, tag, fields
+    VClosure  : Hash × Env → Val              // code hash, captured env
+    VThunk    : Hash × Env × Val? → Val       // lazy evaluation
+    VBuiltin  : String → Val
+    VUnit     : Val
+    VNil      : Val
+
+  // ===========================================================================
+  // Environment (lexical scope)
+  // ===========================================================================
+
+  sort Env
+
+  constructor
+    EnvEmpty  : Env
+    EnvBind   : Val × Env → Env
+    EnvRef    : Hash → Env                    // Content-addressed env
+
+  // ===========================================================================
+  // Instructions
+  // ===========================================================================
+
+  constructor
+    // Stack operations
+    IPush     : Literal → Instr
+    IPop      : Instr
+    IDup      : Instr
+    ISwap     : Instr
+    IRot      : Instr
+    IOver     : Instr
+
+    // Environment access
+    ILoad     : Int → Instr                   // Load from env slot
+    IStore    : Int → Instr                   // Store to env slot
+    ILoadGlobal  : Hash → Instr               // Load by hash
+    IStoreGlobal : Hash → Instr               // Store by hash
+
+    // Arithmetic
+    IAdd      : Instr
+    ISub      : Instr
+    IMul      : Instr
+    IDiv      : Instr
+    IMod      : Instr
+    INeg      : Instr
+
+    // Comparison
+    IEq       : Instr
+    INe       : Instr
+    ILt       : Instr
+    ILe       : Instr
+    IGt       : Instr
+    IGe       : Instr
+
+    // Boolean
+    INot      : Instr
+    IAnd      : Instr
+    IOr       : Instr
+
+    // Control flow
+    IJump     : Int → Instr                   // Relative jump
+    IJumpIf   : Int → Instr                   // Jump if true
+    IJumpIfNot: Int → Instr                   // Jump if false
+    ICall     : Hash → Instr                  // Call function by hash
+    ITailCall : Hash → Instr                  // Tail call
+    ICallN    : Hash × Int → Instr            // Call with N args
+    IReturn   : Instr
+    IHalt     : Instr
+
+    // Closures
+    IClosure  : Hash × Int → Instr            // code hash, num captures
+    IApply    : Instr                         // Apply closure
+    IApplyN   : Int → Instr                   // Apply with N args
+
+    // Data construction
+    IMkTuple  : Int → Instr                   // Make N-tuple
+    IMkList   : Int → Instr                   // Make N-list
+    IMkRecord : Int → Instr                   // Make record
+    IMkCon    : Hash × Int × Int → Instr      // type, tag, num fields
+    IGetField : Int → Instr                   // Get field by index
+    ISetField : Int → Instr                   // Set field by index
+
+    // Pattern matching
+    IMatch    : (Int × Int)* → Instr          // [(tag, offset)]
+    ITestTag  : Int → Instr                   // Test constructor tag
+    IUnpack   : Int → Instr                   // Unpack constructor fields
+
+    // Lists
+    ICons     : Instr
+    IHead     : Instr
+    ITail     : Instr
+    IIsNil    : Instr
+    ILen      : Instr
+    IConcat   : Instr
+    IIndex    : Instr
+
+    // Strings
+    IStrConcat : Instr
+    IStrLen    : Instr
+    IStrSlice  : Instr
+
+    // Effects (future)
+    IPerform  : Hash → Instr                  // Perform effect
+    IHandle   : Hash → Instr                  // Install handler
+    IResume   : Instr                         // Resume continuation
+
+    // Debug / Meta
+    IPrint    : Instr
+    ITypeOf   : Instr
+    IHashOf   : Instr
+    IAssert   : Instr
+    ITrace    : Instr
+    INop      : Instr
+
+  // ===========================================================================
+  // Code Block (compiled function)
+  // ===========================================================================
+
+  sort CodeBlock
+
+  constructor
+    CodeBlock : Hash × String? × Int × Int × Int × Instr* → CodeBlock
+    // hash, name, arity, locals, captures, instructions
+
+  // Accessors
+  xform codeHash : CodeBlock ⇄ Hash {
+    CodeBlock(h, _, _, _, _, _) ⇔ h
+  }
+
+  xform codeName : CodeBlock ⇄ String? {
+    CodeBlock(_, n, _, _, _, _) ⇔ n
+  }
+
+  xform codeArity : CodeBlock ⇄ Int {
+    CodeBlock(_, _, a, _, _, _) ⇔ a
+  }
+
+  xform codeInstrs : CodeBlock ⇄ Instr* {
+    CodeBlock(_, _, _, _, _, is) ⇔ is
+  }
+
+  // ===========================================================================
+  // Program (collection of code blocks)
+  // ===========================================================================
+
+  sort Program
+
+  constructor
+    Program : CodeBlock* × Hash → Program     // blocks, main hash
+
+  // ===========================================================================
+  // Codebase (content-addressed store)
+  // ===========================================================================
+
+  sort Codebase
+
+  constructor
+    Codebase : (Hash × CodeBlock)* × (String × Hash)* → Codebase
+    // code blocks, name aliases
+
+  // ===========================================================================
+  // Assembly Syntax (for rendering)
+  // ===========================================================================
+
+  grammar instr {
+    "push" literal                     ⇒ IPush
+    "pop"                              ⇒ IPop
+    "dup"                              ⇒ IDup
+    "swap"                             ⇒ ISwap
+    "rot"                              ⇒ IRot
+    "over"                             ⇒ IOver
+
+    "load" INT                         ⇒ ILoad
+    "store" INT                        ⇒ IStore
+
+    "add"                              ⇒ IAdd
+    "sub"                              ⇒ ISub
+    "mul"                              ⇒ IMul
+    "div"                              ⇒ IDiv
+    "mod"                              ⇒ IMod
+    "neg"                              ⇒ INeg
+
+    "eq"                               ⇒ IEq
+    "ne"                               ⇒ INe
+    "lt"                               ⇒ ILt
+    "le"                               ⇒ ILe
+    "gt"                               ⇒ IGt
+    "ge"                               ⇒ IGe
+
+    "not"                              ⇒ INot
+    "and"                              ⇒ IAnd
+    "or"                               ⇒ IOr
+
+    "jump" INT                         ⇒ IJump
+    "jt" INT                           ⇒ IJumpIf
+    "jf" INT                           ⇒ IJumpIfNot
+    "call" IDENT                       ⇒ ICall
+    "tailcall" IDENT                   ⇒ ITailCall
+    "ret"                              ⇒ IReturn
+    "halt"                             ⇒ IHalt
+
+    "closure" IDENT INT                ⇒ IClosure
+    "apply"                            ⇒ IApply
+    "applyn" INT                       ⇒ IApplyN
+
+    "tuple" INT                        ⇒ IMkTuple
+    "list" INT                         ⇒ IMkList
+    "con" IDENT INT INT                ⇒ IMkCon
+    "field" INT                        ⇒ IGetField
+    "unpack" INT                       ⇒ IUnpack
+    "testtag" INT                      ⇒ ITestTag
+
+    "cons"                             ⇒ ICons
+    "head"                             ⇒ IHead
+    "tail"                             ⇒ ITail
+    "isnil"                            ⇒ IIsNil
+    "len"                              ⇒ ILen
+    "concat"                           ⇒ IConcat
+    "index"                            ⇒ IIndex
+
+    "strcat"                           ⇒ IStrConcat
+    "strlen"                           ⇒ IStrLen
+    "strslice"                         ⇒ IStrSlice
+
+    "print"                            ⇒ IPrint
+    "typeof"                           ⇒ ITypeOf
+    "assert"                           ⇒ IAssert
+    "trace"                            ⇒ ITrace
+    "nop"                              ⇒ INop
+  }
+
+  grammar literal {
+    INT                                ⇒ LInt
+    STRING                             ⇒ LStr
+    "true"                             ⇒ LBool(true)
+    "false"                            ⇒ LBool(false)
+    FLOAT                              ⇒ LFloat
+    "()"                               ⇒ LUnit
+    "nil"                              ⇒ LNil
+    "#" HEX64                          ⇒ LHash
+  }
+
+  grammar codeBlock {
+    "fn" IDENT "(" params ")" "{" @indent @newline
+      instr* @sep("\n")
+    @newline "}"                       ⇒ CodeBlock
+  }
+
+  grammar program {
+    codeBlock* @sep("\n\n")            ⇒ Program
+  }
+}

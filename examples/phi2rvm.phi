@@ -1,0 +1,539 @@
+// =============================================================================
+// Phi to RVM Transformation
+// =============================================================================
+// Compiles Phi AST to RosettaVM bytecode.
+//
+// This is the core compiler from Phi's high-level constructs to the
+// stack-based RVM instructions.
+//
+// Transformation chain:
+//   Phi source → Phi AST → RVM Instructions → .rvm file
+//
+// The compiler handles:
+//   - Expressions (literals, variables, operators)
+//   - Control flow (if/then/else, match)
+//   - Functions (lambda, application, recursion)
+//   - Data (constructors, records, lists)
+//   - Pattern matching compilation
+
+language Phi2RVM {
+
+  import Phi    // Source language
+  import RVM    // Target language
+
+  // ===========================================================================
+  // Compilation Context
+  // ===========================================================================
+
+  sort Ctx      // Compilation context
+
+  constructor
+    Ctx : Scope × Int × CodeBlock* × String* → Ctx
+    // scope, lambda counter, collected blocks, errors
+
+  sort Scope    // Variable scope
+
+  constructor
+    ScopeEmpty : Scope
+    ScopeBind  : String × Int × Scope → Scope   // name, slot, parent
+
+  // Lookup variable in scope, returns (depth, slot)
+  xform lookupVar : String × Scope ⇄ (Int × Int)?
+  rule lookupVar {
+    (x, ScopeEmpty)              ↦ None
+    (x, ScopeBind(x, slot, _))   ↦ Some(0, slot)
+    (x, ScopeBind(y, _, rest))   ↦ 
+      match lookupVar(x, rest) with
+        Some(depth, slot) → Some(depth + 1, slot)
+        None              → None
+      end
+      where x ≠ y
+  }
+
+  // ===========================================================================
+  // Main Compilation Transform
+  // ===========================================================================
+
+  xform compile : Phi.Expr × Ctx ⇄ (RVM.Instr* × Ctx)
+
+  // ---------------------------------------------------------------------------
+  // Literals
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    // Integer literal
+    (Phi.IntLit(n), ctx)
+      ↦ ([RVM.IPush(RVM.LInt(n))], ctx)
+
+    // String literal
+    (Phi.StrLit(s), ctx)
+      ↦ ([RVM.IPush(RVM.LStr(s))], ctx)
+
+    // Boolean literal
+    (Phi.BoolLit(b), ctx)
+      ↦ ([RVM.IPush(RVM.LBool(b))], ctx)
+
+    // Unit
+    (Phi.Unit, ctx)
+      ↦ ([RVM.IPush(RVM.LUnit)], ctx)
+
+    // Nil (empty list)
+    (Phi.Nil, ctx)
+      ↦ ([RVM.IPush(RVM.LNil)], ctx)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Variables
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    // Variable reference
+    (Phi.Var(x), Ctx(scope, lc, blocks, errs))
+      ↦ match lookupVar(x, scope) with
+          Some(0, slot)     → ([RVM.IDup], ctx')     // top of stack
+          Some(1, slot)     → ([RVM.IOver], ctx')    // second from top
+          Some(depth, slot) → ([RVM.ILoad(slot)], ctx')
+          None              → ([RVM.ILoadGlobal(hashOf(x))], ctx')
+        end
+      where ctx' = Ctx(scope, lc, blocks, errs)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Arithmetic Operators
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    // Binary operators
+    (Phi.BinOp("+", e1, e2), ctx)
+      ↦ let (c1, ctx1) = compile(e1, ctx) in
+        let (c2, ctx2) = compile(e2, ctx1) in
+        (c1 ++ c2 ++ [RVM.IAdd], ctx2)
+
+    (Phi.BinOp("-", e1, e2), ctx)
+      ↦ let (c1, ctx1) = compile(e1, ctx) in
+        let (c2, ctx2) = compile(e2, ctx1) in
+        (c1 ++ c2 ++ [RVM.ISub], ctx2)
+
+    (Phi.BinOp("*", e1, e2), ctx)
+      ↦ let (c1, ctx1) = compile(e1, ctx) in
+        let (c2, ctx2) = compile(e2, ctx1) in
+        (c1 ++ c2 ++ [RVM.IMul], ctx2)
+
+    (Phi.BinOp("/", e1, e2), ctx)
+      ↦ let (c1, ctx1) = compile(e1, ctx) in
+        let (c2, ctx2) = compile(e2, ctx1) in
+        (c1 ++ c2 ++ [RVM.IDiv], ctx2)
+
+    (Phi.BinOp("%", e1, e2), ctx)
+      ↦ let (c1, ctx1) = compile(e1, ctx) in
+        let (c2, ctx2) = compile(e2, ctx1) in
+        (c1 ++ c2 ++ [RVM.IMod], ctx2)
+
+    // Unary negation
+    (Phi.UnOp("-", e), ctx)
+      ↦ let (c, ctx') = compile(e, ctx) in
+        (c ++ [RVM.INeg], ctx')
+  }
+
+  // ---------------------------------------------------------------------------
+  // Comparison Operators
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    (Phi.BinOp("==", e1, e2), ctx)
+      ↦ let (c1, ctx1) = compile(e1, ctx) in
+        let (c2, ctx2) = compile(e2, ctx1) in
+        (c1 ++ c2 ++ [RVM.IEq], ctx2)
+
+    (Phi.BinOp("!=", e1, e2), ctx)
+      ↦ let (c1, ctx1) = compile(e1, ctx) in
+        let (c2, ctx2) = compile(e2, ctx1) in
+        (c1 ++ c2 ++ [RVM.INe], ctx2)
+
+    (Phi.BinOp("<", e1, e2), ctx)
+      ↦ let (c1, ctx1) = compile(e1, ctx) in
+        let (c2, ctx2) = compile(e2, ctx1) in
+        (c1 ++ c2 ++ [RVM.ILt], ctx2)
+
+    (Phi.BinOp("<=", e1, e2), ctx)
+      ↦ let (c1, ctx1) = compile(e1, ctx) in
+        let (c2, ctx2) = compile(e2, ctx1) in
+        (c1 ++ c2 ++ [RVM.ILe], ctx2)
+
+    (Phi.BinOp(">", e1, e2), ctx)
+      ↦ let (c1, ctx1) = compile(e1, ctx) in
+        let (c2, ctx2) = compile(e2, ctx1) in
+        (c1 ++ c2 ++ [RVM.IGt], ctx2)
+
+    (Phi.BinOp(">=", e1, e2), ctx)
+      ↦ let (c1, ctx1) = compile(e1, ctx) in
+        let (c2, ctx2) = compile(e2, ctx1) in
+        (c1 ++ c2 ++ [RVM.IGe], ctx2)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Boolean Operators
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    (Phi.BinOp("&&", e1, e2), ctx)
+      ↦ let (c1, ctx1) = compile(e1, ctx) in
+        let (c2, ctx2) = compile(e2, ctx1) in
+        (c1 ++ c2 ++ [RVM.IAnd], ctx2)
+
+    (Phi.BinOp("||", e1, e2), ctx)
+      ↦ let (c1, ctx1) = compile(e1, ctx) in
+        let (c2, ctx2) = compile(e2, ctx1) in
+        (c1 ++ c2 ++ [RVM.IOr], ctx2)
+
+    (Phi.UnOp("!", e), ctx)
+      ↦ let (c, ctx') = compile(e, ctx) in
+        (c ++ [RVM.INot], ctx')
+  }
+
+  // ---------------------------------------------------------------------------
+  // Control Flow: If-Then-Else
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    (Phi.If(cond, thenE, elseE), ctx)
+      ↦ let (cCond, ctx1) = compile(cond, ctx) in
+        let (cThen, ctx2) = compile(thenE, ctx1) in
+        let (cElse, ctx3) = compile(elseE, ctx2) in
+        let thenLen = length(cThen) + 1 in     // +1 for jump over else
+        let elseLen = length(cElse) in
+        ( cCond 
+          ++ [RVM.IJumpIfNot(thenLen + 1)]     // Skip to else
+          ++ cThen
+          ++ [RVM.IJump(elseLen + 1)]          // Skip over else
+          ++ cElse
+        , ctx3)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Let Bindings
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    (Phi.Let(x, val, body), Ctx(scope, lc, blocks, errs))
+      ↦ let (cVal, ctx1) = compile(val, Ctx(scope, lc, blocks, errs)) in
+        let slot = scopeSize(scope) in
+        let scope' = ScopeBind(x, slot, scope) in
+        let (cBody, Ctx(_, lc', blocks', errs')) = 
+              compile(body, Ctx(scope', lc, blocks, errs)) in
+        // Value stays on stack during body, then swap and pop
+        ( cVal ++ cBody ++ [RVM.ISwap, RVM.IPop]
+        , Ctx(scope, lc', blocks', errs'))
+  }
+
+  // ---------------------------------------------------------------------------
+  // Functions: Lambda
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    (Phi.Lambda(params, body), Ctx(scope, lc, blocks, errs))
+      ↦ let name = "lambda_" ++ toString(lc) in
+        let lc' = lc + 1 in
+        // Build scope with parameters
+        let paramScope = foldl(
+              fn(s, (p, i)) → ScopeBind(p, i, s),
+              ScopeEmpty,
+              zip(params, range(0, length(params)))
+            ) in
+        let (cBody, Ctx(_, lc'', moreBlocks, errs')) = 
+              compile(body, Ctx(paramScope, lc', blocks, errs)) in
+        let lambdaCode = cBody ++ [RVM.IReturn] in
+        let lambdaHash = hashOf(name) in
+        let lambdaBlock = RVM.CodeBlock(
+              lambdaHash, 
+              Some(name), 
+              length(params), 
+              0,                           // locals
+              scopeSize(scope),            // captures
+              lambdaCode
+            ) in
+        ( [RVM.IClosure(lambdaHash, scopeSize(scope))]
+        , Ctx(scope, lc'', [lambdaBlock | moreBlocks], errs'))
+  }
+
+  // ---------------------------------------------------------------------------
+  // Functions: Application
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    // Single argument application
+    (Phi.App(func, [arg]), ctx)
+      ↦ let (cArg, ctx1) = compile(arg, ctx) in
+        let (cFunc, ctx2) = compile(func, ctx1) in
+        (cArg ++ cFunc ++ [RVM.IApply], ctx2)
+
+    // Multi-argument application
+    (Phi.App(func, args), ctx) where length(args) > 1
+      ↦ let (cArgs, ctx1) = compileList(args, ctx) in
+        let (cFunc, ctx2) = compile(func, ctx1) in
+        (cArgs ++ cFunc ++ [RVM.IApplyN(length(args))], ctx2)
+
+    // Named function call
+    (Phi.Call(name, args), ctx)
+      ↦ let (cArgs, ctx') = compileList(args, ctx) in
+        let hash = hashOf(name) in
+        (cArgs ++ [RVM.ICallN(hash, length(args))], ctx')
+  }
+
+  // ---------------------------------------------------------------------------
+  // Data: Lists
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    // List literal
+    (Phi.List(elems), ctx)
+      ↦ let (cElems, ctx') = compileList(elems, ctx) in
+        (cElems ++ [RVM.IMkList(length(elems))], ctx')
+
+    // Cons
+    (Phi.BinOp("::", head, tail), ctx)
+      ↦ let (cHead, ctx1) = compile(head, ctx) in
+        let (cTail, ctx2) = compile(tail, ctx1) in
+        (cHead ++ cTail ++ [RVM.ICons], ctx2)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Data: Tuples
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    (Phi.Tuple(elems), ctx)
+      ↦ let (cElems, ctx') = compileList(elems, ctx) in
+        (cElems ++ [RVM.IMkTuple(length(elems))], ctx')
+  }
+
+  // ---------------------------------------------------------------------------
+  // Data: Constructors
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    (Phi.Constructor(typeName, ctorName, tag, args), ctx)
+      ↦ let (cArgs, ctx') = compileList(args, ctx) in
+        let typeHash = hashOf(typeName) in
+        (cArgs ++ [RVM.IMkCon(typeHash, tag, length(args))], ctx')
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pattern Matching
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    (Phi.Match(scrutinee, cases), ctx)
+      ↦ let (cScrut, ctx1) = compile(scrutinee, ctx) in
+        let (cMatch, ctx2) = compileCases(cases, ctx1) in
+        (cScrut ++ cMatch, ctx2)
+  }
+
+  // Compile match cases to jump table
+  xform compileCases : (Phi.Pattern × Phi.Expr)* × Ctx ⇄ (RVM.Instr* × Ctx)
+
+  rule compileCases {
+    ([], ctx)
+      ↦ ([RVM.IHalt], ctx)    // No match - error
+
+    ([(Phi.PWild, body) | _], ctx)
+      ↦ let (cBody, ctx') = compile(body, ctx) in
+        (cBody, ctx')
+
+    ([(Phi.PVar(x), body) | _], Ctx(scope, lc, blocks, errs))
+      ↦ let slot = scopeSize(scope) in
+        let scope' = ScopeBind(x, slot, scope) in
+        let (cBody, Ctx(_, lc', blocks', errs')) = 
+              compile(body, Ctx(scope', lc, blocks, errs)) in
+        (cBody ++ [RVM.ISwap, RVM.IPop], Ctx(scope, lc', blocks', errs'))
+
+    ([(Phi.PCon(name, tag, pats), body) | rest], ctx)
+      ↦ let (cRest, ctx1) = compileCases(rest, ctx) in
+        let restLen = length(cRest) in
+        let (cBody, ctx2) = compileConCase(tag, pats, body, ctx1) in
+        ( [RVM.ITestTag(tag), RVM.IJumpIfNot(length(cBody) + 1)]
+          ++ cBody
+          ++ [RVM.IJump(restLen + 1)]
+          ++ cRest
+        , ctx2)
+  }
+
+  xform compileConCase : Int × Phi.Pattern* × Phi.Expr × Ctx ⇄ (RVM.Instr* × Ctx)
+
+  rule compileConCase {
+    (tag, pats, body, ctx)
+      ↦ let n = length(pats) in
+        // Unpack constructor fields onto stack
+        // Then compile body with patterns bound
+        ([RVM.IUnpack(n)] ++ compilePatBinds(pats, 0) ++ cBody, ctx')
+      where (cBody, ctx') = compile(body, extendScopeWithPats(pats, ctx))
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  // Compile a list of expressions
+  xform compileList : Phi.Expr* × Ctx ⇄ (RVM.Instr* × Ctx)
+
+  rule compileList {
+    ([], ctx) ↦ ([], ctx)
+    ([e | es], ctx) 
+      ↦ let (c, ctx1) = compile(e, ctx) in
+        let (cs, ctx2) = compileList(es, ctx1) in
+        (c ++ cs, ctx2)
+  }
+
+  // Count scope size
+  xform scopeSize : Scope ⇄ Int
+  rule scopeSize {
+    ScopeEmpty            ↦ 0
+    ScopeBind(_, _, rest) ↦ 1 + scopeSize(rest)
+  }
+
+  // ===========================================================================
+  // Top-Level Compilation
+  // ===========================================================================
+
+  // Compile a definition
+  xform compileDef : Phi.Def × Ctx ⇄ (RVM.CodeBlock × Ctx)
+
+  rule compileDef {
+    (Phi.Def(name, params, body), ctx)
+      ↦ let paramScope = foldl(
+              fn(s, (p, i)) → ScopeBind(p, i, s),
+              ScopeEmpty,
+              zip(params, range(0, length(params)))
+            ) in
+        let (cBody, ctx') = compile(body, Ctx(paramScope, 0, [], [])) in
+        let code = cBody ++ [RVM.IHalt] in
+        let hash = hashOf(name) in
+        let block = RVM.CodeBlock(
+              hash, 
+              Some(name), 
+              length(params), 
+              0, 
+              0, 
+              code
+            ) in
+        (block, ctx')
+  }
+
+  // Compile a module (list of definitions)
+  xform compileModule : Phi.Def* ⇄ RVM.Program
+
+  rule compileModule {
+    defs ↦ 
+      let blocks = map(fn(d) → fst(compileDef(d, emptyCtx)), defs) in
+      let mainHash = findMain(defs) in
+      RVM.Program(blocks, mainHash)
+  }
+
+  def emptyCtx : Ctx = Ctx(ScopeEmpty, 0, [], [])
+
+  // ===========================================================================
+  // Code Generation: Render to .rvm
+  // ===========================================================================
+
+  xform renderProgram : RVM.Program ⇄ String
+
+  rule renderProgram {
+    RVM.Program(blocks, mainHash)
+      ↦ intercalate("\n\n", map(renderBlock, blocks))
+  }
+
+  xform renderBlock : RVM.CodeBlock ⇄ String
+
+  rule renderBlock {
+    RVM.CodeBlock(hash, Some(name), arity, locals, captures, instrs)
+      ↦ "fn " ++ name ++ "(" ++ renderParams(arity) ++ ") {\n"
+        ++ indent(4, intercalate("\n", map(renderInstr, instrs)))
+        ++ "\n}"
+  }
+
+  xform renderInstr : RVM.Instr ⇄ String
+
+  rule renderInstr {
+    RVM.IPush(RVM.LInt(n))    ↦ "push " ++ toString(n)
+    RVM.IPush(RVM.LStr(s))    ↦ "push \"" ++ escape(s) ++ "\""
+    RVM.IPush(RVM.LBool(b))   ↦ "push " ++ if b then "true" else "false"
+    RVM.IPush(RVM.LUnit)      ↦ "push ()"
+    RVM.IPush(RVM.LNil)       ↦ "push nil"
+    RVM.IPop                  ↦ "pop"
+    RVM.IDup                  ↦ "dup"
+    RVM.ISwap                 ↦ "swap"
+    RVM.IRot                  ↦ "rot"
+    RVM.IOver                 ↦ "over"
+    RVM.ILoad(n)              ↦ "load " ++ toString(n)
+    RVM.IStore(n)             ↦ "store " ++ toString(n)
+    RVM.IAdd                  ↦ "add"
+    RVM.ISub                  ↦ "sub"
+    RVM.IMul                  ↦ "mul"
+    RVM.IDiv                  ↦ "div"
+    RVM.IMod                  ↦ "mod"
+    RVM.INeg                  ↦ "neg"
+    RVM.IEq                   ↦ "eq"
+    RVM.INe                   ↦ "ne"
+    RVM.ILt                   ↦ "lt"
+    RVM.ILe                   ↦ "le"
+    RVM.IGt                   ↦ "gt"
+    RVM.IGe                   ↦ "ge"
+    RVM.INot                  ↦ "not"
+    RVM.IAnd                  ↦ "and"
+    RVM.IOr                   ↦ "or"
+    RVM.IJump(n)              ↦ "jump " ++ toString(n)
+    RVM.IJumpIf(n)            ↦ "jt " ++ toString(n)
+    RVM.IJumpIfNot(n)         ↦ "jf " ++ toString(n)
+    RVM.ICall(h)              ↦ "call " ++ hashName(h)
+    RVM.ITailCall(h)          ↦ "tailcall " ++ hashName(h)
+    RVM.IReturn               ↦ "ret"
+    RVM.IHalt                 ↦ "halt"
+    RVM.IClosure(h, n)        ↦ "closure " ++ hashName(h) ++ " " ++ toString(n)
+    RVM.IApply                ↦ "apply"
+    RVM.IApplyN(n)            ↦ "applyn " ++ toString(n)
+    RVM.IMkTuple(n)           ↦ "tuple " ++ toString(n)
+    RVM.IMkList(n)            ↦ "list " ++ toString(n)
+    RVM.IMkCon(h, tag, n)     ↦ "con " ++ hashName(h) ++ " " ++ toString(tag) ++ " " ++ toString(n)
+    RVM.IGetField(n)          ↦ "field " ++ toString(n)
+    RVM.IUnpack(n)            ↦ "unpack " ++ toString(n)
+    RVM.ITestTag(n)           ↦ "testtag " ++ toString(n)
+    RVM.ICons                 ↦ "cons"
+    RVM.IHead                 ↦ "head"
+    RVM.ITail                 ↦ "tail"
+    RVM.IIsNil                ↦ "isnil"
+    RVM.ILen                  ↦ "len"
+    RVM.IConcat               ↦ "concat"
+    RVM.IIndex                ↦ "index"
+    RVM.IPrint                ↦ "print"
+    RVM.ITrace                ↦ "trace"
+    RVM.IAssert               ↦ "assert"
+    RVM.INop                  ↦ "nop"
+  }
+
+  // ===========================================================================
+  // Example: Quicksort compilation
+  // ===========================================================================
+
+  // Input (Phi):
+  //   def quicksort(xs) =
+  //     match xs with
+  //       [] → []
+  //       [p | rest] → 
+  //         let smaller = filter(fn(x) → x < p, rest)
+  //         let larger = filter(fn(x) → x >= p, rest)
+  //         quicksort(smaller) ++ [p] ++ quicksort(larger)
+
+  // Output (.rvm):
+  //   fn quicksort(xs) {
+  //       load 0
+  //       isnil
+  //       jf 3
+  //       push nil
+  //       ret
+  //       load 0
+  //       head
+  //       load 0
+  //       tail
+  //       ... (filter, recursive calls, concat)
+  //   }
+}
