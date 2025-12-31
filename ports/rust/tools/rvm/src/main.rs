@@ -15,6 +15,7 @@ pub mod vm;
 pub mod parse;
 pub mod compile;
 pub mod port;  // Port of Port - the real Phi interpreter
+pub mod cuda;  // CUDA GPU backend
 
 use std::env;
 use std::fs;
@@ -49,6 +50,10 @@ fn main() {
         Some("test") => {
             run_tests();
         }
+        Some("bench") => {
+            // Run CPU vs GPU benchmarks
+            run_benchmarks(&args[2..]);
+        }
         Some("phi") => {
             // Universal interpreter: rvm phi <spec.phi> <source> [-- <query>]
             // Example: rvm phi examples/λProlog.phi quicksort.pl -- "qsort([5,4,8,2,4,1], X)."
@@ -63,6 +68,7 @@ fn main() {
             eprintln!("  rvm hash <input>             Compute BLAKE3 hash");
             eprintln!("  rvm eval <expr>              Evaluate expression");
             eprintln!("  rvm test                     Run built-in tests");
+            eprintln!("  rvm bench [tree|sum]         CPU vs GPU benchmark");
             eprintln!();
             eprintln!("Universal Interpreter:");
             eprintln!("  rvm phi <spec.phi> <source> [-- <query>]");
@@ -173,7 +179,7 @@ fn run_file(path: &str) {
     
     match parse::parse_file(&source, &mut store) {
         Ok(main_hash) => {
-            let mut machine = vm::VM::new(&store);
+            let mut machine = vm::VM::new(&store).debug(std::env::var("RVM_DEBUG").is_ok());
             match machine.run(main_hash) {
                 Ok(result) => println!("{}", result),
                 Err(e) => eprintln!("Runtime error: {}", e),
@@ -401,5 +407,175 @@ fn run_tests() {
     
     println!("\n{} passed, {} failed", passed, failed);
     if failed > 0 {
-        std::process::exit(1);    }
+        std::process::exit(1);
+    }
+}
+
+fn run_benchmarks(args: &[String]) {
+    let bench_type = args.get(0).map(|s| s.as_str()).unwrap_or("all");
+    
+    println!("╔═══════════════════════════════════════════════════════════════╗");
+    println!("║           RosettaVM CPU vs GPU Benchmark                      ║");
+    println!("╠═══════════════════════════════════════════════════════════════╣");
+    
+    match bench_type {
+        "sum" => bench_sum(),
+        "tree" => bench_tree(),
+        "all" | _ => {
+            bench_sum();
+            println!("╠───────────────────────────────────────────────────────────────╣");
+            bench_tree();
+        }
+    }
+    
+    println!("╚═══════════════════════════════════════════════════════════════╝");
+}
+
+fn bench_sum() {
+    let n: u64 = 1_000_000;
+    let expected: i64 = (n * (n + 1) / 2) as i64;
+    
+    println!("║ Sum Benchmark: sum(1..{})                            ║", n);
+    println!("║ Expected result: {}                               ║", expected);
+    println!("╟───────────────────────────────────────────────────────────────╢");
+    
+    // CPU benchmark using RVM interpreter
+    print!("║ CPU (RVM interpreter)... ");
+    let cpu_start = std::time::Instant::now();
+    
+    // Run sum_benchmark.rvm
+    let sum_code = r#"
+fn sum_to_n(n) {
+    push 0
+    push 1
+loop_start:
+    dup
+    load 0
+    le
+    jf loop_end
+    swap
+    over
+    add
+    swap
+    push 1
+    add
+    jmp loop_start
+loop_end:
+    pop
+    ret
+}
+fn main() {
+    push 1000000
+    call sum_to_n
+    halt
+}
+"#;
+    let mut store = store::Store::new();
+    let cpu_result = match parse::parse_file(sum_code, &mut store) {
+        Ok(main_hash) => {
+            let mut machine = vm::VM::new(&store);
+            match machine.run(main_hash) {
+                Ok(v) => v.as_int().map(|i| i.to_string()).unwrap_or("error".to_string()),
+                Err(e) => format!("error: {}", e),
+            }
+        }
+        Err(e) => format!("parse error: {}", e),
+    };
+    let cpu_time = cpu_start.elapsed();
+    println!("{:>10} in {:>8.3}s ║", cpu_result, cpu_time.as_secs_f64());
+    
+    // GPU benchmark
+    print!("║ GPU (CUDA)...            ");
+    match cuda::gpu_sum(n) {
+        Ok((result, time)) => {
+            println!("{:>10} in {:>8.3}s ║", result, time.as_secs_f64());
+            
+            let speedup = cpu_time.as_secs_f64() / time.as_secs_f64();
+            println!("║ Speedup: {:>6.2}x                                            ║", speedup);
+        }
+        Err(e) => println!("error: {} ║", e),
+    }
+}
+
+fn bench_tree() {
+    let depth: u32 = 20;
+    let expected: u64 = 1 << depth;
+    
+    println!("║ Tree Sum Benchmark: tree_sum(depth={})                       ║", depth);
+    println!("║ Expected result: {} (2^{})                          ║", expected, depth);
+    println!("╟───────────────────────────────────────────────────────────────╢");
+    
+    // CPU benchmark using RVM interpreter
+    print!("║ CPU (RVM interpreter)... ");
+    let cpu_start = std::time::Instant::now();
+    
+    let tree_code = r#"
+fn tree(depth) {
+    load 0
+    push 0
+    eq
+    jf make_node
+    push 1
+    con Tree 0 1
+    ret
+make_node:
+    load 0
+    push 1
+    sub
+    call tree
+    load 0
+    push 1
+    sub
+    call tree
+    con Tree 1 2
+    ret
+}
+fn sum(t) {
+    load 0
+    testtag 0
+    jf sum_node
+    getfield 0
+    ret
+sum_node:
+    dup
+    getfield 0
+    call sum
+    swap
+    getfield 1
+    call sum
+    add
+    ret
+}
+fn main() {
+    push 20
+    call tree
+    call sum
+    halt
+}
+"#;
+    let mut store = store::Store::new();
+    let cpu_result = match parse::parse_file(tree_code, &mut store) {
+        Ok(main_hash) => {
+            let mut machine = vm::VM::new(&store);
+            match machine.run(main_hash) {
+                Ok(v) => v.as_int().map(|i| i.to_string()).unwrap_or("error".to_string()),
+                Err(e) => format!("error: {}", e),
+            }
+        }
+        Err(e) => format!("parse error: {}", e),
+    };
+    let cpu_time = cpu_start.elapsed();
+    println!("{:>10} in {:>8.3}s ║", cpu_result, cpu_time.as_secs_f64());
+    
+    // GPU benchmark
+    print!("║ GPU (CUDA)...            ");
+    match cuda::gpu_tree_sum(depth) {
+        Ok((result, time)) => {
+            println!("{:>10} in {:>8.3}s ║", result, time.as_secs_f64());
+            
+            let speedup = cpu_time.as_secs_f64() / time.as_secs_f64();
+            println!("║ Speedup: {:>6.2}x                                            ║", speedup);
+        }
+        Err(e) => println!("error: {} ║", e),
+    }
 }

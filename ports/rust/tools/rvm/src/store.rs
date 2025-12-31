@@ -12,6 +12,8 @@ pub struct Store {
     code: HashMap<Hash, CodeBlock>,
     // Named aliases -> hash
     names: HashMap<String, Hash>,
+    // Name hash -> code hash aliases (for call instructions)
+    code_aliases: HashMap<Hash, Hash>,
     // Values/terms by hash
     values: HashMap<Hash, Val>,
     // Type information by hash
@@ -72,13 +74,19 @@ impl Store {
         let hash = block.hash;
         if let Some(name) = &block.name {
             self.names.insert(name.clone(), hash);
+            // Also create an alias from Hash::of_str(name) to the code hash
+            // This allows `call sum_to_n` to work when parsed as Hash::of_str("sum_to_n")
+            let name_hash = Hash::of_str(name);
+            self.code_aliases.insert(name_hash, hash);
         }
         self.code.insert(hash, block);
         hash
     }
 
     pub fn get_code(&self, hash: &Hash) -> Option<&CodeBlock> {
+        // First try direct lookup, then try via alias
         self.code.get(hash)
+            .or_else(|| self.code_aliases.get(hash).and_then(|h| self.code.get(h)))
     }
 
     pub fn has_code(&self, hash: &Hash) -> bool {

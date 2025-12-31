@@ -122,7 +122,7 @@ impl<'a> VM<'a> {
     /// Execute one instruction
     pub fn step(&mut self) -> VMResult<()> {
         self.steps += 1;
-        if self.steps > 10_000_000 {
+        if self.steps > 100_000_000_000 {
             return Err(VMError::StepLimitExceeded(self.steps));
         }
 
@@ -686,7 +686,20 @@ impl<'a> VM<'a> {
     }
 
     fn call(&mut self, hash: Hash) -> VMResult<()> {
+        // Look up the function to get its arity
+        let code_block = self.store.get_code(&hash)
+            .ok_or(VMError::UndefinedHash(hash))?;
+        let arity = code_block.arity as usize;
+        
+        // Pop arity args from stack into env
+        let mut args = Vec::with_capacity(arity);
+        for _ in 0..arity {
+            args.push(self.pop()?);
+        }
+        args.reverse(); // first arg should be at env[0]
+        
         self.push_frame();
+        self.env = Env::new().extend(args);
         self.code = Some(hash);
         self.pc = 0;
         Ok(())

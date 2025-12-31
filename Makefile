@@ -2,7 +2,7 @@
 # Φ (Phi) - Algebraic Metaprogramming Framework
 # ═══════════════════════════════════════════════════════════════════════════
 
-.PHONY: all build clean test help scala rust rvm phi haskell install install-rvm full c cuda
+.PHONY: all build clean test help scala rust phi rvm haskell install full
 
 # Enable parallel execution
 MAKEFLAGS += -j3
@@ -14,10 +14,10 @@ all: build test
 full: clean build test install
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Build targets (run in parallel with make -j)
+# Build targets
 # ─────────────────────────────────────────────────────────────────────────────
 
-build: scala rust haskell c
+build: scala rust haskell
 
 # Scala phi interpreter
 scala phi:
@@ -30,21 +30,6 @@ rust rvm:
 # Haskell phi interpreter
 haskell:
 	cd ports/haskell/tools/phi && cabal build
-
-# C HVM examples
-c:
-	@mkdir -p build
-	gcc -O3 -Wall -Wextra -o build/sum examples/c/sum.c
-
-# CUDA HVM examples (optional, requires nvcc)
-cuda:
-	@mkdir -p build
-	@if command -v nvcc >/dev/null 2>&1; then \
-		echo "Building CUDA targets..."; \
-		nvcc -O3 -o build/sum_gpu examples/cuda/sum.cu; \
-	else \
-		echo "nvcc not found, skipping CUDA build"; \
-	fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Install targets
@@ -59,7 +44,7 @@ install-rvm: rust
 	@echo "Make sure ~/bin is in your PATH"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Test targets (run in parallel with make -j)
+# Test targets
 # ─────────────────────────────────────────────────────────────────────────────
 
 test: test-scala test-rust test-haskell
@@ -83,21 +68,11 @@ run-phi:
 run-rvm:
 	cd ports/rust/tools/rvm && cargo run --release
 
-run-sum:
-	./build/sum 1000000
-
-run-sum-gpu:
-	@if [ -f build/sum_gpu ]; then \
-		./build/sum_gpu 1000000; \
-	else \
-		echo "CUDA binary not found. Run 'make cuda' first."; \
-	fi
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Clean targets
 # ─────────────────────────────────────────────────────────────────────────────
 
-clean: clean-scala clean-rust clean-haskell clean-c
+clean: clean-scala clean-rust clean-haskell
 
 clean-scala:
 	cd ports/scala/tools/phi && sbt clean
@@ -109,9 +84,6 @@ clean-rust:
 
 clean-haskell:
 	cd ports/haskell/tools/phi && cabal clean
-
-clean-c:
-	rm -rf build
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Documentation
@@ -152,17 +124,11 @@ help:
 	@echo ""
 	@echo "Install targets:"
 	@echo "  install      Install rvm to ~/bin"
-	@echo "  install-rvm  Install rvm to ~/bin"
 	@echo ""
 	@echo "Clean targets:"
-	@echo "  clean          Clean all build artifacts"
-	@echo "  clean-scala    Clean Scala build artifacts"
-	@echo "  clean-rust     Clean Rust build artifacts"
-	@echo "  clean-haskell  Clean Haskell build artifacts"
+	@echo "  clean        Clean all build artifacts"
 	@echo ""
 	@echo "Directory structure:"
-	@echo "  specs/       Phi language specifications"
-	@echo "  specs/xforms Transformations (x2y.phi)"
 	@echo "  examples/    Example phi programs"
 	@echo "  docs/        Documentation"
 	@echo "  ports/       Language implementations"

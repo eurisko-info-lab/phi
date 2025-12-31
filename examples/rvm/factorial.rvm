@@ -5,21 +5,21 @@ fn factorial(n) {
     load 0           ; load n
     push 1
     le               ; n <= 1?
-    jf 2             ; if not, skip to recursion
+    jf skip_base     ; if not, skip to recursion
     push 1           ; base case: return 1
     ret
     
-    load 0           ; load n
-    dup              ; n n
+skip_base:
+    load 0           ; load n for multiplication later
+    load 0           ; load n again
     push 1
-    sub              ; n (n-1)
-    call factorial   ; n factorial(n-1)
+    sub              ; n-1
+    call factorial   ; factorial(n-1)
     mul              ; n * factorial(n-1)
     ret
 }
 
 fn main() {
     push 5           ; compute 5!
-    call factorial
-    halt
+    call factorial    halt
 }

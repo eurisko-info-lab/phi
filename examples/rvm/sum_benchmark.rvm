@@ -1,0 +1,40 @@
+; RosettaVM Simple Sum Benchmark
+; Computes sum of 1 to N using a loop
+; Usage: rvm run sum_benchmark.rvm
+
+fn sum_to_n(n) {
+    ; acc = 0, i = 1
+    push 0           ; accumulator
+    push 1           ; counter i
+    
+    ; while i <= n
+loop_start:
+    dup              ; i i
+    load 0           ; i i n
+    le               ; i (i <= n)
+    jf loop_end      ; if false, jump to end
+    
+    ; acc += i
+    swap             ; i acc
+    over             ; i acc i
+    add              ; i (acc + i)
+    swap             ; (acc+i) i
+    
+    ; i++
+    push 1
+    add              ; acc (i+1)
+    
+    jmp loop_start   ; back to loop
+    
+loop_end:
+    ; result is acc under i, swap and pop i
+    pop              ; remove i, leave acc
+    ret
+}
+
+fn main() {
+    ; Compute sum(1..1000000) = 500000500000
+    push 1000000
+    call sum_to_n
+    halt
+}

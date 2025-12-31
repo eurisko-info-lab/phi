@@ -1,0 +1,58 @@
+; RosettaVM Tree Sum Benchmark  
+; Builds a balanced binary tree of depth N and sums all leaves
+; Each leaf contains value 1, so tree_sum(depth) = 2^depth
+
+fn tree(depth) {
+    load 0
+    push 0
+    eq
+    jf make_node
+    
+    push 1
+    con Tree 0 1
+    ret
+
+make_node:
+    load 0
+    push 1
+    sub
+    call tree
+    
+    load 0
+    push 1
+    sub
+    call tree
+    
+    con Tree 1 2
+    ret
+}
+
+fn sum(t) {
+    load 0          ; stack: [t]
+    testtag 0       ; stack: [t, bool]  (testtag peeks t, pushes bool)
+    jf sum_node     ; stack: [t]  (jf pops bool)
+    
+    ; Leaf case - t is still on stack from testtag peek
+    getfield 0      ; get the leaf value from t
+    ret
+
+sum_node:
+    ; Node case - t still on stack from testtag peek
+    dup             ; [t, t]
+    getfield 0      ; [t, left]
+    call sum        ; [t, sum_left]
+    
+    swap            ; [sum_left, t]
+    getfield 1      ; [sum_left, right]
+    call sum        ; [sum_left, sum_right]
+    
+    add
+    ret
+}
+
+fn main() {
+    push 20
+    call tree
+    call sum
+    halt
+}

@@ -1,5 +1,11 @@
 //! Simple parser for RosettaVM assembly
+//! 
+//! Supports:
+//! - Labels: `label_name:` defines a jump target
+//! - Label references: `jmp label_name` or `jt label_name`
+//! - Relative jumps: `jmp 5` or `jmp -3`
 
+use std::collections::HashMap;
 use crate::hash::Hash;
 use crate::instr::{Instr, Literal, CodeBlock, BuiltinOp};
 use crate::store::Store;
@@ -8,6 +14,21 @@ use crate::store::Store;
 pub fn parse_file(source: &str, store: &mut Store) -> Result<Hash, ParseError> {
     let mut parser = Parser::new(source);
     parser.parse_module(store)
+}
+
+/// Intermediate instruction that may contain unresolved label references
+#[derive(Debug, Clone)]
+enum PreInstr {
+    Resolved(Instr),
+    Jump(LabelOrOffset),
+    JumpIf(LabelOrOffset),
+    JumpIfNot(LabelOrOffset),
+}
+
+#[derive(Debug, Clone)]
+enum LabelOrOffset {
+    Label(String),
+    Offset(i32),
 }
 
 #[derive(Debug, Clone)]
@@ -101,93 +122,159 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_body(&mut self) -> Result<Vec<Instr>, ParseError> {
-        let mut instrs = Vec::new();
+        let mut pre_instrs: Vec<PreInstr> = Vec::new();
+        let mut labels: HashMap<String, usize> = HashMap::new();
         
         self.skip_ws();
         while self.peek_char() != Some('}') && !self.at_end() {
             if self.peek_str("//") || self.peek_str("#") || self.peek_str(";") {
                 self.skip_line();
             } else {
-                let instr = self.parse_instr()?;
-                instrs.push(instr);
+                // Check for label definition: `name:`
+                let saved_pos = self.pos;
+                let saved_line = self.line;
+                let saved_col = self.col;
+                
+                if let Ok(ident) = self.parse_ident() {
+                    self.skip_ws_inline();
+                    if self.peek_char() == Some(':') {
+                        self.advance(); // consume ':'
+                        // It's a label - record its position
+                        labels.insert(ident, pre_instrs.len());
+                        self.skip_ws();
+                        continue;
+                    } else {
+                        // Not a label, restore position and parse as instruction
+                        self.pos = saved_pos;
+                        self.line = saved_line;
+                        self.col = saved_col;
+                    }
+                } else {
+                    self.pos = saved_pos;
+                    self.line = saved_line;
+                    self.col = saved_col;
+                }
+                
+                let instr = self.parse_pre_instr()?;
+                pre_instrs.push(instr);
             }
             self.skip_ws();
         }
 
         // Implicit return if last isn't halt/return
-        if instrs.is_empty() || !matches!(instrs.last(), Some(Instr::Halt | Instr::Return)) {
-            instrs.push(Instr::Halt);
+        if pre_instrs.is_empty() || !matches!(pre_instrs.last(), 
+            Some(PreInstr::Resolved(Instr::Halt | Instr::Return))) {
+            pre_instrs.push(PreInstr::Resolved(Instr::Halt));
+        }
+
+        // Resolve labels to relative offsets
+        // VM jump logic: after executing instr at index i, PC is i+1
+        // Jump does: pc = pc + offset - 1 = (i+1) + offset - 1 = i + offset
+        // So to reach target: target = i + offset, thus offset = target - i
+        let mut instrs = Vec::with_capacity(pre_instrs.len());
+        for (i, pre) in pre_instrs.into_iter().enumerate() {
+            let instr = match pre {
+                PreInstr::Resolved(instr) => instr,
+                PreInstr::Jump(LabelOrOffset::Offset(off)) => Instr::Jump(off),
+                PreInstr::Jump(LabelOrOffset::Label(name)) => {
+                    let target = *labels.get(&name)
+                        .ok_or_else(|| self.error(&format!("undefined label: {}", name)))?;
+                    Instr::Jump((target as i32) - (i as i32))
+                }
+                PreInstr::JumpIf(LabelOrOffset::Offset(off)) => Instr::JumpIf(off),
+                PreInstr::JumpIf(LabelOrOffset::Label(name)) => {
+                    let target = *labels.get(&name)
+                        .ok_or_else(|| self.error(&format!("undefined label: {}", name)))?;
+                    Instr::JumpIf((target as i32) - (i as i32))
+                }
+                PreInstr::JumpIfNot(LabelOrOffset::Offset(off)) => Instr::JumpIfNot(off),
+                PreInstr::JumpIfNot(LabelOrOffset::Label(name)) => {
+                    let target = *labels.get(&name)
+                        .ok_or_else(|| self.error(&format!("undefined label: {}", name)))?;
+                    Instr::JumpIfNot((target as i32) - (i as i32))
+                }
+            };
+            instrs.push(instr);
         }
 
         Ok(instrs)
     }
 
-    fn parse_instr(&mut self) -> Result<Instr, ParseError> {
+    fn parse_pre_instr(&mut self) -> Result<PreInstr, ParseError> {
         let op = self.parse_ident()?;
         self.skip_ws_inline();
 
         let instr = match op.to_lowercase().as_str() {
             // Stack
-            "push" => Instr::Push(self.parse_literal()?),
-            "pop" => Instr::Pop,
-            "dup" => Instr::Dup,
-            "swap" => Instr::Swap,
-            "rot" => Instr::Rot,
-            "over" => Instr::Over,
+            "push" => PreInstr::Resolved(Instr::Push(self.parse_literal()?)),
+            "pop" => PreInstr::Resolved(Instr::Pop),
+            "dup" => PreInstr::Resolved(Instr::Dup),
+            "swap" => PreInstr::Resolved(Instr::Swap),
+            "rot" => PreInstr::Resolved(Instr::Rot),
+            "over" => PreInstr::Resolved(Instr::Over),
 
             // Env
-            "load" => Instr::Load(self.parse_u32()?),
-            "store" => Instr::Store(self.parse_u32()?),
+            "load" => PreInstr::Resolved(Instr::Load(self.parse_u32()?)),
+            "store" => PreInstr::Resolved(Instr::Store(self.parse_u32()?)),
 
             // Arithmetic
-            "add" => Instr::Add,
-            "sub" => Instr::Sub,
-            "mul" => Instr::Mul,
-            "div" => Instr::Div,
-            "mod" => Instr::Mod,
-            "neg" => Instr::Neg,
+            "add" => PreInstr::Resolved(Instr::Add),
+            "sub" => PreInstr::Resolved(Instr::Sub),
+            "mul" => PreInstr::Resolved(Instr::Mul),
+            "div" => PreInstr::Resolved(Instr::Div),
+            "mod" => PreInstr::Resolved(Instr::Mod),
+            "neg" => PreInstr::Resolved(Instr::Neg),
 
             // Comparison
-            "eq" => Instr::Eq,
-            "ne" => Instr::Ne,
-            "lt" => Instr::Lt,
-            "le" => Instr::Le,
-            "gt" => Instr::Gt,
-            "ge" => Instr::Ge,
+            "eq" => PreInstr::Resolved(Instr::Eq),
+            "ne" => PreInstr::Resolved(Instr::Ne),
+            "lt" => PreInstr::Resolved(Instr::Lt),
+            "le" => PreInstr::Resolved(Instr::Le),
+            "gt" => PreInstr::Resolved(Instr::Gt),
+            "ge" => PreInstr::Resolved(Instr::Ge),
 
             // Boolean
-            "not" => Instr::Not,
-            "and" => Instr::And,
-            "or" => Instr::Or,
+            "not" => PreInstr::Resolved(Instr::Not),
+            "and" => PreInstr::Resolved(Instr::And),
+            "or" => PreInstr::Resolved(Instr::Or),
 
             // Control
-            "jump" | "jmp" => Instr::Jump(self.parse_i32()?),
-            "jumpif" | "jmpif" | "jt" => Instr::JumpIf(self.parse_i32()?),
-            "jumpifnot" | "jmpifnot" | "jf" => Instr::JumpIfNot(self.parse_i32()?),
+            "jump" | "jmp" => {
+                let target = self.parse_label_or_offset()?;
+                return Ok(PreInstr::Jump(target));
+            }
+            "jumpif" | "jmpif" | "jt" => {
+                let target = self.parse_label_or_offset()?;
+                return Ok(PreInstr::JumpIf(target));
+            }
+            "jumpifnot" | "jmpifnot" | "jf" => {
+                let target = self.parse_label_or_offset()?;
+                return Ok(PreInstr::JumpIfNot(target));
+            }
             "call" => {
                 let target = self.parse_ident()?;
-                Instr::Call(Hash::of_str(&target))
+                PreInstr::Resolved(Instr::Call(Hash::of_str(&target)))
             }
             "tailcall" => {
                 let target = self.parse_ident()?;
-                Instr::TailCall(Hash::of_str(&target))
+                PreInstr::Resolved(Instr::TailCall(Hash::of_str(&target)))
             }
-            "ret" | "return" => Instr::Return,
-            "halt" => Instr::Halt,
+            "ret" | "return" => PreInstr::Resolved(Instr::Return),
+            "halt" => PreInstr::Resolved(Instr::Halt),
 
             // Closures
             "closure" => {
                 let target = self.parse_ident()?;
                 self.skip_ws_inline();
                 let captures = self.parse_u8().unwrap_or(0);
-                Instr::Closure(Hash::of_str(&target), captures)
+                PreInstr::Resolved(Instr::Closure(Hash::of_str(&target), captures))
             }
-            "apply" => Instr::Apply,
-            "applyn" => Instr::ApplyN(self.parse_u8()?),
+            "apply" => PreInstr::Resolved(Instr::Apply),
+            "applyn" => PreInstr::Resolved(Instr::ApplyN(self.parse_u8()?)),
 
             // Data
-            "tuple" | "mktuple" => Instr::MkTuple(self.parse_u8()?),
-            "list" | "mklist" => Instr::MkList(self.parse_u16()?),
+            "tuple" | "mktuple" => PreInstr::Resolved(Instr::MkTuple(self.parse_u8()?)),
+            "list" | "mklist" => PreInstr::Resolved(Instr::MkList(self.parse_u16()?)),
             "con" | "mkcon" => {
                 // con TypeName tag fields
                 let ty = self.parse_ident()?;
@@ -195,45 +282,60 @@ impl<'a> Parser<'a> {
                 let tag = self.parse_u8()?;
                 self.skip_ws_inline();
                 let fields = self.parse_u8().unwrap_or(0);
-                Instr::MkCon(Hash::of_str(&ty), tag, fields)
+                PreInstr::Resolved(Instr::MkCon(Hash::of_str(&ty), tag, fields))
             }
-            "getfield" | "field" => Instr::GetField(self.parse_u8()?),
-            "unpack" => Instr::Unpack(self.parse_u8()?),
-            "testtag" => Instr::TestTag(self.parse_u8()?),
+            "getfield" | "field" => PreInstr::Resolved(Instr::GetField(self.parse_u8()?)),
+            "unpack" => PreInstr::Resolved(Instr::Unpack(self.parse_u8()?)),
+            "testtag" => PreInstr::Resolved(Instr::TestTag(self.parse_u8()?)),
 
             // Lists
-            "cons" => Instr::Cons,
-            "head" => Instr::Head,
-            "tail" => Instr::Tail,
-            "isnil" => Instr::IsNil,
-            "len" => Instr::Len,
-            "concat" => Instr::Concat,
-            "index" => Instr::Index,
+            "cons" => PreInstr::Resolved(Instr::Cons),
+            "head" => PreInstr::Resolved(Instr::Head),
+            "tail" => PreInstr::Resolved(Instr::Tail),
+            "isnil" => PreInstr::Resolved(Instr::IsNil),
+            "len" => PreInstr::Resolved(Instr::Len),
+            "concat" => PreInstr::Resolved(Instr::Concat),
+            "index" => PreInstr::Resolved(Instr::Index),
 
             // Strings
-            "strcat" | "strconcat" => Instr::StrConcat,
-            "strlen" => Instr::StrLen,
-            "strslice" => Instr::StrSlice,
+            "strcat" | "strconcat" => PreInstr::Resolved(Instr::StrConcat),
+            "strlen" => PreInstr::Resolved(Instr::StrLen),
+            "strslice" => PreInstr::Resolved(Instr::StrSlice),
 
             // Builtins
-            "print" => Instr::Print,
-            "typeof" => Instr::TypeOf,
-            "assert" => Instr::Assert,
-            "trace" => Instr::Trace,
-            "inttostr" => Instr::Builtin(BuiltinOp::IntToStr),
-            "strtoint" => Instr::Builtin(BuiltinOp::StrToInt),
-            "abs" => Instr::Builtin(BuiltinOp::Abs),
-            "min" => Instr::Builtin(BuiltinOp::Min),
-            "max" => Instr::Builtin(BuiltinOp::Max),
-            "range" => Instr::Builtin(BuiltinOp::Range),
+            "print" => PreInstr::Resolved(Instr::Print),
+            "typeof" => PreInstr::Resolved(Instr::TypeOf),
+            "assert" => PreInstr::Resolved(Instr::Assert),
+            "trace" => PreInstr::Resolved(Instr::Trace),
+            "inttostr" => PreInstr::Resolved(Instr::Builtin(BuiltinOp::IntToStr)),
+            "strtoint" => PreInstr::Resolved(Instr::Builtin(BuiltinOp::StrToInt)),
+            "abs" => PreInstr::Resolved(Instr::Builtin(BuiltinOp::Abs)),
+            "min" => PreInstr::Resolved(Instr::Builtin(BuiltinOp::Min)),
+            "max" => PreInstr::Resolved(Instr::Builtin(BuiltinOp::Max)),
+            "range" => PreInstr::Resolved(Instr::Builtin(BuiltinOp::Range)),
 
-            "nop" => Instr::Nop,
+            "nop" => PreInstr::Resolved(Instr::Nop),
 
             _ => return Err(self.error(&format!("unknown instruction: {}", op))),
         };
 
         self.skip_to_eol();
         Ok(instr)
+    }
+
+    fn parse_label_or_offset(&mut self) -> Result<LabelOrOffset, ParseError> {
+        self.skip_ws_inline();
+        
+        // Check if it's a number (offset)
+        let first = self.peek_char().ok_or_else(|| self.error("expected label or offset"))?;
+        if first == '-' || first.is_ascii_digit() {
+            let n = self.parse_i32()?;
+            return Ok(LabelOrOffset::Offset(n));
+        }
+        
+        // Otherwise it's a label name
+        let label = self.parse_ident()?;
+        Ok(LabelOrOffset::Label(label))
     }
 
     fn parse_literal(&mut self) -> Result<Literal, ParseError> {
