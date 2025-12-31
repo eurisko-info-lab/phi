@@ -7,7 +7,7 @@ author:        Patrick
 build-type:    Simple
 
 common warnings
-    ghc-options: -Wall
+    ghc-options: -Wall -Wno-name-shadowing -Wno-unused-top-binds -Wno-unused-local-binds -Wno-unused-matches -Wno-unused-imports -Wno-duplicate-exports -Wno-type-defaults -Wno-x-partial
 
 library
     import:           warnings

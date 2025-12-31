@@ -161,8 +161,10 @@ object Grammar:
     def parse(sort: String, input: String): Either[String, Val] =
       parseAll(parserFor(sort), input) match
         case Success(result, _) => Right(result)
-        case NoSuccess(msg, next) => 
+        case Failure(msg, next) => 
           Left(s"Parse error at ${next.pos}: $msg")
+        case Error(msg, next) =>
+          Left(s"Fatal parse error at ${next.pos}: $msg")
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SECTION 2: Renderer (AST → String)

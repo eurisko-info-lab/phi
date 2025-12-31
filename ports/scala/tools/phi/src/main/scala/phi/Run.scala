@@ -177,7 +177,7 @@ object Run:
      * Validate a person record - collects ALL errors.
      */
     def validatePerson(name: String, age: Int, email: String): Validated[String, (String, Int, String)] =
-      (validateName(name) zip validateAge(age) zip validateEmail(email)).map {
+      (validateName(name).zip(validateAge(age)).zip(validateEmail(email))).map {
         case ((n, a), e) => (n, a, e)
       }
 

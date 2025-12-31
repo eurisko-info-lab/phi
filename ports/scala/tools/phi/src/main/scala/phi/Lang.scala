@@ -328,6 +328,7 @@ object Lang:
         case base ~ Some("?") => GrammarPat.Opt(base)
         case base ~ Some("*") => GrammarPat.Rep(base)
         case base ~ Some("+") => GrammarPat.Rep1(base)
+        case base ~ Some(_) => base // fallback for exhaustiveness
       }
     
     def grammarAtom: Parser[GrammarPat] =
@@ -397,6 +398,7 @@ object Lang:
     
     def exprApp: Parser[Expr] =
       rep1(exprAtom) ^^ { 
+        case Nil => throw new RuntimeException("rep1 should never return empty list")
         case List(single) => single
         case head :: tail => tail.foldLeft(head)(EApp(_, _))
       }
@@ -468,8 +470,10 @@ object Lang:
     def parseFile(name: String, input: String): Either[String, LangSpec] =
       parseAll(langSpec(name), input) match
         case Success(spec, _) => Right(spec)
-        case NoSuccess(msg, next) => 
+        case Failure(msg, next) => 
           Left(s"Parse error at line ${next.pos.line}, column ${next.pos.column}: $msg")
+        case Error(msg, next) =>
+          Left(s"Fatal parse error at line ${next.pos.line}, column ${next.pos.column}: $msg")
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SECTION 3: Language Operations
