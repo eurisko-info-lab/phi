@@ -5,3 +5,4 @@
 target/
 tmp/
 dist-newstyle/
+.scala-build/
