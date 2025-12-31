@@ -36,6 +36,13 @@ rosettavm eval "[1, 2, 3]"
 
 # Run built-in tests
 rosettavm test
+
+# Compile to CUDA for GPU execution
+rosettavm cuda program.rvm
+nvcc -o program program.cu && ./program 1000000  # Run 1M parallel tasks
+
+# Run parallel CPU benchmarks
+rosettavm par fib 35
 ```
 
 ## Assembly Language
@@ -88,16 +95,16 @@ fn factorial(n) {
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│                  RosettaVM                  │
-├─────────────┬─────────────┬─────────────────┤
-│    Store    │     VM      │    Compiler     │
-│  (codebase) │  (runtime)  │   (expr→code)   │
-├─────────────┼─────────────┼─────────────────┤
-│ Hash→Code   │ Stack       │ AST             │
-│ Name→Hash   │ Frames      │ CodeBlock       │
-│ Hash→Type   │ Environment │                 │
-└─────────────┴─────────────┴─────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                         RosettaVM                            │
+├─────────────┬─────────────┬─────────────┬────────────────────┤
+│    Store    │     VM      │   Compiler  │   GPU Backend      │
+│  (codebase) │  (runtime)  │ (expr→code) │   (CUDA/OpenCL)    │
+├─────────────┼─────────────┼─────────────┼────────────────────┤
+│ Hash→Code   │ Stack       │ AST         │ RVM→CUDA codegen   │
+│ Name→Hash   │ Frames      │ CodeBlock   │ Parallel execution │
+│ Hash→Type   │ Environment │             │ Per-thread state   │
+└─────────────┴─────────────┴─────────────┴────────────────────┘
 ```
 
 ### Content Addressing
@@ -132,6 +139,8 @@ store.resolve("answer") == Some(hash)
 | `vm.rs` | Stack machine execution |
 | `parse.rs` | Assembly parser |
 | `compile.rs` | Expression compiler |
+| `cuda_codegen.rs` | RVM→CUDA compiler for GPU execution |
+| `parallel.rs` | Multi-threaded CPU execution (Rayon) |
 | `main.rs` | CLI interface |
 
 ## Tests

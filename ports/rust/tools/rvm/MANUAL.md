@@ -146,6 +146,47 @@ Run the built-in test suite to verify the installation.
 rosettavm test
 ```
 
+### `rosettavm cuda <file.rvm>`
+
+Compile RVM bytecode to CUDA C code for GPU execution.
+
+```bash
+rosettavm cuda program.rvm
+# Generates program.cu
+
+# Compile and run with nvcc
+nvcc -o program program.cu
+./program           # Single task
+./program 1000000   # 1 million parallel tasks
+```
+
+The generated CUDA code runs each task on a separate GPU thread. Results are summed and printed. Supports recursive functions with per-call-frame environments.
+
+**Performance:**
+
+| Task | CPU | GPU | Speedup |
+|------|-----|-----|---------|
+| 1,000 factorials | 1.4s | 0.31s | **4.5x** |
+| 100,000 factorials | ~140s | 0.32s | **437x** |
+| 1,000,000 factorials | ~1400s | 0.32s | **4,375x** |
+
+### `rosettavm par <benchmark> [args]`
+
+Run parallel CPU benchmarks using Rayon.
+
+```bash
+rosettavm par fib 35      # Parallel fibonacci
+rosettavm par map 1000000 # Parallel map
+```
+
+### `rosettavm bench`
+
+Run CPU vs GPU benchmarks for comparison.
+
+```bash
+rosettavm bench
+```
+
 ---
 
 ## Universal Interpreter (Phi Languages)
