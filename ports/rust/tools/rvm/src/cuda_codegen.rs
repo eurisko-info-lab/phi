@@ -51,6 +51,9 @@ impl CudaCodegen {
         }
 
         if let Some(block) = store.get_code(&hash) {
+            // Insert placeholder to prevent infinite recursion on self-calls
+            self.functions.insert(hash, String::new());
+            
             let name = block.name.as_ref()
                 .map(|n| {
                     let sanitized = sanitize_name(n);
@@ -157,10 +160,10 @@ impl CudaCodegen {
                 let target = (pc as i32 + offset) as usize;
                 format!("    cond = stack[(*sp)--].i; if (!cond) goto L{};\n", target)
             }
-            Instr::Return => "    return stack[*sp];\n".to_string(),
+            Instr::Return => "    return stack[(*sp)--];\n".to_string(),
             Instr::Halt => "    return stack[*sp];\n".to_string(),
             
-            // Function calls - pop args from stack into env, then call
+            // Function calls - save env, create new env with args, call, restore env
             Instr::Call(h) => {
                 let target_name = self.func_names.get(h)
                     .map(|s| s.clone())
@@ -168,14 +171,19 @@ impl CudaCodegen {
                 let arity = self.func_arities.get(h).copied().unwrap_or(0);
                 
                 let mut code = String::new();
-                // Pop arity args from stack into env (in reverse order)
+                // Create a minimal environment for the call (sized to arity, minimum 1)
+                let env_size = std::cmp::max(arity as usize, 1);
+                code.push_str(&format!("    {{ Val call_env[{}];\n", env_size));
+                // Pop arity args from stack into new env (in reverse order)
                 for i in (0..arity).rev() {
-                    code.push_str(&format!("    env[{}] = stack[(*sp)--];\n", i));
+                    code.push_str(&format!("      call_env[{}] = stack[(*sp)--];\n", i));
                 }
-                code.push_str(&format!("    stack[++(*sp)] = {}(stack, sp, env);\n", target_name));
+                // Call with new env, push result
+                code.push_str(&format!("      stack[++(*sp)] = {}(stack, sp, call_env); }}\n", target_name));
                 code
             }
             Instr::TailCall(h) => {
+                // Tail call can reuse current env since we're not returning
                 let target_name = self.func_names.get(h)
                     .map(|s| s.clone())
                     .unwrap_or_else(|| format!("fn_{}", h.short()));
@@ -230,8 +238,8 @@ __device__ Val make_int(long long n) { Val v; v.i = n; return v; }
 __device__ Val make_nil() { Val v; v.i = 0; return v; }
 __device__ Val make_str(int idx) { Val v; v.i = idx; return v; }
 
-#define STACK_SIZE 4096
-#define ENV_SIZE 256
+#define STACK_SIZE 256
+#define ENV_SIZE 16
 
 "#);
 
@@ -288,6 +296,9 @@ int main(int argc, char** argv) {
         h_args[i].i = i;
     }
     cudaMemcpy(d_args, h_args, n_tasks * sizeof(Val), cudaMemcpyHostToDevice);
+
+    // Set stack size for recursion support
+    cudaDeviceSetLimit(cudaLimitStackSize, 65536);
 
     // Launch kernel
     int threads = 256;
