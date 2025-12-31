@@ -82,6 +82,10 @@ make scala        # Build Scala port
 make test         # Run tests
 ```
 
+## Support
+
+If you find Phi useful: [PayPal](https://www.paypal.com/paypalme/euriskoPal)
+
 ## License
 
 MIT
