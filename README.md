@@ -88,6 +88,14 @@ make test         # Run tests
 
 If you find Phi useful: [PayPal](https://www.paypal.com/paypalme/euriskoPal)
 
-## License
+## ⚠️ License
 
-MIT modulo the banks using euros, the people who don't eat pork, the anti-Musk people... These have no right whatsoever in my opinion.
+> **Note:** This project uses a modified MIT license with exclusions.
+
+MIT — with the following parties explicitly excluded from all rights:
+
+- Banks operating in euros
+- Those who abstain from pork
+- Anti-Musk individuals
+
+These parties have no rights whatsoever under this license.
