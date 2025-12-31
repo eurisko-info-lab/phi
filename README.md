@@ -96,7 +96,9 @@ phi/
 │       ├── phi2scala.phi        # Phi to Scala
 │       └── meta2scala.phi       # Meta to Scala
 ├── examples/                    # Example .phi programs
-│   ├── hello.phi, core.phi, cat.phi, coc.phi, ...
+│   ├── languages/               # Language implementations
+│   ├── type-theory/             # Type theory examples
+│   ├── xforms/                  # Transformation examples
 │   └── tests/                   # Test cases
 ├── docs/                        # Documentation
 ├── ports/                       # Language implementations

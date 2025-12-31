@@ -4,6 +4,9 @@
 
 .PHONY: all build clean test help scala rust rvm phi haskell install install-rvm full
 
+# Enable parallel execution
+MAKEFLAGS += -j3
+
 # Default target
 all: build test
 
@@ -11,7 +14,7 @@ all: build test
 full: clean build test install
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Build targets
+# Build targets (run in parallel with make -j)
 # ─────────────────────────────────────────────────────────────────────────────
 
 build: scala rust haskell
@@ -41,18 +44,18 @@ install-rvm: rust
 	@echo "Make sure ~/bin is in your PATH"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Test targets
+# Test targets (run in parallel with make -j)
 # ─────────────────────────────────────────────────────────────────────────────
 
 test: test-scala test-rust test-haskell
 
-test-scala:
+test-scala: scala
 	cd ports/scala/tools/phi && sbt test
 
-test-rust:
+test-rust: rust
 	cd ports/rust/tools/rvm && cargo test
 
-test-haskell:
+test-haskell: haskell
 	cd ports/haskell/tools/phi && cabal test
 
 # ─────────────────────────────────────────────────────────────────────────────
