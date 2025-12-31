@@ -234,6 +234,79 @@ object Run:
   def runXform(spec: LangSpec, xformName: String, input: Val): Either[String, Val] =
     applyXform(spec, xformName, input).toRight(s"Transform '$xformName' did not match")
 
+  /**
+   * Demonstrate the grammar pipeline with real .phi specs.
+   */
+  def runGrammarDemo(): Unit =
+    // Define a simple arithmetic language using the actual PhiParser syntax
+    val arithSpec = """
+      |sort Expr
+      |
+      |Expr = Lit(value: Int)
+      |     | Add(left: Expr, right: Expr)
+      |     | Mul(left: Expr, right: Expr)
+      |     | Var(name: String)
+      |
+      |grammar expr {
+      |  Lit    <- INT
+      |  Var    <- IDENT
+      |  Add    <- expr "+" expr
+      |  Mul    <- expr "*" expr
+      |}
+      |""".stripMargin
+    
+    Grammar.loadSpec(arithSpec, "arith") match
+      case Right(runner) =>
+        // Parse some expressions
+        val inputs = List("42", "x", "1 + 2")
+        inputs.foreach { input =>
+          runner.parse("expr", input) match
+            case Right(ast) =>
+              val rendered = runner.render(ast)
+              println(s"  parse \"$input\" → ${ast.show}")
+              println(s"    render → \"$rendered\"")
+            case Left(err) =>
+              println(s"  parse \"$input\" → ERROR: $err")
+        }
+      case Left(err) =>
+        println(s"  Failed to load arith spec: $err")
+    
+    println()
+    
+    // Try loading CoC and parsing a term
+    println("  CoC Lambda Calculus:")
+    // Define CoC grammar inline using actual parser syntax
+    val cocSpec = """
+      |sort Term
+      |
+      |Term = Star
+      |     | Box
+      |     | Var(name: String)
+      |     | Pi(x: String, t: Term, body: Term)
+      |     | Lam(x: String, t: Term, body: Term)
+      |     | App(f: Term, a: Term)
+      |
+      |grammar term {
+      |  Star   <- "*"
+      |  Box    <- "□"
+      |  Var    <- IDENT
+      |  Pi     <- "Π" IDENT ":" term "." term
+      |  Lam    <- "λ" IDENT ":" term "." term
+      |  App    <- "(" term term ")"
+      |}
+      |""".stripMargin
+    
+    Grammar.loadSpec(cocSpec, "coc") match
+      case Right(runner) =>
+        val terms = List("*", "x", "λx:*. x", "(f x)")
+        terms.foreach { input =>
+          runner.parse("term", input) match
+            case Right(ast) => println(s"    parse \"$input\" → ${ast.show}")
+            case Left(err) => println(s"    parse \"$input\" → ERROR: $err")
+        }
+      case Left(err) =>
+        println(s"    Failed to load coc spec: $err")
+
   // ═══════════════════════════════════════════════════════════════════════════
   // SECTION 3: Demo Runner
   // ═══════════════════════════════════════════════════════════════════════════
@@ -286,6 +359,11 @@ object Run:
     val h2 = Hash.of(Examples.tree)
     println(s"Hash(expr): ${h1.value}")
     println(s"Hash(tree): ${h2.value}")
+    println()
+    
+    // 6. Grammar Pipeline - Parse using .phi specs!
+    println("─── Grammar Pipeline ───")
+    runGrammarDemo()
     println()
     
     println("═══════════════════════════════════════════════════════════════")

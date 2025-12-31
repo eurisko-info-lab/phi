@@ -1519,3 +1519,102 @@ class ExampleFileLauncherSpec extends munit.FunSuite:
     println(s"  Test xforms found: $totalTests")
     println("═══════════════════════════════════════════════════════════════\n")
   }
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 20: Integration Tests - Full Pipeline
+// ═══════════════════════════════════════════════════════════════════════════
+
+class PipelineIntegrationSpec extends munit.FunSuite:
+  import Core.*
+  import Core.Val.*
+  import Lang.*
+  import Grammar.*
+  import Meta.*
+  import Meta.Expr.*
+  
+  test("LangRunner parses simple arithmetic") {
+    val spec = """
+      sort Expr
+      Expr = Lit(v: Int) | Var(n: String)
+      grammar expr {
+        Lit <- INT
+        Var <- IDENT
+      }
+    """
+    Grammar.loadSpec(spec, "test") match
+      case Right(runner) =>
+        assertEquals(runner.parse("expr", "42"), Right(VCon("Lit", List(VInt(42)))))
+        assertEquals(runner.parse("expr", "x"), Right(VCon("Var", List(VStr("x")))))
+      case Left(err) => fail(s"Spec error: $err")
+  }
+  
+  test("LangRunner parses CoC terms") {
+    val spec = """
+      sort Term
+      Term = Star | Var(n: String) | Lam(x: String, t: Term, b: Term)
+      grammar term {
+        Star <- "*"
+        Var <- IDENT
+        Lam <- "λ" IDENT ":" term "." term
+      }
+    """
+    Grammar.loadSpec(spec, "coc") match
+      case Right(runner) =>
+        assertEquals(runner.parse("term", "*"), Right(VCon("Star", Nil)))
+        assertEquals(runner.parse("term", "x"), Right(VCon("Var", List(VStr("x")))))
+        val lamResult = runner.parse("term", "λx:*. x")
+        assert(lamResult.isRight, s"Parse failed: $lamResult")
+        lamResult.foreach { ast =>
+          assertEquals(ast, VCon("Lam", List(VStr("x"), VCon("Star", Nil), VCon("Var", List(VStr("x"))))))
+        }
+      case Left(err) => fail(s"Spec error: $err")
+  }
+  
+  test("LangRunner round-trips terms") {
+    val spec = """
+      sort Term
+      Term = Var(n: String) | App(f: Term, a: Term)
+      grammar term {
+        Var <- IDENT
+        App <- "(" term term ")"
+      }
+    """
+    Grammar.loadSpec(spec, "test") match
+      case Right(runner) =>
+        val input = "( f x )"
+        runner.parse("term", input) match
+          case Right(ast) =>
+            val rendered = runner.render(ast)
+            val reparsed = runner.parse("term", rendered)
+            assertEquals(reparsed, Right(ast))
+          case Left(err) => fail(s"Parse error: $err")
+      case Left(err) => fail(s"Spec error: $err")
+  }
+  
+  test("full pipeline: parse → transform → render") {
+    val spec = """
+      sort Expr
+      Expr = Lit(v: Int) | Add(l: Expr, r: Expr)
+      grammar expr {
+        Lit <- INT
+        Add <- "(" expr "+" expr ")"
+      }
+      xform simplify : Expr -> Expr {
+        Add(Lit(0), e) => e
+      }
+    """
+    Grammar.loadSpec(spec, "test") match
+      case Right(runner) =>
+        // Parse
+        runner.parse("expr", "( 0 + 42 )") match
+          case Right(ast) =>
+            assertEquals(ast, VCon("Add", List(VCon("Lit", List(VInt(0))), VCon("Lit", List(VInt(42))))))
+            // Transform
+            runner.transform("simplify", ast) match
+              case Right(simplified) =>
+                assertEquals(simplified, VCon("Lit", List(VInt(42))))
+                // Render
+                assertEquals(runner.render(simplified), "42")
+              case Left(err) => fail(s"Transform error: $err")
+          case Left(err) => fail(s"Parse error: $err")
+      case Left(err) => fail(s"Spec error: $err")
+  }

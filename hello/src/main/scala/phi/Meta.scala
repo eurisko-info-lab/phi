@@ -159,6 +159,9 @@ object Meta:
     case EIf(cond: Expr, thenE: Expr, elseE: Expr)  // Conditional
     case EApp(func: Expr, arg: Expr)            // Function application
     case ELam(param: String, body: Expr)        // Lambda abstraction
+    case EParse(sort: String, input: String)    // Parse using grammar
+    case EXform(xform: String, expr: Expr)      // Apply transform
+    case ENorm(strategy: String, expr: Expr)    // Normalize with strategy
     
     /**
      * Evaluate this expression in an environment.
@@ -208,6 +211,42 @@ object Meta:
       case ELam(param, body) =>
         // Return a closure representation
         VCon("Lambda", List(VStr(param), VStr(body.show)))
+      
+      case EParse(sort, input) =>
+        // Parse using the runner from environment
+        env.lookup("__runner__") match
+          case Some(VCon("Runner", List(VStr(specContent)))) =>
+            Grammar.loadSpec(specContent) match
+              case Right(runner) => runner.parse(sort, input) match
+                case Right(v) => v
+                case Left(err) => throw new Error(s"Parse error: $err")
+              case Left(err) => throw new Error(s"Spec error: $err")
+          case _ =>
+            throw new Error("No __runner__ in environment for parse")
+      
+      case EXform(xform, expr) =>
+        val v = expr.eval(env)
+        env.lookup("__runner__") match
+          case Some(VCon("Runner", List(VStr(specContent)))) =>
+            Grammar.loadSpec(specContent) match
+              case Right(runner) => runner.transform(xform, v) match
+                case Right(result) => result
+                case Left(err) => throw new Error(s"Transform error: $err")
+              case Left(err) => throw new Error(s"Spec error: $err")
+          case _ =>
+            throw new Error("No __runner__ in environment for xform")
+      
+      case ENorm(strategy, expr) =>
+        val v = expr.eval(env)
+        env.lookup("__runner__") match
+          case Some(VCon("Runner", List(VStr(specContent)))) =>
+            Grammar.loadSpec(specContent) match
+              case Right(runner) => runner.normalize(strategy, v) match
+                case Right(result) => result
+                case Left(err) => throw new Error(s"Normalize error: $err")
+              case Left(err) => throw new Error(s"Spec error: $err")
+          case _ =>
+            throw new Error("No __runner__ in environment for normalize")
     
     /** Safe evaluation returning Result */
     def evalSafe(env: Env): Result[Val] =
@@ -226,6 +265,9 @@ object Meta:
       case EIf(c, t, e) => s"if ${c.show} then ${t.show} else ${e.show}"
       case EApp(f, a) => s"(${f.show} ${a.show})"
       case ELam(p, b) => s"\\$p -> ${b.show}"
+      case EParse(s, i) => s"parse $s \"$i\""
+      case EXform(x, e) => s"xform $x (${e.show})"
+      case ENorm(s, e) => s"normalize $s (${e.show})"
 
   export Expr.*
 
