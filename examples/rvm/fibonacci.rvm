@@ -1,0 +1,36 @@
+; RosettaVM Fibonacci Benchmark
+; Computes fibonacci numbers recursively
+
+fn fib(n) {
+    load 0          ; n
+    push 2
+    lt              ; n < 2?
+    jf recurse
+    
+    ; Base case: return n
+    load 0
+    ret
+
+recurse:
+    ; fib(n-1)
+    load 0
+    push 1
+    sub
+    call fib
+    
+    ; fib(n-2)
+    load 0
+    push 2
+    sub
+    call fib
+    
+    ; fib(n-1) + fib(n-2)
+    add
+    ret
+}
+
+fn main() {
+    push 35         ; compute fib(35) = 9227465
+    call fib
+    halt
+}

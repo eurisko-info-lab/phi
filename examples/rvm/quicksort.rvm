@@ -1,0 +1,149 @@
+; RosettaVM Quicksort Benchmark
+; Sorts a list using quicksort algorithm
+
+; partition(list, pivot) -> (less, greater)
+fn partition(xs, pivot) {
+    load 0          ; xs
+    isnil
+    jf cont
+    
+    ; Base case: empty list returns ([], [])
+    push nil
+    push nil
+    tuple 2
+    ret
+
+cont:
+    ; Get head and tail
+    load 0
+    head            ; x = head(xs)
+    load 0
+    tail            ; rest = tail(xs)
+    
+    ; Recursively partition rest
+    store 2         ; rest -> local 2
+    load 2
+    load 1          ; pivot
+    call partition  ; (less, greater) for rest
+    
+    ; Unpack result
+    dup
+    getfield 0      ; less
+    swap
+    getfield 1      ; greater
+    
+    ; Compare x with pivot
+    load 0
+    head            ; x again
+    load 1          ; pivot
+    lt              ; x < pivot?
+    jf add_to_greater
+    
+    ; x < pivot: cons x to less
+    swap            ; [greater, less]
+    load 0
+    head
+    swap
+    cons            ; x :: less
+    swap            ; [less', greater]
+    tuple 2
+    ret
+
+add_to_greater:
+    ; x >= pivot: cons x to greater
+    load 0
+    head
+    swap
+    cons            ; x :: greater
+    tuple 2
+    ret
+}
+
+; quicksort(list) -> sorted list
+fn quicksort(xs) {
+    load 0
+    isnil
+    jf has_elements
+    
+    ; Empty list
+    push nil
+    ret
+
+has_elements:
+    load 0
+    tail
+    isnil
+    jf multiple
+    
+    ; Single element
+    load 0
+    ret
+
+multiple:
+    ; pivot = head(xs)
+    load 0
+    head
+    store 1         ; pivot -> local 1
+    
+    ; (less, greater) = partition(tail(xs), pivot)
+    load 0
+    tail
+    load 1
+    call partition
+    
+    ; Unpack
+    dup
+    getfield 0      ; less
+    getfield 1      ; greater
+    
+    ; sorted_less = quicksort(less)
+    call quicksort
+    
+    ; sorted_greater = quicksort(greater)
+    swap
+    call quicksort
+    
+    ; result = sorted_less ++ [pivot] ++ sorted_greater
+    load 1          ; pivot
+    push nil
+    cons            ; [pivot]
+    concat          ; sorted_less ++ [pivot]
+    swap
+    concat          ; ... ++ sorted_greater
+    ret
+}
+
+fn main() {
+    ; Create test list [5, 3, 8, 1, 9, 2, 7, 4, 6]
+    push 6
+    push nil
+    cons
+    push 4
+    swap
+    cons
+    push 7
+    swap
+    cons
+    push 2
+    swap
+    cons
+    push 9
+    swap
+    cons
+    push 1
+    swap
+    cons
+    push 8
+    swap
+    cons
+    push 3
+    swap
+    cons
+    push 5
+    swap
+    cons
+    
+    ; Sort it
+    call quicksort
+    halt
+}

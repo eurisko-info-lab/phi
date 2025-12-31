@@ -1,0 +1,186 @@
+; RosettaVM Matrix Multiply Benchmark
+; Simple 2x2 matrix multiplication
+
+; Matrix represented as [[a,b],[c,d]]
+; mat_mul(A, B) computes A * B
+
+fn mat_get(m, row, col) {
+    load 0          ; m
+    load 1          ; row
+    index           ; m[row]
+    load 2          ; col
+    index           ; m[row][col]
+    ret
+}
+
+fn mat_mul_2x2(a, b) {
+    ; Result[0][0] = A[0][0]*B[0][0] + A[0][1]*B[1][0]
+    load 0  ; A
+    push 0
+    push 0
+    call mat_get    ; A[0][0]
+    
+    load 1  ; B
+    push 0
+    push 0
+    call mat_get    ; B[0][0]
+    mul
+    
+    load 0
+    push 0
+    push 1
+    call mat_get    ; A[0][1]
+    
+    load 1
+    push 1
+    push 0
+    call mat_get    ; B[1][0]
+    mul
+    add             ; c00
+    
+    ; Result[0][1] = A[0][0]*B[0][1] + A[0][1]*B[1][1]
+    load 0
+    push 0
+    push 0
+    call mat_get
+    load 1
+    push 0
+    push 1
+    call mat_get
+    mul
+    
+    load 0
+    push 0
+    push 1
+    call mat_get
+    load 1
+    push 1
+    push 1
+    call mat_get
+    mul
+    add             ; c01
+    
+    ; Result[1][0] = A[1][0]*B[0][0] + A[1][1]*B[1][0]
+    load 0
+    push 1
+    push 0
+    call mat_get
+    load 1
+    push 0
+    push 0
+    call mat_get
+    mul
+    
+    load 0
+    push 1
+    push 1
+    call mat_get
+    load 1
+    push 1
+    push 0
+    call mat_get
+    mul
+    add             ; c10
+    
+    ; Result[1][1] = A[1][0]*B[0][1] + A[1][1]*B[1][1]
+    load 0
+    push 1
+    push 0
+    call mat_get
+    load 1
+    push 0
+    push 1
+    call mat_get
+    mul
+    
+    load 0
+    push 1
+    push 1
+    call mat_get
+    load 1
+    push 1
+    push 1
+    call mat_get
+    mul
+    add             ; c11
+    
+    ; Build result matrix [[c00,c01],[c10,c11]]
+    ; Stack: c00 c01 c10 c11
+    list 2          ; [c10, c11]
+    rot
+    rot
+    list 2          ; [c00, c01]
+    swap
+    list 2          ; [[c00,c01], [c10,c11]]
+    ret
+}
+
+; Matrix power by repeated squaring
+fn mat_pow(m, n) {
+    load 1          ; n
+    push 0
+    eq
+    jf not_zero
+    
+    ; n == 0: return identity
+    push 1
+    push 0
+    list 2
+    push 0
+    push 1
+    list 2
+    list 2
+    ret
+
+not_zero:
+    load 1
+    push 1
+    eq
+    jf recurse
+    
+    ; n == 1: return m
+    load 0
+    ret
+
+recurse:
+    ; Recursive case
+    load 0
+    load 0
+    call mat_mul_2x2    ; m * m
+    
+    load 1
+    push 2
+    div                 ; n / 2
+    call mat_pow        ; mat_pow(m*m, n/2)
+    
+    ; If n is odd, multiply by m once more
+    load 1
+    push 2
+    mod
+    push 0
+    eq
+    jf multiply_extra
+    ret
+
+multiply_extra:
+    load 0
+    call mat_mul_2x2
+    ret
+}
+
+fn main() {
+    ; Compute [[1,1],[1,0]]^10 for Fibonacci matrix
+    push 1
+    push 1
+    list 2
+    push 1
+    push 0
+    list 2
+    list 2          ; [[1,1],[1,0]]
+    
+    push 10
+    call mat_pow
+    
+    ; Result[0][0] = fib(11), Result[0][1] = fib(10)
+    halt
+}
