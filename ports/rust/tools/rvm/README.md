@@ -1,164 +1,103 @@
 # RosettaVM
 
-A content-addressed virtual machine implemented in Rust.
+A content-addressed virtual machine with CPU and GPU backends.
 
-## Overview
+## What Is It?
 
-RosettaVM is a stack-based VM inspired by [Unison's](https://www.unison-lang.org/) content-addressed code model:
+RosettaVM is a stack-based VM where code is identified by its cryptographic hash, not by name or version. Same code = same hash. Always.
 
-- **Content-addressed**: Every function, term, and type is identified by its BLAKE3 hash
-- **Names are aliases**: Names resolve to hashes, eliminating versioning problems
-- **Portable**: The same code hash runs identically everywhere
-- **Stack-based**: Simple, efficient execution model with closures and ADTs
+**Key Features:**
+- **Content-addressed** — Functions identified by BLAKE3 hash
+- **Multi-backend** — Runs on CPU interpreter or compiles to CUDA
+- **Massively parallel** — 1M independent tasks in 0.3 seconds on GPU
+- **Recursive** — Full recursion support on both CPU and GPU
 
-## Building
+## Quick Start
 
 ```bash
+# Build
 cargo build --release
-```
 
-## Usage
+# Run a program
+rosettavm run program.rvm
 
-```bash
-# Run an assembly file
-rosettavm run examples/hello.rvm
-
-# Interactive REPL
-rosettavm repl
-
-# Hash a file or string
-rosettavm hash "hello world"
-rosettavm hash myfile.rvm
-
-# Evaluate simple expressions
-rosettavm eval 42
-rosettavm eval "[1, 2, 3]"
-
-# Run built-in tests
-rosettavm test
-
-# Compile to CUDA for GPU execution
+# Compile to GPU
 rosettavm cuda program.rvm
-nvcc -o program program.cu && ./program 1000000  # Run 1M parallel tasks
-
-# Run parallel CPU benchmarks
-rosettavm par fib 35
+nvcc -o program program.cu
+./program 1000000  # 1M parallel executions
 ```
 
-## Assembly Language
+## Example
 
-RosettaVM uses a simple assembly syntax:
-
-```
-fn main() {
-    push 42      ; push integer
-    push 8
-    add          ; arithmetic
-    print        ; output
-    halt
-}
-
+```asm
 fn factorial(n) {
-    load 0       ; load argument
-    push 1
-    le           ; compare
-    jf 2         ; conditional jump
-    push 1
-    ret
-    
     load 0
-    dup
+    push 2
+    lt
+    jumpif 8
+    load 0
+    load 0
     push 1
     sub
     call factorial
     mul
     ret
+    push 1
+    ret
+}
+
+fn main() {
+    push 10
+    call factorial
+    halt
 }
 ```
 
-### Instructions
+## Performance
 
-| Category | Instructions |
-|----------|-------------|
-| Stack | `push`, `pop`, `dup`, `swap`, `rot`, `over` |
-| Env | `load N`, `store N` |
-| Arithmetic | `add`, `sub`, `mul`, `div`, `mod`, `neg` |
-| Comparison | `eq`, `ne`, `lt`, `le`, `gt`, `ge` |
-| Boolean | `not`, `and`, `or` |
-| Control | `jump N`, `jt N`, `jf N`, `call`, `ret`, `halt` |
-| Functions | `closure`, `apply`, `applyn N` |
-| Data | `tuple N`, `list N`, `con Type tag N`, `field N` |
-| Lists | `cons`, `head`, `tail`, `isnil`, `len`, `concat` |
-| Strings | `strcat`, `strlen`, `strslice` |
-| Debug | `print`, `typeof`, `assert`, `trace` |
+| Workload | CPU | GPU | Speedup |
+|----------|-----|-----|---------|
+| 1 factorial | 2ms | 308ms | CPU wins |
+| 1,000 factorials | 1.4s | 0.31s | **4.5x** |
+| 1,000,000 factorials | ~23min | 0.32s | **4,375x** |
+
+GPU has ~300ms overhead. After that, 1 task or 1 million takes the same time.
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                         RosettaVM                            │
-├─────────────┬─────────────┬─────────────┬────────────────────┤
-│    Store    │     VM      │   Compiler  │   GPU Backend      │
-│  (codebase) │  (runtime)  │ (expr→code) │   (CUDA/OpenCL)    │
-├─────────────┼─────────────┼─────────────┼────────────────────┤
-│ Hash→Code   │ Stack       │ AST         │ RVM→CUDA codegen   │
-│ Name→Hash   │ Frames      │ CodeBlock   │ Parallel execution │
-│ Hash→Type   │ Environment │             │ Per-thread state   │
-└─────────────┴─────────────┴─────────────┴────────────────────┘
+┌────────────────────────────────────────────────────┐
+│                    RosettaVM                       │
+├────────────┬─────────────┬─────────────────────────┤
+│   Store    │  CPU VM     │      GPU Backend        │
+│            │             │                         │
+│ Hash→Code  │ Stack-based │ RVM→CUDA compilation    │
+│ Name→Hash  │ interpreter │ Per-thread state        │
+│            │ + Rayon     │ Recursive support       │
+└────────────┴─────────────┴─────────────────────────┘
 ```
 
-### Content Addressing
+## Commands
 
-Every piece of code is identified by its hash:
-
-```rust
-let code = vec![Push(42), Halt];
-let block = CodeBlock::new(code);
-let hash = store.add_code(block);  // Returns content hash
-
-// Same code = same hash, always
-let hash2 = store.add_code(CodeBlock::new(vec![Push(42), Halt]));
-assert_eq!(hash, hash2);
-```
-
-Names are just aliases:
-
-```rust
-store.alias("answer", hash);
-store.resolve("answer") == Some(hash)
-```
+| Command | Description |
+|---------|-------------|
+| `run <file>` | Execute on CPU |
+| `cuda <file>` | Compile to CUDA |
+| `par <bench>` | Parallel CPU benchmark |
+| `repl` | Interactive mode |
+| `hash <input>` | Compute BLAKE3 hash |
+| `test` | Run test suite |
 
 ## Modules
 
-| File | Description |
-|------|-------------|
-| `hash.rs` | BLAKE3 content hashing |
-| `value.rs` | Runtime values (Val, Env) |
-| `instr.rs` | Instructions and CodeBlock |
-| `store.rs` | Content-addressed codebase |
-| `vm.rs` | Stack machine execution |
+| File | Purpose |
+|------|---------|
+| `vm.rs` | CPU interpreter |
+| `cuda_codegen.rs` | RVM → CUDA compiler |
+| `parallel.rs` | Multi-threaded CPU (Rayon) |
+| `store.rs` | Content-addressed code storage |
+| `hash.rs` | BLAKE3 hashing |
 | `parse.rs` | Assembly parser |
-| `compile.rs` | Expression compiler |
-| `cuda_codegen.rs` | RVM→CUDA compiler for GPU execution |
-| `parallel.rs` | Multi-threaded CPU execution (Rayon) |
-| `main.rs` | CLI interface |
-
-## Tests
-
-```bash
-cargo test           # Unit tests
-cargo run -- test    # Integration tests
-```
-
-## Relation to Phi/Port
-
-RosettaVM is the bootstrap runtime for the Phi meta-language system:
-
-- **phi.port**: Phi's self-specification in Port syntax
-- **meta.port**: The interpreter/evaluator
-- **rosettavm.port**: The VM specification (what this implements)
-
-With RosettaVM, you can execute code written in Port/Phi without needing the Scala/Haskell implementations.
 
 ## License
 
