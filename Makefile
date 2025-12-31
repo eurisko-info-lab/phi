@@ -2,7 +2,7 @@
 # Φ (Phi) - Algebraic Metaprogramming Framework
 # ═══════════════════════════════════════════════════════════════════════════
 
-.PHONY: all build clean test help scala rust rvm phi haskell install install-rvm full c
+.PHONY: all build clean test help scala rust rvm phi haskell install install-rvm full c cuda
 
 # Enable parallel execution
 MAKEFLAGS += -j3
@@ -35,6 +35,16 @@ haskell:
 c:
 	@mkdir -p build
 	gcc -O3 -Wall -Wextra -o build/sum examples/c/sum.c
+
+# CUDA HVM examples (optional, requires nvcc)
+cuda:
+	@mkdir -p build
+	@if command -v nvcc >/dev/null 2>&1; then \
+		echo "Building CUDA targets..."; \
+		nvcc -O3 -o build/sum_gpu examples/cuda/sum.cu; \
+	else \
+		echo "nvcc not found, skipping CUDA build"; \
+	fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Install targets
@@ -75,6 +85,13 @@ run-rvm:
 
 run-sum:
 	./build/sum 1000000
+
+run-sum-gpu:
+	@if [ -f build/sum_gpu ]; then \
+		./build/sum_gpu 1000000; \
+	else \
+		echo "CUDA binary not found. Run 'make cuda' first."; \
+	fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Clean targets

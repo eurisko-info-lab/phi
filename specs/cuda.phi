@@ -1,0 +1,395 @@
+// =============================================================================
+// CUDA Language Specification for HVM
+// =============================================================================
+// Describes CUDA constructs needed for GPU-parallel HVM execution.
+//
+// HVM maps naturally to GPUs because:
+// - Interactions are independent (no data dependencies between active pairs)
+// - Massive parallelism: millions of interactions can run simultaneously
+// - Simple memory model: heap of 64-bit terms
+
+language CUDA {
+
+  // ===========================================================================
+  // CUDA Qualifiers
+  // ===========================================================================
+
+  qualifier __global__    // Kernel function (called from host, runs on device)
+  qualifier __device__    // Device function (called from device)
+  qualifier __host__      // Host function (called from host)
+  qualifier __shared__    // Shared memory (per-block)
+  qualifier __constant__  // Constant memory (read-only, cached)
+
+  // ===========================================================================
+  // Types (matching C spec)
+  // ===========================================================================
+
+  typedef u8  = uint8_t
+  typedef u16 = uint16_t
+  typedef u32 = uint32_t
+  typedef u64 = uint64_t
+  typedef Term = u64
+
+  // ===========================================================================
+  // Term Layout (same as C)
+  // ===========================================================================
+  //
+  // +-----+--------+----------+------------+
+  // | SUB |  TAG   |   EXT    |    VAL     |
+  // +-----+--------+----------+------------+
+  //  1 bit  7 bits   24 bits    32 bits
+
+  __constant__ u32 SUB_SHIFT = 63;
+  __constant__ u32 TAG_SHIFT = 56;
+  __constant__ u32 EXT_SHIFT = 32;
+  __constant__ u32 VAL_SHIFT = 0;
+
+  __constant__ u64 SUB_MASK = 0x1ULL;
+  __constant__ u64 TAG_MASK = 0x7FULL;
+  __constant__ u64 EXT_MASK = 0xFFFFFFULL;
+  __constant__ u64 VAL_MASK = 0xFFFFFFFFULL;
+
+  // ===========================================================================
+  // Tags
+  // ===========================================================================
+
+  __constant__ u8 APP = 0;
+  __constant__ u8 VAR = 1;
+  __constant__ u8 LAM = 2;
+  __constant__ u8 DP0 = 3;
+  __constant__ u8 DP1 = 4;
+  __constant__ u8 SUP = 5;
+  __constant__ u8 ERA = 11;
+  __constant__ u8 NUM = 30;
+  __constant__ u8 OP2 = 33;
+
+  // ===========================================================================
+  // GPU Memory Layout
+  // ===========================================================================
+  //
+  // Global Memory:
+  //   HEAP[0..HEAP_CAP]     - Term storage
+  //   REDEX[0..REDEX_CAP]   - Active pairs (redexes) to reduce
+  //   BOOK[0..BOOK_CAP]     - Definition table
+  //
+  // Shared Memory (per block):
+  //   Local redex queue for work distribution
+  //
+  // Registers (per thread):
+  //   Current term being reduced
+
+  struct GPU_State {
+    Term* heap;           // Global heap
+    u64* heap_next;       // Atomic allocation pointer
+    
+    Term* redex_a;        // Redex left terms
+    Term* redex_b;        // Redex right terms
+    u64* redex_count;     // Number of active redexes
+    
+    u32* book;            // Definition locations
+    
+    u64* interactions;    // Interaction counter (atomic)
+  }
+
+  // ===========================================================================
+  // Atomic Heap Operations
+  // ===========================================================================
+
+  __device__ fn heap_alloc(state: GPU_State*, size: u64) -> u64 {
+    return atomicAdd(state->heap_next, size);
+  }
+
+  __device__ fn heap_read(state: GPU_State*, loc: u32) -> Term {
+    return state->heap[loc];
+  }
+
+  __device__ fn heap_write(state: GPU_State*, loc: u32, term: Term) -> void {
+    state->heap[loc] = term;
+  }
+
+  __device__ fn heap_cas(state: GPU_State*, loc: u32, expected: Term, desired: Term) -> Term {
+    return atomicCAS(&state->heap[loc], expected, desired);
+  }
+
+  // ===========================================================================
+  // Redex Queue Operations
+  // ===========================================================================
+
+  __device__ fn redex_push(state: GPU_State*, a: Term, b: Term) -> void {
+    u64 idx = atomicAdd(state->redex_count, 1);
+    state->redex_a[idx] = a;
+    state->redex_b[idx] = b;
+  }
+
+  __device__ fn redex_pop(state: GPU_State*, idx: u64, a: Term*, b: Term*) -> bool {
+    u64 count = *state->redex_count;
+    if (idx >= count) return false;
+    *a = state->redex_a[idx];
+    *b = state->redex_b[idx];
+    return true;
+  }
+
+  // ===========================================================================
+  // Term Constructors (Device)
+  // ===========================================================================
+
+  __device__ fn term_new(sub: u8, tag: u8, ext: u32, val: u32) -> Term {
+    return ((u64)sub << SUB_SHIFT) |
+           ((u64)tag << TAG_SHIFT) |
+           ((u64)ext << EXT_SHIFT) |
+           ((u64)val);
+  }
+
+  __device__ fn term_tag(t: Term) -> u8 {
+    return (u8)((t >> TAG_SHIFT) & TAG_MASK);
+  }
+
+  __device__ fn term_ext(t: Term) -> u32 {
+    return (u32)((t >> EXT_SHIFT) & EXT_MASK);
+  }
+
+  __device__ fn term_val(t: Term) -> u32 {
+    return (u32)(t & VAL_MASK);
+  }
+
+  __device__ fn term_sub(t: Term) -> u8 {
+    return (u8)((t >> SUB_SHIFT) & SUB_MASK);
+  }
+
+  // ===========================================================================
+  // Interaction Kernel
+  // ===========================================================================
+  // Each thread processes one redex (active pair).
+  // New redexes are pushed to the global queue for the next iteration.
+
+  __global__ fn interact_kernel(state: GPU_State*) {
+    u64 idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    Term a, b;
+    if (!redex_pop(state, idx, &a, &b)) return;
+    
+    u8 tag_a = term_tag(a);
+    u8 tag_b = term_tag(b);
+    
+    // Dispatch based on (tag_a, tag_b) pair
+    switch (tag_a) {
+      case APP: interact_app(state, a, b); break;
+      case DP0:
+      case DP1: interact_dup(state, a, b); break;
+      case OP2: interact_op2(state, a, b); break;
+    }
+    
+    atomicAdd(state->interactions, 1);
+  }
+
+  // ===========================================================================
+  // APP Interactions
+  // ===========================================================================
+
+  __device__ fn interact_app(state: GPU_State*, app: Term, arg: Term) {
+    u32 app_loc = term_val(app);
+    Term fun = heap_read(state, app_loc);
+    
+    switch (term_tag(fun)) {
+      // APP-LAM: Beta reduction
+      case LAM: {
+        u32 lam_loc = term_val(fun);
+        // Substitute: write arg to lambda's variable location
+        heap_write(state, lam_loc, term_sub_set(arg, 1));
+        // Continue with body (push new redex if needed)
+        Term body = heap_read(state, lam_loc);
+        // Body becomes the result - link back
+        heap_write(state, app_loc, body);
+        break;
+      }
+      
+      // APP-ERA: Erasure
+      case ERA: {
+        heap_write(state, app_loc, term_new(0, ERA, 0, 0));
+        break;
+      }
+      
+      // APP-SUP: Clone argument, distribute
+      case SUP: {
+        u32 sup_loc = term_val(fun);
+        u32 lab = term_ext(fun);
+        Term f = heap_read(state, sup_loc);
+        Term g = heap_read(state, sup_loc + 1);
+        
+        // Allocate new nodes
+        u64 base = heap_alloc(state, 4);
+        
+        // Create dup for argument
+        heap_write(state, base, arg);
+        Term dp0 = term_new(0, DP0, lab, base);
+        Term dp1 = term_new(0, DP1, lab, base);
+        
+        // Create two applications
+        heap_write(state, base + 2, f);
+        heap_write(state, base + 3, dp0);
+        Term app0 = term_new(0, APP, 0, base + 2);
+        
+        // Push both as new redexes
+        redex_push(state, app0, dp0);
+        
+        // Result is superposition of results
+        heap_write(state, sup_loc, app0);
+        // Second app reuses original location
+        heap_write(state, app_loc, g);
+        heap_write(state, app_loc + 1, dp1);
+        break;
+      }
+    }
+  }
+
+  // ===========================================================================
+  // DUP Interactions
+  // ===========================================================================
+
+  __device__ fn interact_dup(state: GPU_State*, dup: Term, val: Term) {
+    u8 side = (term_tag(dup) == DP0) ? 0 : 1;
+    u32 loc = term_val(dup);
+    u32 lab = term_ext(dup);
+    
+    switch (term_tag(val)) {
+      // DUP-SUP same label: Extract
+      case SUP: {
+        u32 sup_lab = term_ext(val);
+        if (lab == sup_lab) {
+          u32 sup_loc = term_val(val);
+          Term a = heap_read(state, sup_loc);
+          Term b = heap_read(state, sup_loc + 1);
+          // Substitute other side
+          heap_write(state, loc, term_sub_set(side == 0 ? b : a, 1));
+          // Return this side
+          heap_write(state, loc, side == 0 ? a : b);
+        } else {
+          // DUP-SUP different label: Commute
+          u32 sup_loc = term_val(val);
+          Term a = heap_read(state, sup_loc);
+          Term b = heap_read(state, sup_loc + 1);
+          
+          u64 base = heap_alloc(state, 4);
+          heap_write(state, base, a);
+          heap_write(state, base + 2, b);
+          
+          Term a0 = term_new(0, DP0, lab, base);
+          Term a1 = term_new(0, DP1, lab, base);
+          Term b0 = term_new(0, DP0, lab, base + 2);
+          Term b1 = term_new(0, DP1, lab, base + 2);
+          
+          Term sup0 = term_new(0, SUP, sup_lab, base);
+          Term sup1 = term_new(0, SUP, sup_lab, base + 2);
+          
+          heap_write(state, base, a0);
+          heap_write(state, base + 1, b0);
+          heap_write(state, base + 2, a1);
+          heap_write(state, base + 3, b1);
+          
+          heap_write(state, loc, term_sub_set(side == 0 ? sup1 : sup0, 1));
+        }
+        break;
+      }
+      
+      // DUP-ERA: Duplicate erasure
+      case ERA: {
+        heap_write(state, loc, term_sub_set(term_new(0, ERA, 0, 0), 1));
+        break;
+      }
+      
+      // DUP-NUM: Duplicate number
+      case NUM: {
+        heap_write(state, loc, term_sub_set(val, 1));
+        break;
+      }
+      
+      // DUP-LAM: Duplicate lambda
+      case LAM: {
+        u32 lam_loc = term_val(val);
+        Term body = heap_read(state, lam_loc);
+        
+        u64 base = heap_alloc(state, 4);
+        
+        // Create two new lambdas
+        Term x0 = term_new(0, VAR, 0, base);
+        Term x1 = term_new(0, VAR, 0, base + 1);
+        Term x_sup = term_new(0, SUP, lab, base);
+        heap_write(state, base, x0);
+        heap_write(state, base + 1, x1);
+        
+        // Substitute original var with superposition
+        heap_write(state, lam_loc, term_sub_set(x_sup, 1));
+        
+        // Duplicate body
+        heap_write(state, base + 2, body);
+        Term b0 = term_new(0, DP0, lab, base + 2);
+        Term b1 = term_new(0, DP1, lab, base + 2);
+        
+        Term lam0 = term_new(0, LAM, 0, base);
+        Term lam1 = term_new(0, LAM, 0, base + 1);
+        
+        heap_write(state, base, b0);
+        heap_write(state, base + 1, b1);
+        
+        heap_write(state, loc, term_sub_set(side == 0 ? lam1 : lam0, 1));
+        break;
+      }
+    }
+  }
+
+  // ===========================================================================
+  // OP2 Interactions
+  // ===========================================================================
+
+  __device__ fn interact_op2(state: GPU_State*, op2: Term, val: Term) {
+    u32 op2_loc = term_val(op2);
+    u8 op = term_ext(op2);
+    Term x = heap_read(state, op2_loc);
+    Term y = heap_read(state, op2_loc + 1);
+    
+    // Both operands must be numbers
+    if (term_tag(x) == NUM && term_tag(y) == NUM) {
+      u32 x_val = term_val(x);
+      u32 y_val = term_val(y);
+      u32 result;
+      
+      switch (op) {
+        case 0:  result = x_val + y_val; break;  // ADD
+        case 1:  result = x_val - y_val; break;  // SUB
+        case 2:  result = x_val * y_val; break;  // MUL
+        case 3:  result = y_val ? x_val / y_val : 0; break;  // DIV
+        case 11: result = x_val == y_val ? 1 : 0; break;  // EQ
+        default: result = 0;
+      }
+      
+      heap_write(state, op2_loc, term_new(0, NUM, 0, result));
+    }
+  }
+
+  // ===========================================================================
+  // Main Reduction Loop (Host)
+  // ===========================================================================
+
+  __host__ fn reduce(state: GPU_State*) -> u64 {
+    u64 total_interactions = 0;
+    
+    while (*state->redex_count > 0) {
+      u64 count = *state->redex_count;
+      
+      // Launch kernel: one thread per redex
+      u32 threads = 256;
+      u32 blocks = (count + threads - 1) / threads;
+      
+      interact_kernel<<<blocks, threads>>>(state);
+      cudaDeviceSynchronize();
+      
+      total_interactions += count;
+      
+      // Swap redex buffers for next iteration
+      // (Double-buffering for efficiency)
+    }
+    
+    return total_interactions;
+  }
+
+}
