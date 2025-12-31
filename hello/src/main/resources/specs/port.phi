@@ -308,6 +308,436 @@ language Port {
   rule HyloFusion {
     compose(Cata(alg), Ana(coalg)) ⇌ Hylo(alg, coalg)
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SECTION 10: Grammar (Port's Concrete Syntax)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // A port specification file
+  grammar portSpec {
+    "port" name:IDENT "{" modules:module* "}"  => PortSpec(name, modules, [])
+  }
+
+  grammar module {
+    "module" name:IDENT "{" 
+      exports:exportClause?
+      imports:importClause*
+      decls:decl*
+    "}"  => Module(name, exports, imports, decls)
+  }
+
+  grammar exportClause {
+    "export" "(" items:exportItem,* ")"  => items
+    "export" "*"                          => [ExportAll]
+  }
+
+  grammar exportItem {
+    "type" name:IDENT   => ExportType(name)
+    "func" name:IDENT   => ExportFunc(name)
+    name:IDENT          => ExportFunc(name)
+  }
+
+  grammar importClause {
+    "import" module:IDENT                        => ImportModule(module)
+    "import" module:IDENT "as" alias:IDENT       => ImportQualified(module, alias)
+  }
+
+  // Type declarations
+  grammar decl {
+    // Sum type: type Color = Red | Green | Blue
+    "type" name:IDENT params:typeParams? "=" ctors:ctorDef|+  
+      => SumType(name, params, ctors)
+    
+    // Product type: record Point { x: Int, y: Int }
+    "record" name:IDENT params:typeParams? "{" fields:fieldDef,* "}"  
+      => ProductType(name, params, fields)
+    
+    // Newtype: newtype UserId = Int
+    "newtype" name:IDENT params:typeParams? "=" wrapped:type  
+      => Newtype(name, params, wrapped)
+    
+    // Type alias: alias IntList = List[Int]
+    "alias" name:IDENT params:typeParams? "=" target:type  
+      => TypeAlias(name, params, target)
+    
+    // Function: func add(x: Int, y: Int): Int = x + y
+    "func" name:IDENT "(" params:paramDef,* ")" ":" ret:type "=" body:expr  
+      => Func(name, params, ret, BodyExpr(body))
+    
+    // Function with match: func eval(e: Expr): Val = match e { ... }
+    "func" name:IDENT "(" params:paramDef,* ")" ":" ret:type "=" "match" scrut:IDENT "{" cases:matchCase* "}"
+      => Func(name, params, ret, BodyMatch(scrut, cases))
+  }
+
+  grammar typeParams {
+    "[" params:IDENT,+ "]"  => map(TypeParam, params)
+  }
+
+  grammar ctorDef {
+    name:IDENT                              => Constructor(name, [])
+    name:IDENT "(" fields:fieldDef,* ")"    => Constructor(name, fields)
+  }
+
+  grammar fieldDef {
+    name:IDENT ":" typ:type   => NamedField(name, typ)
+    typ:type                  => AnonField(typ)
+  }
+
+  grammar paramDef {
+    name:IDENT ":" typ:type             => Param(name, typ)
+    "implicit" name:IDENT ":" typ:type  => ImplicitParam(name, typ)
+  }
+
+  // Types
+  grammar type {
+    "Int"                           => TInt
+    "String"                        => TString
+    "Bool"                          => TBool
+    "()"                            => TUnit
+    "[" elem:type "]"               => TList(elem)
+    "Option" "[" elem:type "]"      => TOption(elem)
+    "(" elems:type,+ ")"            => TTuple(elems)
+    from:typeAtom "->" to:type      => TFunc(from, to)
+    ctor:IDENT "[" args:type,+ "]"  => TApp(TRef(ctor), args)
+    name:IDENT                      => TRef(name)
+  }
+
+  grammar typeAtom {
+    "(" t:type ")"  => t
+    name:IDENT      => TRef(name)
+  }
+
+  // Expressions
+  grammar expr {
+    n:INT                                   => EInt(n)
+    s:STRING                                => EString(s)
+    "true"                                  => EBool(true)
+    "false"                                 => EBool(false)
+    "\\" param:IDENT "->" body:expr         => ELam(param, body)
+    "let" name:IDENT "=" val:expr "in" body:expr  => ELet(name, val, body)
+    "match" e:expr "{" cases:matchCase* "}" => EMatch(e, cases)
+    "[" elems:expr,* "]"                    => EList(elems)
+    "(" elems:expr,+ ")"                    => ETuple(elems)
+    ctor:UPPER "(" args:expr,* ")"          => ECtor(ctor, args)
+    ctor:UPPER                              => ECtor(ctor, [])
+    func:exprAtom args:exprAtom+            => foldl(EApp, func, args)
+    e:exprAtom                              => e
+  }
+
+  grammar exprAtom {
+    "(" e:expr ")"    => e
+    name:IDENT        => EVar(name)
+    n:INT             => EInt(n)
+    s:STRING          => EString(s)
+  }
+
+  grammar matchCase {
+    pat:pattern "=>" body:expr              => MatchCase(pat, None, body)
+    pat:pattern "if" guard:expr "=>" body:expr  => MatchCase(pat, Some(guard), body)
+  }
+
+  grammar pattern {
+    "_"                                 => PWild
+    name:IDENT "@" pat:pattern          => PAs(name, pat)
+    ctor:UPPER "(" args:pattern,* ")"   => PCtor(ctor, args)
+    ctor:UPPER                          => PCtor(ctor, [])
+    n:INT                               => PLit(EInt(n))
+    s:STRING                            => PLit(EString(s))
+    name:IDENT                          => PVar(name)
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SECTION 11: Interpreter (Port's Semantics)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Runtime values
+  sort Val
+  constructor VInt : n:Int → Val
+  constructor VStr : s:String → Val
+  constructor VBool : b:Bool → Val
+  constructor VCon : name:String → args:Val* → Val
+  constructor VList : elems:Val* → Val
+  constructor VTuple : elems:Val* → Val
+  constructor VClosure : param:String → body:Expr → env:Env → Val
+  constructor VBuiltin : name:String → Val
+
+  // Environment
+  sort Env
+  constructor EmptyEnv : Env
+  constructor ExtendEnv : name:String → val:Val → rest:Env → Env
+
+  // Type environment for checking
+  sort TyEnv
+  constructor EmptyTyEnv : TyEnv
+  constructor ExtendTyEnv : name:String → typ:Type → rest:TyEnv → TyEnv
+
+  // Evaluation
+  xform Eval : (Expr, Env) → Val {
+    // Literals
+    (EInt(n), _)    ↦ VInt(n)
+    (EString(s), _) ↦ VStr(s)
+    (EBool(b), _)   ↦ VBool(b)
+    
+    // Variables - lookup in environment
+    (EVar(name), env) ↦ lookupEnv(name, env)
+    
+    // Constructors
+    (ECtor(name, args), env) ↦ VCon(name, map(\a -> eval(a, env), args))
+    
+    // Lambda - capture environment
+    (ELam(param, body), env) ↦ VClosure(param, body, env)
+    
+    // Application
+    (EApp(func, arg), env) ↦ 
+      let fval = eval(func, env) in
+      let aval = eval(arg, env) in
+      apply(fval, aval)
+    
+    // Let binding
+    (ELet(name, value, body), env) ↦
+      let v = eval(value, env) in
+      eval(body, ExtendEnv(name, v, env))
+    
+    // Let rec (for recursive functions)
+    (ELetRec(name, value, body), env) ↦
+      let recEnv = ExtendEnv(name, VBuiltin("rec"), env) in  // placeholder
+      let v = eval(value, recEnv) in
+      eval(body, ExtendEnv(name, v, env))
+    
+    // Pattern matching
+    (EMatch(scrutinee, cases), env) ↦
+      let sval = eval(scrutinee, env) in
+      evalMatch(sval, cases, env)
+    
+    // Lists
+    (EList(elems), env) ↦ VList(map(\e -> eval(e, env), elems))
+    (EListCons(head, tail), env) ↦ 
+      let h = eval(head, env) in
+      let t = eval(tail, env) in
+      match t {
+        VList(elems) => VList(cons(h, elems))
+        _ => error("cons requires list")
+      }
+    
+    // Tuples
+    (ETuple(elems), env) ↦ VTuple(map(\e -> eval(e, env), elems))
+    (EProj(tuple, index), env) ↦
+      let t = eval(tuple, env) in
+      match t {
+        VTuple(elems) => nth(elems, index)
+        _ => error("projection requires tuple")
+      }
+  }
+
+  // Function application
+  xform Apply : (Val, Val) → Val {
+    (VClosure(param, body, env), arg) ↦ 
+      eval(body, ExtendEnv(param, arg, env))
+    
+    (VBuiltin("add"), VInt(n)) ↦ VBuiltin(concat("add_", show(n)))
+    (VBuiltin(name), VInt(m)) where startsWith(name, "add_") ↦
+      let n = parseIntAfter(name, "add_") in VInt(add(n, m))
+    
+    (VBuiltin("sub"), VInt(n)) ↦ VBuiltin(concat("sub_", show(n)))
+    (VBuiltin(name), VInt(m)) where startsWith(name, "sub_") ↦
+      let n = parseIntAfter(name, "sub_") in VInt(sub(n, m))
+    
+    (VBuiltin("mul"), VInt(n)) ↦ VBuiltin(concat("mul_", show(n)))
+    (VBuiltin(name), VInt(m)) where startsWith(name, "mul_") ↦
+      let n = parseIntAfter(name, "mul_") in VInt(mul(n, m))
+    
+    (VBuiltin("eq"), v1) ↦ VBuiltin(concat("eq_", showVal(v1)))
+    (VBuiltin(name), v2) where startsWith(name, "eq_") ↦
+      VBool(eqVal(parseValAfter(name, "eq_"), v2))
+    
+    (VBuiltin("head"), VList(elems)) ↦ head(elems)
+    (VBuiltin("tail"), VList(elems)) ↦ VList(tail(elems))
+    (VBuiltin("null"), VList(elems)) ↦ VBool(isEmpty(elems))
+    (VBuiltin("length"), VList(elems)) ↦ VInt(length(elems))
+    
+    _ ↦ error("cannot apply non-function")
+  }
+
+  // Environment lookup
+  xform LookupEnv : (String, Env) → Val {
+    (name, EmptyEnv) ↦ lookupBuiltin(name)
+    (name, ExtendEnv(n, v, rest)) ↦
+      if eq(name, n) then v else lookupEnv(name, rest)
+  }
+
+  // Builtin functions
+  xform LookupBuiltin : String → Val {
+    "add"    ↦ VBuiltin("add")
+    "sub"    ↦ VBuiltin("sub")
+    "mul"    ↦ VBuiltin("mul")
+    "div"    ↦ VBuiltin("div")
+    "mod"    ↦ VBuiltin("mod")
+    "eq"     ↦ VBuiltin("eq")
+    "lt"     ↦ VBuiltin("lt")
+    "gt"     ↦ VBuiltin("gt")
+    "not"    ↦ VBuiltin("not")
+    "and"    ↦ VBuiltin("and")
+    "or"     ↦ VBuiltin("or")
+    "head"   ↦ VBuiltin("head")
+    "tail"   ↦ VBuiltin("tail")
+    "cons"   ↦ VBuiltin("cons")
+    "null"   ↦ VBuiltin("null")
+    "length" ↦ VBuiltin("length")
+    "show"   ↦ VBuiltin("show")
+    name     ↦ error(concat("unbound variable: ", name))
+  }
+
+  // Pattern matching evaluation
+  xform EvalMatch : (Val, MatchCase*, Env) → Val {
+    (_, [], _) ↦ error("non-exhaustive pattern match")
+    
+    (sval, [MatchCase(pat, None, body) | rest], env) ↦
+      match tryMatch(pat, sval, env) {
+        Some(newEnv) => eval(body, newEnv)
+        None => evalMatch(sval, rest, env)
+      }
+    
+    (sval, [MatchCase(pat, Some(guard), body) | rest], env) ↦
+      match tryMatch(pat, sval, env) {
+        Some(newEnv) =>
+          match eval(guard, newEnv) {
+            VBool(true) => eval(body, newEnv)
+            _ => evalMatch(sval, rest, env)
+          }
+        None => evalMatch(sval, rest, env)
+      }
+  }
+
+  // Pattern matching
+  xform TryMatch : (Pattern, Val, Env) → Option[Env] {
+    // Wildcard matches anything
+    (PWild, _, env) ↦ Some(env)
+    
+    // Variable binds to value
+    (PVar(name), val, env) ↦ Some(ExtendEnv(name, val, env))
+    
+    // As-pattern binds and continues
+    (PAs(name, pat), val, env) ↦
+      match tryMatch(pat, val, env) {
+        Some(env') => Some(ExtendEnv(name, val, env'))
+        None => None
+      }
+    
+    // Constructor pattern
+    (PCtor(name, pats), VCon(vname, args), env) ↦
+      if eq(name, vname) && eq(length(pats), length(args))
+      then tryMatchAll(pats, args, env)
+      else None
+    
+    // Literal patterns
+    (PLit(EInt(n)), VInt(m), env) ↦ if eq(n, m) then Some(env) else None
+    (PLit(EString(s)), VStr(t), env) ↦ if eq(s, t) then Some(env) else None
+    (PLit(EBool(b)), VBool(c), env) ↦ if eq(b, c) then Some(env) else None
+    
+    // No match
+    _ ↦ None
+  }
+
+  // Match multiple patterns against multiple values
+  xform TryMatchAll : (Pattern*, Val*, Env) → Option[Env] {
+    ([], [], env) ↦ Some(env)
+    ([p | ps], [v | vs], env) ↦
+      match tryMatch(p, v, env) {
+        Some(env') => tryMatchAll(ps, vs, env')
+        None => None
+      }
+    _ ↦ None
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SECTION 12: Type Checking
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  xform TypeCheck : (Expr, TyEnv) → Type {
+    // Literals have known types
+    (EInt(_), _)    ↦ TInt
+    (EString(_), _) ↦ TString
+    (EBool(_), _)   ↦ TBool
+    
+    // Variables looked up in type environment
+    (EVar(name), tenv) ↦ lookupTyEnv(name, tenv)
+    
+    // Lambda: infer or check parameter type
+    (ELam(param, body), tenv) ↦
+      // Would need type annotation or inference here
+      error("lambda requires type annotation")
+    
+    // Application: check function type matches argument
+    (EApp(func, arg), tenv) ↦
+      let funcTy = typeCheck(func, tenv) in
+      let argTy = typeCheck(arg, tenv) in
+      match funcTy {
+        TFunc(paramTy, retTy) =>
+          if typeEq(paramTy, argTy) 
+          then retTy 
+          else error("argument type mismatch")
+        _ => error("applying non-function")
+      }
+    
+    // Let: extend environment with binding
+    (ELet(name, value, body), tenv) ↦
+      let valTy = typeCheck(value, tenv) in
+      typeCheck(body, ExtendTyEnv(name, valTy, tenv))
+    
+    // Lists: all elements must have same type
+    (EList([]), _) ↦ TList(TVar("a"))  // polymorphic empty list
+    (EList([e | es]), tenv) ↦
+      let elemTy = typeCheck(e, tenv) in
+      let _ = checkAllSame(es, elemTy, tenv) in
+      TList(elemTy)
+    
+    // Tuples: product of element types
+    (ETuple(elems), tenv) ↦
+      TTuple(map(\e -> typeCheck(e, tenv), elems))
+  }
+
+  xform LookupTyEnv : (String, TyEnv) → Type {
+    (name, EmptyTyEnv) ↦ lookupBuiltinType(name)
+    (name, ExtendTyEnv(n, t, rest)) ↦
+      if eq(name, n) then t else lookupTyEnv(name, rest)
+  }
+
+  xform LookupBuiltinType : String → Type {
+    "add" ↦ TFunc(TInt, TFunc(TInt, TInt))
+    "sub" ↦ TFunc(TInt, TFunc(TInt, TInt))
+    "mul" ↦ TFunc(TInt, TFunc(TInt, TInt))
+    "div" ↦ TFunc(TInt, TFunc(TInt, TInt))
+    "eq"  ↦ TFunc(TVar("a"), TFunc(TVar("a"), TBool))
+    "lt"  ↦ TFunc(TInt, TFunc(TInt, TBool))
+    "gt"  ↦ TFunc(TInt, TFunc(TInt, TBool))
+    "not" ↦ TFunc(TBool, TBool)
+    "head" ↦ TFunc(TList(TVar("a")), TVar("a"))
+    "tail" ↦ TFunc(TList(TVar("a")), TList(TVar("a")))
+    "cons" ↦ TFunc(TVar("a"), TFunc(TList(TVar("a")), TList(TVar("a"))))
+    "null" ↦ TFunc(TList(TVar("a")), TBool)
+    "length" ↦ TFunc(TList(TVar("a")), TInt)
+    name ↦ error(concat("unknown type for: ", name))
+  }
+
+  // Type equality (structural)
+  xform TypeEq : (Type, Type) → Bool {
+    (TInt, TInt) ↦ true
+    (TString, TString) ↦ true
+    (TBool, TBool) ↦ true
+    (TUnit, TUnit) ↦ true
+    (TRef(a), TRef(b)) ↦ eq(a, b)
+    (TVar(a), TVar(b)) ↦ eq(a, b)
+    (TVar(_), _) ↦ true  // type variable matches anything (simplified)
+    (_, TVar(_)) ↦ true
+    (TList(a), TList(b)) ↦ typeEq(a, b)
+    (TOption(a), TOption(b)) ↦ typeEq(a, b)
+    (TFunc(a1, b1), TFunc(a2, b2)) ↦ and(typeEq(a1, a2), typeEq(b1, b2))
+    (TTuple(as), TTuple(bs)) ↦ 
+      and(eq(length(as), length(bs)), all(zipWith(typeEq, as, bs)))
+    (TApp(c1, args1), TApp(c2, args2)) ↦
+      and(typeEq(c1, c2), all(zipWith(typeEq, args1, args2)))
+    _ ↦ false
+  }
 }
 
 
@@ -348,5 +778,93 @@ language Port {
 //     )
 //   ]
 // )
+//
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXAMPLE: Port Grammar in Concrete Syntax
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// A Port module can be written in concrete syntax:
+//
+//   port MyLang {
+//     module Core {
+//       export (type Val, cata, ana, hylo)
+//       
+//       type Val = VCon(name: String, args: [Val])
+//                | VStr(s: String)
+//                | VInt(n: Int)
+//                | VList(elems: [Val])
+//       
+//       type V[a] = C(name: String, args: [a])
+//                 | S(s: String)
+//                 | I(n: Int)
+//                 | L(elems: [a])
+//       
+//       func cata(alg: V[a] -> a): Val -> a = match val {
+//         VCon(name, args) => alg(C(name, map (cata alg) args))
+//         VStr(s)          => alg(S(s))
+//         VInt(n)          => alg(I(n))
+//         VList(elems)     => alg(L(map (cata alg) elems))
+//       }
+//       
+//       func ana(coalg: a -> V[a]): a -> Val = 
+//         \seed -> match coalg seed {
+//           C(name, args) => VCon(name, map (ana coalg) args)
+//           S(s)          => VStr(s)
+//           I(n)          => VInt(n)
+//           L(elems)      => VList(map (ana coalg) elems)
+//         }
+//       
+//       func hylo(alg: V[b] -> b, coalg: a -> V[a]): a -> b =
+//         \seed -> alg (fmap (hylo alg coalg) (coalg seed))
+//     }
+//   }
+//
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXAMPLE: Interpreter in Action
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Given the expression:
+//   let double = \x -> mul x 2 in double 21
+//
+// AST:
+//   ELet("double", 
+//     ELam("x", EApp(EApp(EVar("mul"), EVar("x")), EInt(2))),
+//     EApp(EVar("double"), EInt(21)))
+//
+// Evaluation trace:
+//   eval(ELet(...), EmptyEnv)
+//   → let v = eval(ELam("x", ...), EmptyEnv) in 
+//     eval(EApp(EVar("double"), EInt(21)), ExtendEnv("double", v, EmptyEnv))
+//   → eval(EApp(...), {"double" → VClosure("x", ..., EmptyEnv)})
+//   → apply(VClosure("x", EApp(...), EmptyEnv), VInt(21))
+//   → eval(EApp(EApp(EVar("mul"), EVar("x")), EInt(2)), {"x" → VInt(21)})
+//   → apply(apply(VBuiltin("mul"), VInt(21)), VInt(2))
+//   → apply(VBuiltin("mul_21"), VInt(2))
+//   → VInt(42)
+//
+// Pattern matching example:
+//   match Some(42) { None => 0 | Some(x) => x }
+//
+// AST:
+//   EMatch(ECtor("Some", [EInt(42)]), [
+//     MatchCase(PCtor("None", []), None, EInt(0)),
+//     MatchCase(PCtor("Some", [PVar("x")]), None, EVar("x"))
+//   ])
+//
+// Evaluation:
+//   eval(EMatch(...), EmptyEnv)
+//   → evalMatch(VCon("Some", [VInt(42)]), [...], EmptyEnv)
+//   → tryMatch(PCtor("None", []), VCon("Some", [VInt(42)]), EmptyEnv)
+//   → None (names don't match)
+//   → tryMatch(PCtor("Some", [PVar("x")]), VCon("Some", [VInt(42)]), EmptyEnv)
+//   → tryMatchAll([PVar("x")], [VInt(42)], EmptyEnv)
+//   → tryMatch(PVar("x"), VInt(42), EmptyEnv)
+//   → Some(ExtendEnv("x", VInt(42), EmptyEnv))
+//   → eval(EVar("x"), {"x" → VInt(42)})
+//   → VInt(42)
 //
 // ═══════════════════════════════════════════════════════════════════════════
