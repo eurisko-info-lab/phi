@@ -1,5 +1,7 @@
 # Φ (Phi)
 
+[![CI](https://github.com/eurisko-info-lab/phi/actions/workflows/ci.yml/badge.svg)](https://github.com/eurisko-info-lab/phi/actions/workflows/ci.yml)
+
 A meta-language where programs manipulate programs.
 
 ## What Is It?
