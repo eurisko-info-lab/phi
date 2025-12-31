@@ -1,0 +1,420 @@
+// =============================================================================
+// Phi: The Meta-Language Spec (in Port syntax)
+// =============================================================================
+// This is the language used to define language specs themselves.
+// It's the foundation for bootstrapping - phi defines the syntax
+// for writing .phi files like hello.phi, scala.phi, and hello2scala.phi.
+//
+// Original: phi.phi (213 lines)
+// Port version: phi.port
+
+port Phi {
+
+  // ==========================================================================
+  // MODULE: Core
+  // Core sorts and constructors for language specifications
+  // ==========================================================================
+  module Core {
+    export (
+      type Spec, type Decl, type Sort, type Constructor, type Type,
+      type Grammar, type SyntaxRule, type SyntaxToken, type SyntaxArg,
+      type Xform, type Rule, type RuleCase, type RuleGuard, type Pattern,
+      type Kind, type Constraint, type TypeParam,
+      type ClassMember, type InstanceMember
+    )
+
+    // ------------------------------------------------------------------------
+    // Spec Structure
+    // ------------------------------------------------------------------------
+    record Spec {
+      name: String,
+      decls: [Decl]
+    }
+
+    // ------------------------------------------------------------------------
+    // Declarations
+    // ------------------------------------------------------------------------
+    type Decl = SortDecl(name: String)
+              | KindedSortDecl(name: String, kind: Kind)
+              | ConstructorDecl(name: String, typ: Type)
+              | GrammarDecl(name: String, rules: [SyntaxRule])
+              | XformDecl(name: String, from: String, to: String)
+              | RuleDecl(name: String, cases: [RuleCase])
+              | ClassDecl(name: String, params: [TypeParam], members: [ClassMember])
+              | InstanceDecl(name: String, typ: Type, members: [InstanceMember])
+
+    // ------------------------------------------------------------------------
+    // Types
+    // ------------------------------------------------------------------------
+    type Type = SortRef(name: String)
+              | Arrow(from: Type, to: Type)
+              | ListOf(elem: Type)
+              | Product(left: Type, right: Type)
+              | TypeApp(name: String, args: [Type])
+              | TypeVar(name: String)
+              | TypeCon(name: String, arity: Int)
+              | Constrained(constraints: [Constraint], body: Type)
+              | Forall(params: [TypeParam], body: Type)
+
+    // ------------------------------------------------------------------------
+    // Kinds (types of types)
+    // ------------------------------------------------------------------------
+    type Kind = KindStar
+              | KindArrow(from: Kind, to: Kind)
+
+    // ------------------------------------------------------------------------
+    // Type Parameters & Constraints
+    // ------------------------------------------------------------------------
+    record TypeParam {
+      name: String,
+      kind: Kind
+    }
+
+    record Constraint {
+      typeVar: String,
+      typeclass: String
+    }
+
+    // ------------------------------------------------------------------------
+    // Typeclass Members
+    // ------------------------------------------------------------------------
+    type ClassMember = MethodSig(name: String, typ: Type)
+
+    type InstanceMember = MethodImpl(name: String, pattern: Pattern, body: Pattern)
+
+    // ------------------------------------------------------------------------
+    // Grammar Rules
+    // ------------------------------------------------------------------------
+    record SyntaxRule {
+      tokens: [SyntaxToken],
+      result: SyntaxArg
+    }
+
+    type SyntaxToken = Literal(text: String)
+                     | NonTerm(name: String, modifier: String)
+
+    type SyntaxArg = ArgRef(name: String)
+                   | ArgLit(text: String)
+                   | ArgStrLit(text: String)
+                   | ArgWrap(wrapper: String, inner: SyntaxArg)
+                   | ArgCon(name: String, args: [SyntaxArg])
+                   | ArgHole
+
+    // ------------------------------------------------------------------------
+    // Transform Rules
+    // ------------------------------------------------------------------------
+    record Rule {
+      name: String,
+      cases: [RuleCase]
+    }
+
+    type RuleCase = Case(pattern: Pattern, result: Pattern)
+                  | CaseGuarded(pattern: Pattern, guard: RuleGuard, result: Pattern)
+
+    type RuleGuard = IsConstructor(varName: String, ctorName: String)
+                   | Equals(left: Pattern, right: Pattern)
+
+    // ------------------------------------------------------------------------
+    // Meta-level Patterns
+    // ------------------------------------------------------------------------
+    type Pattern = PVar(name: String)
+                 | PCon(name: String, args: [Pattern])
+                 | PApp(func: Pattern, arg: Pattern)
+                 | PSubst(body: Pattern, varName: String, replacement: Pattern)
+  }
+
+  // ==========================================================================
+  // MODULE: Parser
+  // Grammar for parsing .phi files
+  // ==========================================================================
+  module Parser {
+    import Core
+
+    // Parse a complete language specification
+    func parseSpec(input: String): Spec = match input {
+      "language" name "{" decls "}" => Spec(name, decls)
+    }
+
+    // Parse declarations
+    func parseDecl(input: String): Decl = match input {
+      "sort" name                                   => SortDecl(name)
+      "sort" name "[" "_"+ "]"                      => KindedSortDecl(name, inferKind(arity))
+      "constructor" name ":" typ                    => ConstructorDecl(name, parseType(typ))
+      "grammar" name "{" rules "}"                  => GrammarDecl(name, map(parseSyntaxRule, rules))
+      "xform" name ":" from "⇄" to                  => XformDecl(name, from, to)
+      "rule" name "{" cases "}"                     => RuleDecl(name, map(parseRuleCase, cases))
+      "class" name "[" params "]" "{" members "}"   => ClassDecl(name, params, members)
+      "instance" name typ "{" members "}"           => InstanceDecl(name, parseType(typ), members)
+    }
+
+    // Parse types
+    func parseType(input: String): Type = match input {
+      name                        => SortRef(name)
+      from "→" to                 => Arrow(parseType(from), parseType(to))
+      "List" "[" elem "]"         => ListOf(parseType(elem))
+      left "×" right              => Product(parseType(left), parseType(right))
+      name "[" args "]"           => TypeApp(name, map(parseType, args))
+      "∀" "[" params "]" body     => Forall(params, parseType(body))
+      "[" constraints "]" "⇒" body => Constrained(constraints, parseType(body))
+    }
+
+    // Parse kinds
+    func parseKind(input: String): Kind = match input {
+      "*"                 => KindStar
+      from "→" to         => KindArrow(parseKind(from), parseKind(to))
+      "(" k ")"           => parseKind(k)
+    }
+
+    // Parse type parameters
+    func parseTypeParam(input: String): TypeParam = match input {
+      name ":" kind       => TypeParam(name, parseKind(kind))
+      name                => TypeParam(name, KindStar)
+    }
+
+    // Parse constraints
+    func parseConstraint(input: String): Constraint = match input {
+      typeVar ":" typeclass => Constraint(typeVar, typeclass)
+    }
+
+    // Parse class members
+    func parseClassMember(input: String): ClassMember = match input {
+      name ":" typ        => MethodSig(name, parseType(typ))
+    }
+
+    // Parse instance members  
+    func parseInstanceMember(input: String): InstanceMember = match input {
+      pattern "↦" result  => MethodImpl("", parsePattern(pattern), parsePattern(result))
+    }
+
+    // Parse syntax rules
+    func parseSyntaxRule(input: String): SyntaxRule = match input {
+      tokens "=>" result  => SyntaxRule(map(parseSyntaxToken, tokens), parseSyntaxArg(result))
+    }
+
+    // Parse syntax tokens
+    func parseSyntaxToken(input: String): SyntaxToken = match input {
+      str:STRING          => Literal(str)
+      name                => NonTerm(name, "")
+      name "*"            => NonTerm(name, "*")
+      name "+"            => NonTerm(name, "+")
+      name "?"            => NonTerm(name, "?")
+    }
+
+    // Parse syntax arguments
+    func parseSyntaxArg(input: String): SyntaxArg = match input {
+      name                        => ArgRef(name)
+      str:STRING                  => ArgStrLit(str)
+      name "(" args ")"           => ArgCon(name, map(parseSyntaxArg, args))
+      "?"                         => ArgHole
+    }
+
+    // Parse rule cases
+    func parseRuleCase(input: String): RuleCase = match input {
+      pattern "↦" result                  => Case(parsePattern(pattern), parsePattern(result))
+      pattern "|" guard "↦" result        => CaseGuarded(parsePattern(pattern), parseRuleGuard(guard), parsePattern(result))
+    }
+
+    // Parse guards
+    func parseRuleGuard(input: String): RuleGuard = match input {
+      varName "is" ctorName       => IsConstructor(varName, ctorName)
+      left "==" right             => Equals(parsePattern(left), parsePattern(right))
+    }
+
+    // Parse patterns
+    func parsePattern(input: String): Pattern = match input {
+      name                        => PVar(name)
+      name "(" args ")"           => PCon(name, map(parsePattern, args))
+      func arg                    => PApp(parsePattern(func), parsePattern(arg))
+    }
+  }
+
+  // ==========================================================================
+  // MODULE: Render
+  // Render phi AST back to source
+  // ==========================================================================
+  module Render {
+    import Core
+
+    func renderSpec(spec: Spec): String = match spec {
+      Spec(name, decls) => concat("language ", name, " {\n", renderDecls(decls), "}\n")
+    }
+
+    func renderDecls(decls: [Decl]): String =
+      join(map(renderDecl, decls), "\n")
+
+    func renderDecl(decl: Decl): String = match decl {
+      SortDecl(name)                    => concat("  sort ", name)
+      KindedSortDecl(name, kind)        => concat("  sort ", name, "[", renderKindArity(kind), "]")
+      ConstructorDecl(name, typ)        => concat("  constructor ", name, " : ", renderType(typ))
+      GrammarDecl(name, rules)          => concat("  grammar ", name, " {\n", renderRules(rules), "  }")
+      XformDecl(name, from, to)         => concat("  xform ", name, " : ", from, " ⇄ ", to)
+      RuleDecl(name, cases)             => concat("  rule ", name, " {\n", renderCases(cases), "  }")
+      ClassDecl(name, params, members)  => concat("  class ", name, "[", renderParams(params), "] {\n", renderClassMembers(members), "  }")
+      InstanceDecl(name, typ, members)  => concat("  instance ", name, " ", renderType(typ), " {\n", renderInstanceMembers(members), "  }")
+    }
+
+    func renderType(typ: Type): String = match typ {
+      SortRef(name)                 => name
+      Arrow(from, to)               => concat(renderType(from), " → ", renderType(to))
+      ListOf(elem)                  => concat("List[", renderType(elem), "]")
+      Product(left, right)          => concat(renderType(left), " × ", renderType(right))
+      TypeApp(name, args)           => concat(name, "[", join(map(renderType, args), ", "), "]")
+      TypeVar(name)                 => name
+      TypeCon(name, arity)          => concat(name, "[", repeat("_", arity), "]")
+      Constrained(constraints, body) => concat("[", join(map(renderConstraint, constraints), ", "), "] ⇒ ", renderType(body))
+      Forall(params, body)          => concat("∀[", renderParams(params), "] ", renderType(body))
+    }
+
+    func renderKind(kind: Kind): String = match kind {
+      KindStar              => "*"
+      KindArrow(from, to)   => concat(renderKind(from), " → ", renderKind(to))
+    }
+
+    func renderKindArity(kind: Kind): String = match kind {
+      KindStar              => ""
+      KindArrow(_, rest)    => concat("_", renderKindArity(rest))
+    }
+
+    func renderParams(params: [TypeParam]): String =
+      join(map(renderParam, params), ", ")
+
+    func renderParam(param: TypeParam): String = match param {
+      TypeParam(name, KindStar)     => name
+      TypeParam(name, kind)         => concat(name, " : ", renderKind(kind))
+    }
+
+    func renderConstraint(c: Constraint): String = match c {
+      Constraint(typeVar, typeclass) => concat(typeVar, " : ", typeclass)
+    }
+
+    func renderRules(rules: [SyntaxRule]): String =
+      join(map(\r -> concat("    ", renderSyntaxRule(r)), rules), "\n")
+
+    func renderSyntaxRule(rule: SyntaxRule): String = match rule {
+      SyntaxRule(tokens, result) => concat(join(map(renderToken, tokens), " "), " => ", renderArg(result))
+    }
+
+    func renderToken(token: SyntaxToken): String = match token {
+      Literal(text)           => concat("\"", text, "\"")
+      NonTerm(name, "")       => name
+      NonTerm(name, mod)      => concat(name, mod)
+    }
+
+    func renderArg(arg: SyntaxArg): String = match arg {
+      ArgRef(name)            => name
+      ArgLit(text)            => text
+      ArgStrLit(text)         => concat("\"", text, "\"")
+      ArgWrap(wrapper, inner) => concat(wrapper, "(", renderArg(inner), ")")
+      ArgCon(name, args)      => concat(name, "(", join(map(renderArg, args), ", "), ")")
+      ArgHole                 => "?"
+    }
+
+    func renderCases(cases: [RuleCase]): String =
+      join(map(\c -> concat("    ", renderRuleCase(c)), cases), "\n")
+
+    func renderRuleCase(c: RuleCase): String = match c {
+      Case(pattern, result)               => concat(renderPattern(pattern), " ↦ ", renderPattern(result))
+      CaseGuarded(pattern, guard, result) => concat(renderPattern(pattern), " | ", renderGuard(guard), " ↦ ", renderPattern(result))
+    }
+
+    func renderGuard(guard: RuleGuard): String = match guard {
+      IsConstructor(varName, ctorName)    => concat(varName, " is ", ctorName)
+      Equals(left, right)                 => concat(renderPattern(left), " == ", renderPattern(right))
+    }
+
+    func renderPattern(pat: Pattern): String = match pat {
+      PVar(name)                          => name
+      PCon(name, [])                      => name
+      PCon(name, args)                    => concat(name, "(", join(map(renderPattern, args), ", "), ")")
+      PApp(func, arg)                     => concat(renderPattern(func), " ", renderPattern(arg))
+      PSubst(body, varName, replacement)  => concat(renderPattern(body), "[", varName, " := ", renderPattern(replacement), "]")
+    }
+
+    func renderClassMembers(members: [ClassMember]): String =
+      join(map(\m -> concat("    ", renderClassMember(m)), members), "\n")
+
+    func renderClassMember(m: ClassMember): String = match m {
+      MethodSig(name, typ) => concat(name, " : ", renderType(typ))
+    }
+
+    func renderInstanceMembers(members: [InstanceMember]): String =
+      join(map(\m -> concat("    ", renderInstanceMember(m)), members), "\n")
+
+    func renderInstanceMember(m: InstanceMember): String = match m {
+      MethodImpl(_, pattern, body) => concat(renderPattern(pattern), " ↦ ", renderPattern(body))
+    }
+  }
+
+  // ==========================================================================
+  // MODULE: Transform
+  // Apply phi transformations
+  // ==========================================================================
+  module Transform {
+    import Core
+
+    // Apply a transformation rule to a pattern
+    func applyRule(rule: Rule, input: Pattern): Option[Pattern] = match rule {
+      Rule(name, cases) => tryCases(cases, input)
+    }
+
+    func tryCases(cases: [RuleCase], input: Pattern): Option[Pattern] = match cases {
+      []                                  => None
+      [Case(pat, result) | rest]          =>
+        match tryMatch(pat, input) {
+          Some(bindings) => Some(substitute(result, bindings))
+          None           => tryCases(rest, input)
+        }
+      [CaseGuarded(pat, guard, result) | rest] =>
+        match tryMatch(pat, input) {
+          Some(bindings) =>
+            if evalGuard(guard, bindings)
+            then Some(substitute(result, bindings))
+            else tryCases(rest, input)
+          None => tryCases(rest, input)
+        }
+    }
+
+    func tryMatch(pattern: Pattern, value: Pattern): Option[Bindings] = match (pattern, value) {
+      (PVar(name), _)                     => Some(bind(name, value, emptyBindings))
+      (PCon(n1, ps), PCon(n2, vs))        =>
+        if eq(n1, n2) then tryMatchAll(ps, vs, emptyBindings) else None
+      (PApp(f1, a1), PApp(f2, a2))        =>
+        match tryMatch(f1, f2) {
+          Some(b1) => match tryMatch(a1, a2) {
+            Some(b2) => Some(merge(b1, b2))
+            None => None
+          }
+          None => None
+        }
+      _ => None
+    }
+
+    func tryMatchAll(pats: [Pattern], vals: [Pattern], acc: Bindings): Option[Bindings] =
+      match (pats, vals) {
+        ([], [])            => Some(acc)
+        ([p | ps], [v | vs]) =>
+          match tryMatch(p, v) {
+            Some(b) => tryMatchAll(ps, vs, merge(acc, b))
+            None    => None
+          }
+        _ => None
+      }
+
+    func substitute(pattern: Pattern, bindings: Bindings): Pattern = match pattern {
+      PVar(name)                          => lookup(name, bindings, PVar(name))
+      PCon(name, args)                    => PCon(name, map(\a -> substitute(a, bindings), args))
+      PApp(func, arg)                     => PApp(substitute(func, bindings), substitute(arg, bindings))
+      PSubst(body, varName, replacement)  => substitute(body, bind(varName, substitute(replacement, bindings), bindings))
+    }
+
+    func evalGuard(guard: RuleGuard, bindings: Bindings): Bool = match guard {
+      IsConstructor(varName, ctorName) =>
+        match lookup(varName, bindings, PVar(varName)) {
+          PCon(name, _) => eq(name, ctorName)
+          _             => false
+        }
+      Equals(left, right) =>
+        eq(substitute(left, bindings), substitute(right, bindings))
+    }
+  }
+}

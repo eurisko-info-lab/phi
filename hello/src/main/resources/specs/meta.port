@@ -1,0 +1,407 @@
+// =============================================================================
+// Meta: The Language of Interpreters (in Port syntax)
+// =============================================================================
+// Defines the semantic primitives for pattern matching, substitution,
+// and evaluation. This is the "runtime" that phi2scala.phi targets.
+//
+// Original: meta.phi (281 lines)
+// Port version: meta.port
+
+port Meta {
+
+  // ==========================================================================
+  // MODULE: Core
+  // Core semantic sorts and values
+  // ==========================================================================
+  module Core {
+    export (
+      type Val, type Env, type Pat, type Expr, type Result,
+      VCon, VStr, VInt, VList,
+      EmptyEnv, Bind,
+      PVar, PCon, PWild, PLit,
+      EVar, ECon, EApp, ELam, ELet, EMatch, ECase,
+      ROk, RFail
+    )
+
+    // ------------------------------------------------------------------------
+    // Values - The Universal AST
+    // ------------------------------------------------------------------------
+    type Val = VCon(name: String, args: [Val])    // Constructor application
+             | VStr(s: String)                     // String literal
+             | VInt(n: Int)                        // Integer literal
+             | VList(elems: [Val])                 // List value
+             | VClosure(param: String, body: Expr, env: Env)  // Closure
+
+    // ------------------------------------------------------------------------
+    // Environments
+    // ------------------------------------------------------------------------
+    type Env = EmptyEnv
+             | Bind(name: String, value: Val, rest: Env)
+
+    // ------------------------------------------------------------------------
+    // Patterns
+    // ------------------------------------------------------------------------
+    type Pat = PVar(name: String)                  // Variable pattern
+             | PCon(name: String, args: [Pat])     // Constructor pattern
+             | PWild                                // Wildcard
+             | PLit(value: Val)                     // Literal pattern
+
+    // ------------------------------------------------------------------------
+    // Expressions
+    // ------------------------------------------------------------------------
+    type Expr = EVar(name: String)                 // Variable reference
+              | ECon(name: String, args: [Expr])   // Constructor call
+              | EApp(func: Expr, arg: Expr)        // Application
+              | ELam(param: String, body: Expr)    // Lambda
+              | ELet(name: String, value: Expr, body: Expr)  // Let binding
+              | EMatch(scrutinee: Expr, cases: [Expr])       // Pattern match
+              | ECase(pattern: Pat, body: Expr)    // Case clause
+
+    // ------------------------------------------------------------------------
+    // Results
+    // ------------------------------------------------------------------------
+    type Result = ROk(value: Val, env: Env)        // Successful match
+                | RFail                             // Match failure
+  }
+
+  // ==========================================================================
+  // MODULE: Parser
+  // Grammars for parsing values, patterns, and expressions
+  // ==========================================================================
+  module Parser {
+    import Core
+
+    // Parse values
+    func parseVal(input: String): Val = match input {
+      name "(" args ")"   => VCon(name, map(parseVal, args))
+      name                => VCon(name, [])
+      str:STRING          => VStr(str)
+      n:INT               => VInt(n)
+      "[" elems "]"       => VList(map(parseVal, elems))
+    }
+
+    // Parse patterns
+    func parsePat(input: String): Pat = match input {
+      name "(" args ")"   => PCon(name, map(parsePat, args))
+      "_"                 => PWild
+      str:STRING          => PLit(VStr(str))
+      name                => PVar(name)
+    }
+
+    // Parse expressions
+    func parseExpr(input: String): Expr = match input {
+      name "(" args ")"                   => ECon(name, map(parseExpr, args))
+      "λ" param "." body                  => ELam(param, parseExpr(body))
+      "let" name "=" value "in" body      => ELet(name, parseExpr(value), parseExpr(body))
+      "match" scrutinee "{" cases "}"     => EMatch(parseExpr(scrutinee), map(parseCase, cases))
+      func arg                            => EApp(parseExpr(func), parseExpr(arg))
+      name                                => EVar(name)
+    }
+
+    // Parse case clauses
+    func parseCase(input: String): Expr = match input {
+      pattern "=>" body   => ECase(parsePat(pattern), parseExpr(body))
+    }
+  }
+
+  // ==========================================================================
+  // MODULE: Match
+  // Pattern matching implementation
+  // ==========================================================================
+  module Match {
+    import Core
+
+    // Match a pattern against a value in an environment
+    func matchPat(pat: Pat, val: Val, env: Env): Result = match pat {
+      // Variable matches anything, binds it
+      PVar(name)          => ROk(val, Bind(name, val, env))
+
+      // Constructor matches if names equal and args match
+      PCon(name, pats)    => match val {
+        VCon(vname, args) =>
+          if eq(name, vname)
+          then matchArgs(pats, args, env)
+          else RFail
+        _ => RFail
+      }
+
+      // Wildcard matches anything, binds nothing
+      PWild               => ROk(val, env)
+
+      // Literal matches if equal
+      PLit(expected)      =>
+        if valEq(expected, val)
+        then ROk(val, env)
+        else RFail
+    }
+
+    // Match multiple patterns against multiple values
+    func matchArgs(pats: [Pat], vals: [Val], env: Env): Result = match (pats, vals) {
+      ([], [])            => ROk(VCon("Unit", []), env)
+      ([p | ps], [v | vs]) =>
+        match matchPat(p, v, env) {
+          ROk(_, env')    => matchArgs(ps, vs, env')
+          RFail           => RFail
+        }
+      _ => RFail
+    }
+
+    // Value equality
+    func valEq(v1: Val, v2: Val): Bool = match (v1, v2) {
+      (VInt(n1), VInt(n2))       => eq(n1, n2)
+      (VStr(s1), VStr(s2))       => eq(s1, s2)
+      (VList(e1), VList(e2))     => listEq(e1, e2, valEq)
+      (VCon(n1, a1), VCon(n2, a2)) =>
+        and(eq(n1, n2), listEq(a1, a2, valEq))
+      _ => false
+    }
+  }
+
+  // ==========================================================================
+  // MODULE: Eval
+  // Expression evaluation
+  // ==========================================================================
+  module Eval {
+    import Core
+    import Match
+
+    // Evaluate an expression in an environment
+    func eval(expr: Expr, env: Env): Val = match expr {
+      // Variable lookup
+      EVar(name)          => lookup(name, env)
+
+      // Constructor: evaluate args, build value
+      ECon(name, args)    => VCon(name, map(\e -> eval(e, env), args))
+
+      // Application: evaluate both, apply
+      EApp(func, arg)     => apply(eval(func, env), eval(arg, env))
+
+      // Lambda: create closure
+      ELam(param, body)   => VClosure(param, body, env)
+
+      // Let binding: evaluate value, extend env, evaluate body
+      ELet(name, value, body) =>
+        let v = eval(value, env) in
+        eval(body, Bind(name, v, env))
+
+      // Match: evaluate scrutinee, try cases
+      EMatch(scrutinee, cases) =>
+        let sval = eval(scrutinee, env) in
+        tryCases(sval, cases, env)
+
+      // Case clause (shouldn't be evaluated directly)
+      ECase(_, _)         => error("ECase evaluated directly")
+    }
+
+    // Apply a function value to an argument
+    func apply(func: Val, arg: Val): Val = match func {
+      VClosure(param, body, closureEnv) =>
+        eval(body, Bind(param, arg, closureEnv))
+      _ => error("Cannot apply non-function")
+    }
+
+    // Try each case until one matches
+    func tryCases(scrutinee: Val, cases: [Expr], env: Env): Val = match cases {
+      []                      => error("Non-exhaustive pattern match")
+      [ECase(pat, body) | rest] =>
+        match matchPat(pat, scrutinee, env) {
+          ROk(_, matchEnv)    => eval(body, matchEnv)
+          RFail               => tryCases(scrutinee, rest, env)
+        }
+      _ => error("Invalid case expression")
+    }
+
+    // Environment lookup
+    func lookup(name: String, env: Env): Val = match env {
+      EmptyEnv              => error(concat("Unbound variable: ", name))
+      Bind(n, v, rest)      =>
+        if eq(n, name) then v else lookup(name, rest)
+    }
+  }
+
+  // ==========================================================================
+  // MODULE: Show
+  // Pretty printing for all types
+  // ==========================================================================
+  module Show {
+    import Core
+
+    // ------------------------------------------------------------------------
+    // Val.show
+    // ------------------------------------------------------------------------
+    func showVal(val: Val): String = match val {
+      VCon(name, [])      => name
+      VCon(name, args)    => concat(name, "(", join(map(showVal, args), ", "), ")")
+      VStr(s)             => concat("\"", escape(s), "\"")
+      VInt(n)             => showInt(n)
+      VList(elems)        => concat("[", join(map(showVal, elems), ", "), "]")
+      VClosure(param, _, _) => concat("<closure λ", param, ">")
+    }
+
+    // ------------------------------------------------------------------------
+    // Pat.show
+    // ------------------------------------------------------------------------
+    func showPat(pat: Pat): String = match pat {
+      PVar(name)          => name
+      PCon(name, [])      => name
+      PCon(name, args)    => concat(name, "(", join(map(showPat, args), ", "), ")")
+      PWild               => "_"
+      PLit(value)         => showVal(value)
+    }
+
+    // ------------------------------------------------------------------------
+    // Expr.show
+    // ------------------------------------------------------------------------
+    func showExpr(expr: Expr): String = match expr {
+      EVar(name)          => name
+      ECon(name, [])      => name
+      ECon(name, args)    => concat(name, "(", join(map(showExpr, args), ", "), ")")
+      EApp(func, arg)     => concat("(", showExpr(func), " ", showExpr(arg), ")")
+      ELam(param, body)   => concat("λ", param, ". ", showExpr(body))
+      ELet(name, value, body) =>
+        concat("let ", name, " = ", showExpr(value), " in ", showExpr(body))
+      EMatch(scrutinee, cases) =>
+        concat("match ", showExpr(scrutinee), " { ", join(map(showExpr, cases), "; "), " }")
+      ECase(pattern, body) =>
+        concat(showPat(pattern), " => ", showExpr(body))
+    }
+
+    // ------------------------------------------------------------------------
+    // Env.show
+    // ------------------------------------------------------------------------
+    func showEnv(env: Env): String = match env {
+      EmptyEnv            => "{}"
+      Bind(name, value, rest) =>
+        concat("{", name, " → ", showVal(value), showEnvRest(rest), "}")
+    }
+
+    func showEnvRest(env: Env): String = match env {
+      EmptyEnv            => ""
+      Bind(name, value, rest) =>
+        concat(", ", name, " → ", showVal(value), showEnvRest(rest))
+    }
+
+    // ------------------------------------------------------------------------
+    // Result.show
+    // ------------------------------------------------------------------------
+    func showResult(result: Result): String = match result {
+      ROk(val, env)       => concat("ROk(", showVal(val), ", ", showEnv(env), ")")
+      RFail               => "RFail"
+    }
+  }
+
+  // ==========================================================================
+  // MODULE: Subst
+  // Expression substitution
+  // ==========================================================================
+  module Subst {
+    import Core
+
+    // Substitute all free occurrences of a variable with a value
+    func subst(expr: Expr, varName: String, replacement: Expr): Expr = match expr {
+      EVar(name)          =>
+        if eq(name, varName) then replacement else expr
+
+      ECon(name, args)    =>
+        ECon(name, map(\e -> subst(e, varName, replacement), args))
+
+      EApp(func, arg)     =>
+        EApp(subst(func, varName, replacement), subst(arg, varName, replacement))
+
+      ELam(param, body)   =>
+        if eq(param, varName)
+        then expr  // shadowed, don't substitute
+        else ELam(param, subst(body, varName, replacement))
+
+      ELet(name, value, body) =>
+        let newValue = subst(value, varName, replacement) in
+        if eq(name, varName)
+        then ELet(name, newValue, body)  // shadowed in body
+        else ELet(name, newValue, subst(body, varName, replacement))
+
+      EMatch(scrutinee, cases) =>
+        EMatch(subst(scrutinee, varName, replacement),
+               map(\c -> substCase(c, varName, replacement), cases))
+
+      ECase(pattern, body) =>
+        if binds(pattern, varName)
+        then expr  // shadowed by pattern
+        else ECase(pattern, subst(body, varName, replacement))
+    }
+
+    func substCase(c: Expr, varName: String, replacement: Expr): Expr = match c {
+      ECase(pattern, body) =>
+        if binds(pattern, varName)
+        then c  // shadowed by pattern
+        else ECase(pattern, subst(body, varName, replacement))
+      _ => c
+    }
+
+    // Check if a pattern binds a variable name
+    func binds(pat: Pat, varName: String): Bool = match pat {
+      PVar(name)          => eq(name, varName)
+      PCon(_, args)       => any(\p -> binds(p, varName), args)
+      PWild               => false
+      PLit(_)             => false
+    }
+  }
+
+  // ==========================================================================
+  // MODULE: Examples
+  // Example programs and their evaluation
+  // ==========================================================================
+  module Examples {
+    import Core
+    import Eval
+    import Show
+
+    // Example 1: Identity function
+    // λx. x applied to 42
+    func exampleIdentity(): Val =
+      let id = ELam("x", EVar("x")) in
+      let expr = EApp(id, ECon("VInt", [ECon("42", [])])) in
+      eval(expr, EmptyEnv)
+    // Result: VInt(42)
+
+    // Example 2: Simple let binding
+    // let x = 1 in let y = 2 in x
+    func exampleLet(): Val =
+      let expr = ELet("x", ECon("VInt", [ECon("1", [])]),
+                   ELet("y", ECon("VInt", [ECon("2", [])]),
+                     EVar("x"))) in
+      eval(expr, EmptyEnv)
+    // Result: VInt(1)
+
+    // Example 3: Pattern matching
+    // match Some(42) { None => 0; Some(x) => x }
+    func exampleMatch(): Val =
+      let scrutinee = ECon("Some", [ECon("VInt", [ECon("42", [])])]) in
+      let cases = [
+        ECase(PCon("None", []), ECon("VInt", [ECon("0", [])])),
+        ECase(PCon("Some", [PVar("x")]), EVar("x"))
+      ] in
+      let expr = EMatch(scrutinee, cases) in
+      eval(expr, EmptyEnv)
+    // Result: VInt(42)
+
+    // Example 4: Nested lambdas (curried add)
+    // λx. λy. Add(x, y)
+    func exampleCurry(): Val =
+      let add = ELam("x", ELam("y", ECon("Add", [EVar("x"), EVar("y")]))) in
+      let expr = EApp(EApp(add, ECon("1", [])), ECon("2", [])) in
+      eval(expr, EmptyEnv)
+    // Result: Add(1, 2)
+
+    // Example 5: List processing
+    // match [1, 2, 3] { [] => 0; [h | t] => h }
+    func exampleList(): Val =
+      let list = ECon("VList", [ECon("1", []), ECon("2", []), ECon("3", [])]) in
+      let cases = [
+        ECase(PCon("VList", []), ECon("VInt", [ECon("0", [])])),
+        ECase(PCon("VList", [PVar("h"), PVar("t")]), EVar("h"))
+      ] in
+      let expr = EMatch(list, cases) in
+      eval(expr, EmptyEnv)
+    // Result: 1
+  }
+}
