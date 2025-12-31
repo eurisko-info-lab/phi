@@ -1,0 +1,56 @@
+cabal-version: 3.0
+name:          phi
+version:       0.1.0.0
+synopsis:      Phi meta-language runtime for Haskell
+license:       MIT
+author:        Patrick
+build-type:    Simple
+
+common warnings
+    ghc-options: -Wall
+
+library
+    import:           warnings
+    exposed-modules:  
+        -- Core modules
+        Phi.Core
+        Phi.Lang
+        Phi.Syntax
+        Phi.Grammar
+        Phi.Parser
+        -- Meta modules
+        Phi.Meta.Val
+        Phi.Meta.Env
+        Phi.Meta.Pat
+        Phi.Meta.Expr
+        Phi.Meta.Result
+        Phi.Meta.Eval
+        Phi.Meta.Match
+        Phi.Meta.Show
+    build-depends:    
+        base >= 4.17 && < 5,
+        containers >= 0.6,
+        hashable >= 1.4
+    hs-source-dirs:   src
+    default-language: GHC2021
+
+test-suite phi-test
+    import:           warnings
+    default-language: GHC2021
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Main.hs
+    other-modules:
+        Phi.Meta.EvalSpec
+        Phi.Meta.MatchSpec
+        Phi.Meta.ShowSpec
+        Phi.CoreSpec
+        Phi.LangSpec
+        Phi.SyntaxSpec
+        Phi.GrammarSpec
+        Phi.ParserSpec
+    build-depends:
+        base >= 4.17 && < 5,
+        phi,
+        hspec >= 2.10,
+        containers >= 0.6
