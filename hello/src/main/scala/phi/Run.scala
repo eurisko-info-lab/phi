@@ -367,7 +367,7 @@ object Run:
     println()
     
     println("═══════════════════════════════════════════════════════════════")
-    println("Demo complete! See examples/ directory for .phi specifications.")
+    println("Demo complete! See src/main/resources/examples/ for .phi specifications.")
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SECTION 4: Main Entry Point

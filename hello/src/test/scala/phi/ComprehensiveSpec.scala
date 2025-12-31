@@ -1291,7 +1291,7 @@ class RunExamplesSpec extends munit.FunSuite:
 /**
  * Test launcher for .phi example files.
  * 
- * Discovers all .phi files in examples/ directory and:
+ * Discovers all .phi files in resources/ directories and:
  *   1. Attempts to parse each file
  *   2. Runs any rules starting with "test_" or "example_"
  *   3. Reports parse failures and test results
@@ -1306,16 +1306,16 @@ class ExampleFileLauncherSpec extends munit.FunSuite:
   import java.io.File
   import java.nio.file.{Files, Paths}
 
-  val examplesDir = new File("examples")
-  val testsDir = new File("examples/tests")
+  val examplesDir = new File("src/main/resources/examples")
+  val testsDir = new File("src/test/resources/examples")
   
-  /** All .phi files in examples directory (not recursive) */
+  /** All .phi files in src/main/resources/examples directory */
   lazy val exampleFiles: List[File] =
     if examplesDir.exists && examplesDir.isDirectory then
       examplesDir.listFiles.filter(f => f.isFile && f.getName.endsWith(".phi")).toList.sortBy(_.getName)
     else Nil
 
-  /** All .phi files in examples/tests directory (test specs with simple syntax) */
+  /** All .phi files in src/test/resources/examples directory (test specs) */
   lazy val testSpecFiles: List[File] =
     if testsDir.exists && testsDir.isDirectory then
       testsDir.listFiles.filter(f => f.isFile && f.getName.endsWith(".phi")).toList.sortBy(_.getName)
