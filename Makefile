@@ -2,7 +2,7 @@
 # Φ (Phi) - Algebraic Metaprogramming Framework
 # ═══════════════════════════════════════════════════════════════════════════
 
-.PHONY: all build clean test help scala rust rvm phi haskell install install-rvm full
+.PHONY: all build clean test help scala rust rvm phi haskell install install-rvm full c
 
 # Enable parallel execution
 MAKEFLAGS += -j3
@@ -17,7 +17,7 @@ full: clean build test install
 # Build targets (run in parallel with make -j)
 # ─────────────────────────────────────────────────────────────────────────────
 
-build: scala rust haskell
+build: scala rust haskell c
 
 # Scala phi interpreter
 scala phi:
@@ -30,6 +30,11 @@ rust rvm:
 # Haskell phi interpreter
 haskell:
 	cd ports/haskell/tools/phi && cabal build
+
+# C HVM examples
+c:
+	@mkdir -p build
+	gcc -O3 -Wall -Wextra -o build/sum examples/c/sum.c
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Install targets
@@ -68,11 +73,14 @@ run-phi:
 run-rvm:
 	cd ports/rust/tools/rvm && cargo run --release
 
+run-sum:
+	./build/sum 1000000
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Clean targets
 # ─────────────────────────────────────────────────────────────────────────────
 
-clean: clean-scala clean-rust clean-haskell
+clean: clean-scala clean-rust clean-haskell clean-c
 
 clean-scala:
 	cd ports/scala/tools/phi && sbt clean
@@ -84,6 +92,9 @@ clean-rust:
 
 clean-haskell:
 	cd ports/haskell/tools/phi && cabal clean
+
+clean-c:
+	rm -rf build
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Documentation
