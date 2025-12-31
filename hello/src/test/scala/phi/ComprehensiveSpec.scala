@@ -1306,23 +1306,30 @@ class ExampleFileLauncherSpec extends munit.FunSuite:
   import java.io.File
   import java.nio.file.{Files, Paths}
 
-  val examplesDir = new File("src/main/resources/examples")
-  val testsDir = new File("src/test/resources/examples")
+  val specsDir = new File("src/main/resources/specs")
+  val examplesDir = new File("src/test/resources/examples")
+  val testsDir = new File("src/test/resources/tests")
   
-  /** All .phi files in src/main/resources/examples directory */
+  /** Core .phi specs (phi.phi, meta.phi, scala.phi, etc.) - extended syntax */
+  lazy val specFiles: List[File] =
+    if specsDir.exists && specsDir.isDirectory then
+      specsDir.listFiles.filter(f => f.isFile && f.getName.endsWith(".phi")).toList.sortBy(_.getName)
+    else Nil
+
+  /** Example .phi files - extended syntax (won't parse with simple parser) */
   lazy val exampleFiles: List[File] =
     if examplesDir.exists && examplesDir.isDirectory then
       examplesDir.listFiles.filter(f => f.isFile && f.getName.endsWith(".phi")).toList.sortBy(_.getName)
     else Nil
 
-  /** All .phi files in src/test/resources/examples directory (test specs) */
-  lazy val testSpecFiles: List[File] =
+  /** Test .phi files - simple syntax (should parse) */
+  lazy val testFiles: List[File] =
     if testsDir.exists && testsDir.isDirectory then
       testsDir.listFiles.filter(f => f.isFile && f.getName.endsWith(".phi")).toList.sortBy(_.getName)
     else Nil
 
   /** All .phi files combined */
-  lazy val allPhiFiles: List[File] = exampleFiles ++ testSpecFiles
+  lazy val allPhiFiles: List[File] = specFiles ++ exampleFiles ++ testFiles
 
   /** Parse a .phi file */
   def parsePhiFile(file: File): Either[String, LangSpec] =
@@ -1356,19 +1363,20 @@ class ExampleFileLauncherSpec extends munit.FunSuite:
 
   // Dynamic test: List all .phi files found
   test("example files discovered") {
-    assert(exampleFiles.nonEmpty, s"No .phi files found in ${examplesDir.getAbsolutePath}")
-    println(s"Found ${exampleFiles.length} example .phi files:")
-    exampleFiles.foreach(f => println(s"  - ${f.getName}"))
+    assert(exampleFiles.nonEmpty || specFiles.nonEmpty, s"No .phi files found")
+    println(s"Found ${specFiles.length} spec files and ${exampleFiles.length} example files")
+    specFiles.foreach(f => println(s"  spec: ${f.getName}"))
+    exampleFiles.foreach(f => println(s"  example: ${f.getName}"))
   }
 
   test("test spec files discovered") {
-    assert(testSpecFiles.nonEmpty, s"No test .phi files found in ${testsDir.getAbsolutePath}")
-    println(s"Found ${testSpecFiles.length} test spec .phi files:")
-    testSpecFiles.foreach(f => println(s"  - ${f.getName}"))
+    assert(testFiles.nonEmpty, s"No test .phi files found in ${testsDir.getAbsolutePath}")
+    println(s"Found ${testFiles.length} test spec .phi files:")
+    testFiles.foreach(f => println(s"  - ${f.getName}"))
   }
 
-  // Dynamic tests for each example .phi file
-  exampleFiles.foreach { file =>
+  // Dynamic tests for spec and example .phi files - just verify they load
+  (specFiles ++ exampleFiles).foreach { file =>
     test(s"${file.getName} - file loads") {
       assert(file.exists, s"File does not exist: ${file.getAbsolutePath}")
       val content = new String(Files.readAllBytes(file.toPath))
@@ -1377,7 +1385,7 @@ class ExampleFileLauncherSpec extends munit.FunSuite:
   }
 
   // Dynamic tests for each test spec .phi file - these should parse!
-  testSpecFiles.foreach { file =>
+  testFiles.foreach { file =>
     test(s"tests/${file.getName} - parses successfully") {
       parsePhiFile(file) match
         case Right(spec) =>
@@ -1389,7 +1397,7 @@ class ExampleFileLauncherSpec extends munit.FunSuite:
   }
 
   // Dynamic tests: run test_ and example_ xforms from test spec files
-  testSpecFiles.foreach { file =>
+  testFiles.foreach { file =>
     test(s"tests/${file.getName} - runs test xforms") {
       parsePhiFile(file) match
         case Right(spec) =>
@@ -1482,9 +1490,9 @@ class ExampleFileLauncherSpec extends munit.FunSuite:
     var unparseable = 0
     var totalTests = 0
     
-    // Example files (extended syntax - won't parse)
-    println("\n  Example Files (extended syntax):")
-    exampleFiles.foreach { file =>
+    // Spec and example files (extended syntax - won't parse with simple parser)
+    println("\n  Spec & Example Files (extended syntax):")
+    (specFiles ++ exampleFiles).foreach { file =>
       parsePhiFile(file) match
         case Right(spec) =>
           parseable += 1
@@ -1500,7 +1508,7 @@ class ExampleFileLauncherSpec extends munit.FunSuite:
     
     // Test spec files (simple syntax - should parse)
     println("\n  Test Spec Files (simple syntax):")
-    testSpecFiles.foreach { file =>
+    testFiles.foreach { file =>
       parsePhiFile(file) match
         case Right(spec) =>
           parseable += 1
