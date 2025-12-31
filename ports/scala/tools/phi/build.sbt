@@ -26,6 +26,7 @@ lazy val root = project
       "-deprecation",           // Warn about deprecations
       "-feature",               // Warn about advanced features
       "-unchecked",             // Enable additional warnings
+      "-Werror",                // Treat warnings as errors
     ),
     
     // Dependencies

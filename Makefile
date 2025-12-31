@@ -25,7 +25,7 @@ scala phi:
 
 # Rust RVM implementation
 rust rvm:
-	cd ports/rust/tools/rvm && cargo build --release
+	cd ports/rust/tools/rvm && RUSTFLAGS="-D warnings" cargo build --release
 
 # Haskell phi interpreter
 haskell:
@@ -53,7 +53,7 @@ test-scala: scala
 	cd ports/scala/tools/phi && sbt test
 
 test-rust: rust
-	cd ports/rust/tools/rvm && cargo test
+	cd ports/rust/tools/rvm && RUSTFLAGS="-D warnings" cargo test
 
 test-haskell: haskell
 	cd ports/haskell/tools/phi && cabal test
