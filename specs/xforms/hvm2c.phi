@@ -1,0 +1,1229 @@
+// =============================================================================
+// HVM to C Compiler
+// =============================================================================
+// Transforms HVM Interaction Calculus programs into C code targeting
+// the runtime defined in c.phi.
+//
+// Strategy:
+// 1. Parse HVM definitions into an AST
+// 2. Allocate heap slots for each definition
+// 3. Generate C code that builds the term graph
+// 4. Emit runtime initialization and main entry point
+
+transform hvm2c {
+
+  // ===========================================================================
+  // Name Hashing (FNV-1a)
+  // ===========================================================================
+  // Convert string names to 24-bit hashes for EXT field
+
+  compile NameHash {
+    hash(name: String) -> u32 {
+      u32 h = 2166136261;
+      for (char c : name) {
+        h ^= c;
+        h *= 16777619;
+      }
+      return h & 0xFFFFFF;  // 24-bit mask
+    }
+  }
+
+  // ===========================================================================
+  // Code Generation Context
+  // ===========================================================================
+
+  context CodeGen {
+    StringBuilder decls;      // Forward declarations
+    StringBuilder defs;       // Definition builders
+    StringBuilder init;       // Initialization code
+    Map<String, u32> names;   // Name → hash mapping
+    Map<String, u32> locs;    // Name → heap location
+    u32 nextLoc;              // Next available heap location
+    u32 nextLabel;            // Fresh label counter
+    u32 nextDupLab;           // Fresh dup label counter
+
+    fresh() -> String {
+      return "_t" + (nextLabel++);
+    }
+
+    freshDup() -> u32 {
+      return nextDupLab++;
+    }
+
+    nameHash(name: String) -> u32 {
+      if (!names.contains(name)) {
+        names[name] = hash(name);
+      }
+      return names[name];
+    }
+
+    alloc(size: u32) -> u32 {
+      u32 loc = nextLoc;
+      nextLoc += size;
+      return loc;
+    }
+  }
+
+  // ===========================================================================
+  // Term Compilation
+  // ===========================================================================
+  // Each term compiles to C code that returns a Term value.
+  // Complex terms allocate heap space and write subterms.
+
+  compile Term {
+
+    // Variable: look up binding location
+    Var(name) -> C {
+      u32 loc = ctx.bindings[name];
+      emit "term_new_var($loc)"
+    }
+
+    // Lambda: allocate slot for body, compile body with binding
+    Lam(param, body) -> C {
+      u32 loc = ctx.alloc(1);
+      ctx.bindings[param] = loc;
+      String bodyCode = compile(body);
+      emit """
+        ({
+          u32 loc = $loc;
+          Term body = $bodyCode;
+          heap_write(loc, body);
+          term_new(0, LAM, 0, loc);
+        })
+      """
+    }
+
+    // Application: allocate 2 slots, compile fun and arg
+    App(fun, arg) -> C {
+      String funCode = compile(fun);
+      String argCode = compile(arg);
+      emit """
+        ({
+          u32 loc = (u32)heap_alloc(2);
+          Term fun = $funCode;
+          Term arg = $argCode;
+          heap_write(loc + 0, fun);
+          heap_write(loc + 1, arg);
+          term_new(0, APP, 0, loc);
+        })
+      """
+    }
+
+    // Superposition: allocate 2 slots
+    Sup(label, a, b) -> C {
+      u32 lab = label ?? ctx.freshDup();
+      String aCode = compile(a);
+      String bCode = compile(b);
+      emit """
+        ({
+          u32 loc = (u32)heap_alloc(2);
+          Term a = $aCode;
+          Term b = $bCode;
+          heap_write(loc + 0, a);
+          heap_write(loc + 1, b);
+          term_new(0, SUP, $lab, loc);
+        })
+      """
+    }
+
+    // Duplication: allocate 2 slots (val, body)
+    Dup(label, x0, x1, val, body) -> C {
+      u32 lab = label ?? ctx.freshDup();
+      u32 loc = ctx.alloc(2);
+      ctx.bindings[x0] = loc;      // DP0 refers to loc
+      ctx.bindings[x1] = loc;      // DP1 refers to loc
+      ctx.dupSide[x0] = 0;
+      ctx.dupSide[x1] = 1;
+      String valCode = compile(val);
+      String bodyCode = compile(body);
+      emit """
+        ({
+          u32 loc = $loc;
+          Term val = $valCode;
+          heap_write(loc, val);
+          $bodyCode;
+        })
+      """
+    }
+
+    // Dup projection reference
+    DupVar(name) -> C {
+      u32 loc = ctx.bindings[name];
+      u32 side = ctx.dupSide[name];
+      u32 lab = ctx.dupLabel[name];
+      if (side == 0) {
+        emit "term_new_dp0($lab, $loc)"
+      } else {
+        emit "term_new_dp1($lab, $loc)"
+      }
+    }
+
+    // Erasure
+    Era() -> C {
+      emit "term_new_era()"
+    }
+
+    // Number literal
+    Num(val) -> C {
+      emit "term_new_num($val)"
+    }
+
+    // Binary operation
+    Op2(op, a, b) -> C {
+      u8 opCode = opToCode(op);
+      String aCode = compile(a);
+      String bCode = compile(b);
+      emit """
+        ({
+          u32 loc = (u32)heap_alloc(2);
+          Term a = $aCode;
+          Term b = $bCode;
+          heap_write(loc + 0, a);
+          heap_write(loc + 1, b);
+          term_new(0, OP2, $opCode, loc);
+        })
+      """
+    }
+
+    // Constructor
+    Ctr(name, fields) -> C {
+      u32 nameHash = ctx.nameHash(name);
+      u32 arity = fields.length;
+      if (arity == 0) {
+        emit "term_new(0, C00, $nameHash, 0)"
+      } else {
+        String[] fieldCodes = fields.map(f -> compile(f));
+        emit """
+          ({
+            u32 loc = (u32)heap_alloc($arity);
+            ${fieldCodes.enumerate().map((i, c) -> "heap_write(loc + $i, $c);").join("\n")}
+            term_new(0, C00 + $arity, $nameHash, loc);
+          })
+        """
+      }
+    }
+
+    // Pattern match
+    Mat(name, hit, miss) -> C {
+      u32 nameHash = ctx.nameHash(name);
+      String hitCode = compile(hit);
+      String missCode = compile(miss);
+      emit """
+        ({
+          u32 loc = (u32)heap_alloc(2);
+          Term hit = $hitCode;
+          Term miss = $missCode;
+          heap_write(loc + 0, hit);
+          heap_write(loc + 1, miss);
+          term_new(0, MAT, $nameHash, loc);
+        })
+      """
+    }
+
+    // Number switch
+    Swi(num, zero, succ) -> C {
+      String zeroCode = compile(zero);
+      String succCode = compile(succ);
+      emit """
+        ({
+          u32 loc = (u32)heap_alloc(2);
+          Term zero = $zeroCode;
+          Term succ = $succCode;
+          heap_write(loc + 0, zero);
+          heap_write(loc + 1, succ);
+          term_new(0, SWI, $num, loc);
+        })
+      """
+    }
+
+    // Reference to definition
+    Ref(name) -> C {
+      u32 nameHash = ctx.nameHash(name);
+      emit "term_new(0, REF, $nameHash, 0)"
+    }
+
+    // Use (unbox)
+    Use(f) -> C {
+      String fCode = compile(f);
+      emit """
+        ({
+          u32 loc = (u32)heap_alloc(1);
+          Term f = $fCode;
+          heap_write(loc, f);
+          term_new(0, USE, 0, loc);
+        })
+      """
+    }
+
+    // Reduction guard
+    Red(f, g) -> C {
+      String fCode = compile(f);
+      String gCode = compile(g);
+      emit """
+        ({
+          u32 loc = (u32)heap_alloc(2);
+          Term f = $fCode;
+          Term g = $gCode;
+          heap_write(loc + 0, f);
+          heap_write(loc + 1, g);
+          term_new(0, RED, 0, loc);
+        })
+      """
+    }
+
+    // Move binding
+    Mov(x, val, body) -> C {
+      u32 loc = ctx.alloc(2);
+      ctx.bindings[x] = loc;
+      ctx.isMove[x] = true;
+      String valCode = compile(val);
+      String bodyCode = compile(body);
+      emit """
+        ({
+          u32 loc = $loc;
+          Term val = $valCode;
+          heap_write(loc, val);
+          $bodyCode;
+        })
+      """
+    }
+
+    // Move variable (GOT)
+    MovVar(name) -> C {
+      u32 loc = ctx.bindings[name];
+      emit "term_new_got($loc)"
+    }
+  }
+
+  // ===========================================================================
+  // Operation Code Mapping
+  // ===========================================================================
+
+  fn opToCode(op: String) -> u8 {
+    match op {
+      "+"  -> OP_ADD
+      "-"  -> OP_SUB
+      "*"  -> OP_MUL
+      "/"  -> OP_DIV
+      "%"  -> OP_MOD
+      "&"  -> OP_AND
+      "|"  -> OP_OR
+      "^"  -> OP_XOR
+      "<<" -> OP_LSH
+      ">>" -> OP_RSH
+      "==" -> OP_EQ
+      "!=" -> OP_NE
+      "<"  -> OP_LT
+      "<=" -> OP_LE
+      ">"  -> OP_GT
+      ">=" -> OP_GE
+      _    -> 0
+    }
+  }
+
+  // ===========================================================================
+  // Definition Compilation
+  // ===========================================================================
+
+  compile Definition {
+
+    // @name = term
+    Def(name, term) -> C {
+      u32 nameHash = ctx.nameHash(name);
+      String termCode = compile(term);
+
+      // Add to init function
+      ctx.init.append("""
+        // @$name
+        {
+          u32 loc = (u32)heap_alloc(1);
+          Term term = $termCode;
+          heap_write(loc, term);
+          book_set($nameHash, loc);
+        }
+      """);
+    }
+  }
+
+  // ===========================================================================
+  // Program Compilation
+  // ===========================================================================
+
+  compile Program {
+
+    // Full program: list of definitions
+    Program(defs, main) -> C {
+      // Compile all definitions
+      for (def : defs) {
+        compile(def);
+      }
+
+      // Generate complete C file
+      emit """
+        // =============================================================================
+        // Generated HVM C Runtime
+        // =============================================================================
+        // Auto-generated by hvm2c transform
+
+        #include <stdio.h>
+        #include <stdlib.h>
+        #include <stdint.h>
+        #include <string.h>
+
+        // Types
+        typedef uint8_t  u8;
+        typedef uint16_t u16;
+        typedef uint32_t u32;
+        typedef uint64_t u64;
+        typedef u64 Term;
+
+        // Bit layout constants
+        #define SUB_SHIFT 63
+        #define TAG_SHIFT 56
+        #define EXT_SHIFT 32
+        #define VAL_SHIFT 0
+
+        #define SUB_MASK 0x1ULL
+        #define TAG_MASK 0x7FULL
+        #define EXT_MASK 0xFFFFFFULL
+        #define VAL_MASK 0xFFFFFFFFULL
+
+        // Tags
+        #define APP 0
+        #define VAR 1
+        #define LAM 2
+        #define DP0 3
+        #define DP1 4
+        #define SUP 5
+        #define DUP 6
+        #define ALO 7
+        #define REF 8
+        #define NAM 9
+        #define DRY 10
+        #define ERA 11
+        #define MAT 12
+        #define C00 13
+        #define C01 14
+        #define C02 15
+        #define C03 16
+        #define C04 17
+        #define C05 18
+        #define C06 19
+        #define C07 20
+        #define C08 21
+        #define C09 22
+        #define C10 23
+        #define C11 24
+        #define C12 25
+        #define C13 26
+        #define C14 27
+        #define C15 28
+        #define C16 29
+        #define NUM 30
+        #define SWI 31
+        #define USE 32
+        #define OP2 33
+        #define RED 34
+        #define INC 35
+        #define MOV 47
+        #define GOT 48
+
+        // Operation codes
+        #define OP_ADD 0
+        #define OP_SUB 1
+        #define OP_MUL 2
+        #define OP_DIV 3
+        #define OP_MOD 4
+        #define OP_AND 5
+        #define OP_OR  6
+        #define OP_XOR 7
+        #define OP_LSH 8
+        #define OP_RSH 9
+        #define OP_NOT 10
+        #define OP_EQ  11
+        #define OP_NE  12
+        #define OP_LT  13
+        #define OP_LE  14
+        #define OP_GT  15
+        #define OP_GE  16
+
+        // Frame tags
+        #define F_APP_RED 0x40
+        #define F_RED_MAT 0x41
+        #define F_RED_USE 0x42
+        #define F_OP2_NUM 0x43
+
+        // Global state
+        static Term* HEAP;
+        static u64 HEAP_NEXT;
+        static u64 HEAP_CAP = (1ULL << 28);  // 256M words
+
+        static u32* BOOK;
+        static u32 BOOK_CAP = (1 << 20);
+
+        static Term* WNF_STACK;
+        static u64 ITRS = 0;
+
+        // Term accessors
+        static inline u8  term_sub(Term t) { return (u8)((t >> SUB_SHIFT) & SUB_MASK); }
+        static inline u8  term_tag(Term t) { return (u8)((t >> TAG_SHIFT) & TAG_MASK); }
+        static inline u32 term_ext(Term t) { return (u32)((t >> EXT_SHIFT) & EXT_MASK); }
+        static inline u32 term_val(Term t) { return (u32)(t & VAL_MASK); }
+
+        static inline Term term_new(u8 sub, u8 tag, u32 ext, u32 val) {
+          return ((u64)sub << SUB_SHIFT) |
+                 ((u64)tag << TAG_SHIFT) |
+                 ((u64)ext << EXT_SHIFT) |
+                 ((u64)val);
+        }
+
+        static inline Term term_sub_set(Term t, u8 sub) {
+          return (t & ~(SUB_MASK << SUB_SHIFT)) | ((u64)sub << SUB_SHIFT);
+        }
+
+        // Heap operations
+        static inline u64 heap_alloc(u64 size) {
+          u64 at = HEAP_NEXT;
+          HEAP_NEXT += size;
+          return at;
+        }
+
+        static inline Term heap_read(u32 loc) { return HEAP[loc]; }
+        static inline void heap_write(u32 loc, Term t) { HEAP[loc] = t; }
+        static inline void heap_set(u32 loc, Term t) { HEAP[loc] = t; }
+
+        static inline void heap_subst_var(u32 loc, Term val) {
+          heap_set(loc, term_sub_set(val, 1));
+        }
+
+        // Book operations
+        static inline void book_set(u32 name, u32 loc) { BOOK[name % BOOK_CAP] = loc; }
+        static inline u32  book_get(u32 name) { return BOOK[name % BOOK_CAP]; }
+
+        // Term constructors
+        static inline Term term_new_var(u32 loc) { return term_new(0, VAR, 0, loc); }
+        static inline Term term_new_era(void) { return term_new(0, ERA, 0, 0); }
+        static inline Term term_new_num(u32 val) { return term_new(0, NUM, 0, val); }
+        static inline Term term_new_dp0(u32 lab, u32 loc) { return term_new(0, DP0, lab, loc); }
+        static inline Term term_new_dp1(u32 lab, u32 loc) { return term_new(0, DP1, lab, loc); }
+        static inline Term term_new_got(u32 loc) { return term_new(0, GOT, 0, loc); }
+
+        static Term term_new_app(Term fun, Term arg) {
+          u32 loc = (u32)heap_alloc(2);
+          heap_write(loc + 0, fun);
+          heap_write(loc + 1, arg);
+          return term_new(0, APP, 0, loc);
+        }
+
+        static Term term_new_sup(u32 lab, Term a, Term b) {
+          u32 loc = (u32)heap_alloc(2);
+          heap_write(loc + 0, a);
+          heap_write(loc + 1, b);
+          return term_new(0, SUP, lab, loc);
+        }
+
+        static Term term_new_sup_at(u32 loc, u32 lab, Term a, Term b) {
+          heap_write(loc + 0, a);
+          heap_write(loc + 1, b);
+          return term_new(0, SUP, lab, loc);
+        }
+
+        static Term term_new_op2(u8 op, Term a, Term b) {
+          u32 loc = (u32)heap_alloc(2);
+          heap_write(loc + 0, a);
+          heap_write(loc + 1, b);
+          return term_new(0, OP2, op, loc);
+        }
+
+        static Term term_new_mat(u32 name, Term hit, Term miss) {
+          u32 loc = (u32)heap_alloc(2);
+          heap_write(loc + 0, hit);
+          heap_write(loc + 1, miss);
+          return term_new(0, MAT, name, loc);
+        }
+
+        static Term term_new_use(Term f) {
+          u32 loc = (u32)heap_alloc(1);
+          heap_write(loc, f);
+          return term_new(0, USE, 0, loc);
+        }
+
+        // Forward declarations
+        static Term wnf(Term term);
+        static Term normalize(Term term);
+
+        // =============================================================================
+        // WNF Evaluator
+        // =============================================================================
+
+        static Term wnf(Term term) {
+          Term* stack = WNF_STACK;
+          u32 s_pos = 0;
+          u32 base = 0;
+          Term next = term;
+          Term whnf;
+
+        enter:
+          switch (term_tag(next)) {
+            case ERA:
+            case NUM:
+            case LAM:
+            case SUP:
+            case NAM:
+            case DRY:
+            case MAT:
+            case SWI:
+            case USE:
+            case C00: case C01: case C02: case C03: case C04:
+            case C05: case C06: case C07: case C08: case C09:
+            case C10: case C11: case C12: case C13: case C14:
+            case C15: case C16:
+              whnf = next;
+              goto apply;
+
+            case VAR: {
+              u32 loc = term_val(next);
+              Term cell = heap_read(loc);
+              if (term_sub(cell)) {
+                next = cell;
+                goto enter;
+              }
+              whnf = next;
+              goto apply;
+            }
+
+            case APP: {
+              u32 loc = term_val(next);
+              Term fun = heap_read(loc);
+              stack[s_pos++] = next;
+              next = fun;
+              goto enter;
+            }
+
+            case DUP: {
+              u32 loc = term_val(next);
+              Term body = heap_read(loc + 1);
+              next = body;
+              goto enter;
+            }
+
+            case DP0:
+            case DP1: {
+              u32 loc = term_val(next);
+              Term val = heap_read(loc);
+              if (term_sub(val)) {
+                next = val;
+                goto enter;
+              }
+              stack[s_pos++] = next;
+              next = val;
+              goto enter;
+            }
+
+            case OP2: {
+              u32 loc = term_val(next);
+              Term x = heap_read(loc);
+              stack[s_pos++] = next;
+              next = x;
+              goto enter;
+            }
+
+            case REF: {
+              u32 name = term_ext(next);
+              u32 loc = book_get(name);
+              if (loc != 0) {
+                next = heap_read(loc);
+                goto enter;
+              }
+              whnf = next;
+              goto apply;
+            }
+
+            case MOV: {
+              u32 loc = term_val(next);
+              Term body = heap_read(loc + 1);
+              next = body;
+              goto enter;
+            }
+
+            default:
+              whnf = next;
+              goto apply;
+          }
+
+        apply:
+          while (s_pos > base) {
+            Term frame = stack[--s_pos];
+
+            switch (term_tag(frame)) {
+              case APP: {
+                u32 app_loc = term_val(frame);
+                Term arg = heap_read(app_loc + 1);
+
+                switch (term_tag(whnf)) {
+                  case LAM: {
+                    ITRS++;
+                    u32 lam_loc = term_val(whnf);
+                    heap_subst_var(lam_loc, arg);
+                    Term body = heap_read(lam_loc);
+                    next = body;
+                    goto enter;
+                  }
+
+                  case ERA: {
+                    ITRS++;
+                    whnf = term_new_era();
+                    continue;
+                  }
+
+                  case SUP: {
+                    ITRS++;
+                    u32 sup_loc = term_val(whnf);
+                    u32 lab = term_ext(whnf);
+                    Term f = heap_read(sup_loc + 0);
+                    Term g = heap_read(sup_loc + 1);
+                    u32 dup_loc = (u32)heap_alloc(4);
+                    heap_write(dup_loc + 0, arg);
+                    Term dp0 = term_new_dp0(lab, dup_loc);
+                    Term dp1 = term_new_dp1(lab, dup_loc);
+                    Term app0 = term_new_app(f, dp0);
+                    Term app1 = term_new_app(g, dp1);
+                    whnf = term_new_sup(lab, app0, app1);
+                    continue;
+                  }
+
+                  case MAT:
+                  case SWI: {
+                    stack[s_pos++] = whnf;
+                    next = arg;
+                    goto enter;
+                  }
+
+                  case USE: {
+                    stack[s_pos++] = whnf;
+                    next = arg;
+                    goto enter;
+                  }
+
+                  default:
+                    whnf = term_new_app(whnf, arg);
+                    continue;
+                }
+              }
+
+              case DP0:
+              case DP1: {
+                u8 side = (term_tag(frame) == DP0) ? 0 : 1;
+                u32 loc = term_val(frame);
+                u32 lab = term_ext(frame);
+
+                switch (term_tag(whnf)) {
+                  case SUP: {
+                    u32 sup_lab = term_ext(whnf);
+                    if (lab == sup_lab) {
+                      ITRS++;
+                      u32 sup_loc = term_val(whnf);
+                      Term a = heap_read(sup_loc + 0);
+                      Term b = heap_read(sup_loc + 1);
+                      heap_subst_var(loc, side == 0 ? b : a);
+                      whnf = side == 0 ? a : b;
+                      continue;
+                    }
+                    ITRS++;
+                    u32 sup_loc = term_val(whnf);
+                    Term a = heap_read(sup_loc + 0);
+                    Term b = heap_read(sup_loc + 1);
+                    u32 base_loc = (u32)heap_alloc(6);
+                    u32 dupA_loc = base_loc;
+                    u32 dupB_loc = base_loc + 2;
+                    heap_write(dupA_loc, a);
+                    heap_write(dupB_loc, b);
+                    Term a0 = term_new_dp0(lab, dupA_loc);
+                    Term a1 = term_new_dp1(lab, dupA_loc);
+                    Term b0 = term_new_dp0(lab, dupB_loc);
+                    Term b1 = term_new_dp1(lab, dupB_loc);
+                    Term sup0 = term_new_sup(sup_lab, a0, b0);
+                    Term sup1 = term_new_sup(sup_lab, a1, b1);
+                    heap_subst_var(loc, side == 0 ? sup1 : sup0);
+                    whnf = side == 0 ? sup0 : sup1;
+                    continue;
+                  }
+
+                  case ERA: {
+                    ITRS++;
+                    heap_subst_var(loc, term_new_era());
+                    whnf = term_new_era();
+                    continue;
+                  }
+
+                  case NUM: {
+                    ITRS++;
+                    heap_subst_var(loc, whnf);
+                    continue;
+                  }
+
+                  case LAM: {
+                    ITRS++;
+                    u32 lam_loc = term_val(whnf);
+                    u32 lam_ext = term_ext(whnf);
+                    Term body = heap_read(lam_loc);
+                    u32 base_loc = (u32)heap_alloc(5);
+                    u32 lam0_loc = base_loc;
+                    u32 lam1_loc = base_loc + 1;
+                    u32 dup_body_loc = base_loc + 2;
+                    Term x0 = term_new_var(lam0_loc);
+                    Term x1 = term_new_var(lam1_loc);
+                    Term x_sup = term_new_sup(lab, x0, x1);
+                    heap_subst_var(lam_loc, x_sup);
+                    heap_write(dup_body_loc, body);
+                    Term b0 = term_new_dp0(lab, dup_body_loc);
+                    Term b1 = term_new_dp1(lab, dup_body_loc);
+                    heap_write(lam0_loc, b0);
+                    heap_write(lam1_loc, b1);
+                    Term new_lam0 = term_new(0, LAM, lam_ext, lam0_loc);
+                    Term new_lam1 = term_new(0, LAM, lam_ext, lam1_loc);
+                    heap_subst_var(loc, side == 0 ? new_lam1 : new_lam0);
+                    whnf = side == 0 ? new_lam0 : new_lam1;
+                    continue;
+                  }
+
+                  default: {
+                    u32 new_loc = (u32)heap_alloc(1);
+                    heap_set(new_loc, whnf);
+                    heap_subst_var(loc, term_new(0, side == 0 ? DP1 : DP0, lab, new_loc));
+                    whnf = term_new(0, side == 0 ? DP0 : DP1, lab, new_loc);
+                    continue;
+                  }
+                }
+              }
+
+              case MAT:
+              case SWI: {
+                Term mat = frame;
+                u32 mat_loc = term_val(mat);
+                u32 mat_name = term_ext(mat);
+
+                switch (term_tag(whnf)) {
+                  case C00: case C01: case C02: case C03: case C04:
+                  case C05: case C06: case C07: case C08: case C09:
+                  case C10: case C11: case C12: case C13: case C14:
+                  case C15: case C16: {
+                    ITRS++;
+                    u32 ctr_name = term_ext(whnf);
+                    u32 ctr_loc = term_val(whnf);
+                    u32 ctr_arity = term_tag(whnf) - C00;
+                    if (mat_name == ctr_name) {
+                      Term hit = heap_read(mat_loc + 0);
+                      for (u32 i = 0; i < ctr_arity; i++) {
+                        Term field = heap_read(ctr_loc + i);
+                        hit = term_new_app(hit, field);
+                      }
+                      next = hit;
+                      goto enter;
+                    } else {
+                      Term miss = heap_read(mat_loc + 1);
+                      next = term_new_app(miss, whnf);
+                      goto enter;
+                    }
+                  }
+
+                  case NUM: {
+                    ITRS++;
+                    u32 num_val = term_val(whnf);
+                    u32 swi_val = mat_name;
+                    if (num_val == swi_val) {
+                      next = heap_read(mat_loc + 0);
+                      goto enter;
+                    } else {
+                      Term succ = heap_read(mat_loc + 1);
+                      next = term_new_app(succ, term_new_num(num_val - 1));
+                      goto enter;
+                    }
+                  }
+
+                  case ERA: {
+                    ITRS++;
+                    whnf = term_new_era();
+                    continue;
+                  }
+
+                  case SUP: {
+                    ITRS++;
+                    u32 sup_loc = term_val(whnf);
+                    u32 lab = term_ext(whnf);
+                    Term a = heap_read(sup_loc + 0);
+                    Term b = heap_read(sup_loc + 1);
+                    Term hit = heap_read(mat_loc + 0);
+                    Term miss = heap_read(mat_loc + 1);
+                    Term mat0 = term_new_mat(mat_name, hit, miss);
+                    Term mat1 = term_new_mat(mat_name, hit, miss);
+                    Term app0 = term_new_app(mat0, a);
+                    Term app1 = term_new_app(mat1, b);
+                    whnf = term_new_sup(lab, app0, app1);
+                    continue;
+                  }
+
+                  default:
+                    whnf = term_new_app(mat, whnf);
+                    continue;
+                }
+              }
+
+              case OP2: {
+                u32 op2_loc = term_val(frame);
+                u8 op = (u8)term_ext(frame);
+                Term y = heap_read(op2_loc + 1);
+
+                switch (term_tag(whnf)) {
+                  case NUM: {
+                    u32 x_val = term_val(whnf);
+                    stack[s_pos++] = term_new(0, F_OP2_NUM, op, x_val);
+                    next = y;
+                    goto enter;
+                  }
+
+                  case SUP: {
+                    ITRS++;
+                    u32 sup_loc = term_val(whnf);
+                    u32 lab = term_ext(whnf);
+                    Term a = heap_read(sup_loc + 0);
+                    Term b = heap_read(sup_loc + 1);
+                    Term op2_a = term_new_op2(op, a, y);
+                    Term op2_b = term_new_op2(op, b, y);
+                    whnf = term_new_sup(lab, op2_a, op2_b);
+                    continue;
+                  }
+
+                  default:
+                    whnf = term_new_op2(op, whnf, y);
+                    continue;
+                }
+              }
+
+              case F_OP2_NUM: {
+                u32 x_val = term_val(frame);
+                u8 op = (u8)term_ext(frame);
+
+                switch (term_tag(whnf)) {
+                  case NUM: {
+                    ITRS++;
+                    u32 y_val = term_val(whnf);
+                    u32 result;
+                    switch (op) {
+                      case OP_ADD: result = x_val + y_val; break;
+                      case OP_SUB: result = x_val - y_val; break;
+                      case OP_MUL: result = x_val * y_val; break;
+                      case OP_DIV: result = y_val ? x_val / y_val : 0; break;
+                      case OP_MOD: result = y_val ? x_val % y_val : 0; break;
+                      case OP_AND: result = x_val & y_val; break;
+                      case OP_OR:  result = x_val | y_val; break;
+                      case OP_XOR: result = x_val ^ y_val; break;
+                      case OP_LSH: result = x_val << (y_val & 31); break;
+                      case OP_RSH: result = x_val >> (y_val & 31); break;
+                      case OP_EQ:  result = x_val == y_val ? 1 : 0; break;
+                      case OP_NE:  result = x_val != y_val ? 1 : 0; break;
+                      case OP_LT:  result = x_val < y_val ? 1 : 0; break;
+                      case OP_LE:  result = x_val <= y_val ? 1 : 0; break;
+                      case OP_GT:  result = x_val > y_val ? 1 : 0; break;
+                      case OP_GE:  result = x_val >= y_val ? 1 : 0; break;
+                      default: result = 0;
+                    }
+                    whnf = term_new_num(result);
+                    continue;
+                  }
+
+                  case SUP: {
+                    ITRS++;
+                    u32 sup_loc = term_val(whnf);
+                    u32 lab = term_ext(whnf);
+                    Term a = heap_read(sup_loc + 0);
+                    Term b = heap_read(sup_loc + 1);
+                    Term x = term_new_num(x_val);
+                    Term op2_a = term_new_op2(op, x, a);
+                    Term op2_b = term_new_op2(op, x, b);
+                    whnf = term_new_sup(lab, op2_a, op2_b);
+                    continue;
+                  }
+
+                  default:
+                    whnf = term_new_op2(op, term_new_num(x_val), whnf);
+                    continue;
+                }
+              }
+
+              case USE: {
+                u32 use_loc = term_val(frame);
+                Term f = heap_read(use_loc);
+
+                switch (term_tag(whnf)) {
+                  case ERA: {
+                    ITRS++;
+                    whnf = term_new_era();
+                    continue;
+                  }
+
+                  case SUP: {
+                    ITRS++;
+                    u32 sup_loc = term_val(whnf);
+                    u32 lab = term_ext(whnf);
+                    Term a = heap_read(sup_loc + 0);
+                    Term b = heap_read(sup_loc + 1);
+                    u32 base_loc = (u32)heap_alloc(2);
+                    heap_write(base_loc, f);
+                    Term f0 = term_new_dp0(lab, base_loc);
+                    Term f1 = term_new_dp1(lab, base_loc);
+                    Term use0 = term_new_app(term_new_use(f0), a);
+                    Term use1 = term_new_app(term_new_use(f1), b);
+                    whnf = term_new_sup(lab, use0, use1);
+                    continue;
+                  }
+
+                  default: {
+                    next = term_new_app(f, whnf);
+                    goto enter;
+                  }
+                }
+              }
+
+              case GOT: {
+                u32 loc = term_val(frame);
+
+                switch (term_tag(whnf)) {
+                  case ERA:
+                  case NUM: {
+                    ITRS++;
+                    heap_subst_var(loc, whnf);
+                    continue;
+                  }
+
+                  case LAM: {
+                    ITRS++;
+                    u32 lam_loc = term_val(whnf);
+                    u32 lam_ext = term_ext(whnf);
+                    u32 new_loc = (u32)heap_alloc(2);
+                    heap_write(new_loc, heap_read(lam_loc));
+                    heap_write(new_loc + 1, term_new_got(new_loc));
+                    Term new_lam = term_new(0, LAM, lam_ext, new_loc);
+                    heap_subst_var(loc, new_lam);
+                    whnf = new_lam;
+                    continue;
+                  }
+
+                  case SUP: {
+                    ITRS++;
+                    u32 sup_loc = term_val(whnf);
+                    u32 lab = term_ext(whnf);
+                    Term a = heap_read(sup_loc + 0);
+                    Term b = heap_read(sup_loc + 1);
+                    u32 base_loc = (u32)heap_alloc(4);
+                    heap_write(base_loc + 0, a);
+                    heap_write(base_loc + 1, b);
+                    Term got_a = term_new_got(base_loc + 0);
+                    Term got_b = term_new_got(base_loc + 1);
+                    Term new_sup = term_new_sup_at(base_loc + 2, lab, got_a, got_b);
+                    heap_subst_var(loc, new_sup);
+                    whnf = new_sup;
+                    continue;
+                  }
+
+                  default: {
+                    u32 new_loc = (u32)heap_alloc(1);
+                    heap_set(new_loc, whnf);
+                    Term got = term_new_got(new_loc);
+                    heap_subst_var(loc, got);
+                    whnf = got;
+                    continue;
+                  }
+                }
+              }
+
+              default:
+                continue;
+            }
+          }
+
+          return whnf;
+        }
+
+        // =============================================================================
+        // Normalize (Strong Normal Form)
+        // =============================================================================
+
+        static Term normalize(Term term) {
+          term = wnf(term);
+
+          switch (term_tag(term)) {
+            case LAM: {
+              u32 loc = term_val(term);
+              Term body = normalize(heap_read(loc));
+              heap_write(loc, body);
+              return term;
+            }
+
+            case APP: {
+              u32 loc = term_val(term);
+              Term fun = normalize(heap_read(loc + 0));
+              Term arg = normalize(heap_read(loc + 1));
+              heap_write(loc + 0, fun);
+              heap_write(loc + 1, arg);
+              return term;
+            }
+
+            case SUP: {
+              u32 loc = term_val(term);
+              Term a = normalize(heap_read(loc + 0));
+              Term b = normalize(heap_read(loc + 1));
+              heap_write(loc + 0, a);
+              heap_write(loc + 1, b);
+              return term;
+            }
+
+            case C00: case C01: case C02: case C03: case C04:
+            case C05: case C06: case C07: case C08: case C09:
+            case C10: case C11: case C12: case C13: case C14:
+            case C15: case C16: {
+              u32 loc = term_val(term);
+              u32 arity = term_tag(term) - C00;
+              for (u32 i = 0; i < arity; i++) {
+                Term field = normalize(heap_read(loc + i));
+                heap_write(loc + i, field);
+              }
+              return term;
+            }
+
+            default:
+              return term;
+          }
+        }
+
+        // =============================================================================
+        // Pretty Printer
+        // =============================================================================
+
+        static void print_term(Term t) {
+          switch (term_tag(t)) {
+            case ERA: printf("*"); break;
+            case NUM: printf("%u", term_val(t)); break;
+            case VAR: printf("x%u", term_val(t)); break;
+            case LAM: {
+              u32 loc = term_val(t);
+              printf("λx%u.", loc);
+              print_term(heap_read(loc));
+              break;
+            }
+            case APP: {
+              u32 loc = term_val(t);
+              printf("(");
+              print_term(heap_read(loc));
+              printf(" ");
+              print_term(heap_read(loc + 1));
+              printf(")");
+              break;
+            }
+            case SUP: {
+              u32 loc = term_val(t);
+              printf("&%u{", term_ext(t));
+              print_term(heap_read(loc));
+              printf(", ");
+              print_term(heap_read(loc + 1));
+              printf("}");
+              break;
+            }
+            case DP0: printf("x%u₀", term_val(t)); break;
+            case DP1: printf("x%u₁", term_val(t)); break;
+            case REF: printf("@%u", term_ext(t)); break;
+            case C00: case C01: case C02: case C03: case C04:
+            case C05: case C06: case C07: case C08: case C09:
+            case C10: case C11: case C12: case C13: case C14:
+            case C15: case C16: {
+              u32 loc = term_val(t);
+              u32 arity = term_tag(t) - C00;
+              printf("#%u", term_ext(t));
+              if (arity > 0) {
+                printf("{");
+                for (u32 i = 0; i < arity; i++) {
+                  if (i > 0) printf(", ");
+                  print_term(heap_read(loc + i));
+                }
+                printf("}");
+              }
+              break;
+            }
+            default: printf("?%u", term_tag(t)); break;
+          }
+        }
+
+        // =============================================================================
+        // Initialization
+        // =============================================================================
+
+        static void hvm_init(void) {
+          HEAP = (Term*)calloc(HEAP_CAP, sizeof(Term));
+          HEAP_NEXT = 1;
+          BOOK = (u32*)calloc(BOOK_CAP, sizeof(u32));
+          WNF_STACK = (Term*)malloc((1ULL << 20) * sizeof(Term));
+          ITRS = 0;
+        }
+
+        // Name hash function (FNV-1a)
+        static u32 hash(const char* name) {
+          u32 h = 2166136261u;
+          while (*name) {
+            h ^= (u8)*name++;
+            h *= 16777619u;
+          }
+          return h & 0xFFFFFF;
+        }
+
+        // =============================================================================
+        // Generated Definitions
+        // =============================================================================
+
+        static void load_book(void) {
+          ${ctx.init.toString()}
+        }
+
+        // =============================================================================
+        // Main
+        // =============================================================================
+
+        int main(int argc, char** argv) {
+          hvm_init();
+          load_book();
+
+          // Run main
+          u32 main_hash = hash("main");
+          u32 main_loc = book_get(main_hash);
+          if (main_loc == 0) {
+            fprintf(stderr, "No @main definition found\\n");
+            return 1;
+          }
+
+          Term result = normalize(heap_read(main_loc));
+
+          printf("Result: ");
+          print_term(result);
+          printf("\\n");
+
+          printf("Interactions: %llu\\n", ITRS);
+          printf("Heap used: %llu words\\n", HEAP_NEXT);
+
+          return 0;
+        }
+      """
+    }
+  }
+
+  // ===========================================================================
+  // Example Usage
+  // ===========================================================================
+
+  /*
+    Input HVM:
+      @id = λx.x
+      @two = λf.λx.(f (f x))
+      @main = (((@two @id) 42))
+
+    Output: Complete C program that evaluates to 42
+  */
+}
