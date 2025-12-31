@@ -1,0 +1,357 @@
+// =============================================================================
+// HVM to RVM Transformation
+// =============================================================================
+// Compiles HVM4 Interaction Calculus to RosettaVM bytecode.
+//
+// The key insight: HVM's graph rewriting maps beautifully to RVM's
+// content-addressed store. Each interaction rule becomes a pattern match
+// and reconstruction in the heap.
+//
+// HVM Term → RVM representation:
+//   LAM    → Closure (code hash + captured env)
+//   APP    → IApply instruction
+//   SUP    → VTuple with label tag
+//   DUP    → Graph node with two outgoing edges
+//   ERA    → VUnit (absorbed on contact)
+//   NUM    → VInt
+//
+// The compiled code maintains HVM's optimal sharing by:
+//   - Using RVM's content-addressing for automatic dedup
+//   - Representing SUP/DUP as heap structures
+//   - Implementing interaction rules as RVM instruction sequences
+
+language HVM2RVM {
+
+  import HVM   // Source: Interaction Calculus
+  import RVM   // Target: RosettaVM
+
+  // ===========================================================================
+  // Compilation Context
+  // ===========================================================================
+
+  sort Ctx
+
+  constructor
+    Ctx : Scope × Int × Int × CodeBlock* × Hash* → Ctx
+    //    scope, dup_counter, fresh_counter, blocks, errors
+
+  sort Scope
+
+  constructor
+    ScopeEmpty : Scope
+    ScopeBind  : String × Int × Scope → Scope  // name, slot, parent
+
+  // ===========================================================================
+  // Runtime Representation Tags
+  // ===========================================================================
+  // We use VCon tags to distinguish HVM node types at runtime
+
+  def TAG_LAM : Int = 0
+  def TAG_SUP : Int = 1
+  def TAG_DUP : Int = 2
+  def TAG_ERA : Int = 3
+  def TAG_DP0 : Int = 4
+  def TAG_DP1 : Int = 5
+  def TAG_CTR : Int = 6
+  def TAG_RED : Int = 7
+
+  // ===========================================================================
+  // Main Compilation Entry Point
+  // ===========================================================================
+
+  xform compileProgram : HVM.Term ⇄ RVM.Program
+  rule compileProgram {
+    term ↦
+      let ctx0 = Ctx(ScopeEmpty, 0, 0, [], []) in
+      let (code, ctx1) = compile(term, ctx0) in
+      let mainBlock = CodeBlock(
+        hashOf(code),
+        Some("main"),
+        0,    // arity
+        0,    // locals
+        0,    // captures
+        code ++ [RVM.IReturn]
+      ) in
+      let Ctx(_, _, _, blocks, _) = ctx1 in
+      Program(mainBlock :: blocks)
+  }
+
+  // ===========================================================================
+  // Core Compilation Transform
+  // ===========================================================================
+
+  xform compile : HVM.Term × Ctx ⇄ (RVM.Instr* × Ctx)
+
+  // ---------------------------------------------------------------------------
+  // Variables and References
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    // Variable lookup
+    (HVM.Var(x), Ctx(scope, dc, fc, blocks, errs))
+      ↦ match lookupVar(x, scope) with
+          Some(slot) → ([RVM.ILoad(slot)], ctx')
+          None       → ([RVM.ILoadGlobal(hashOf(x))], ctx')
+        end
+      where ctx' = Ctx(scope, dc, fc, blocks, errs)
+
+    // Reference lookup (global definition)
+    (HVM.Ref(name), ctx)
+      ↦ ([RVM.ILoadGlobal(hashOf(name))], ctx)
+
+    // Dp0/Dp1 projections - load and project
+    (HVM.Dp0(x), ctx)
+      ↦ let (load, ctx') = compile(HVM.Var(x), ctx) in
+        (load ++ [RVM.IPush(RVM.LInt(0)), RVM.IGetField(0)], ctx')
+
+    (HVM.Dp1(x), ctx)
+      ↦ let (load, ctx') = compile(HVM.Var(x), ctx) in
+        (load ++ [RVM.IPush(RVM.LInt(1)), RVM.IGetField(1)], ctx')
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lambda and Application
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    // Lambda: compile body as new code block, create closure
+    (HVM.Lam(x, body), Ctx(scope, dc, fc, blocks, errs))
+      ↦ let scope' = ScopeBind(x, 0, scope) in
+        let ctx' = Ctx(scope', dc, fc + 1, blocks, errs) in
+        let (bodyCode, Ctx(_, dc', fc', blocks', errs')) = compile(body, ctx') in
+        let lamCode = bodyCode ++ [RVM.IReturn] in
+        let lamHash = hashOf(lamCode) in
+        let lamBlock = CodeBlock(lamHash, Some("λ" ++ x), 1, 1, 0, lamCode) in
+        let captures = freeVars(body) \\ [x] in
+        let numCaptures = length(captures) in
+        ([RVM.IClosure(lamHash, numCaptures)],
+         Ctx(scope, dc', fc', lamBlock :: blocks', errs'))
+
+    // Application: compile both, then apply
+    (HVM.App(f, a), ctx)
+      ↦ let (cf, ctx1) = compile(f, ctx) in
+        let (ca, ctx2) = compile(a, ctx1) in
+        (cf ++ ca ++ [RVM.IApply], ctx2)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Superposition and Duplication
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    // Erasure: push unit
+    (HVM.Era, ctx)
+      ↦ ([RVM.IPush(RVM.LUnit)], ctx)
+
+    // Superposition: create tagged tuple {TAG_SUP, label, a, b}
+    (HVM.Sup(HVM.Lab(l), a, b), ctx)
+      ↦ let (ca, ctx1) = compile(a, ctx) in
+        let (cb, ctx2) = compile(b, ctx1) in
+        ([RVM.IPush(RVM.LInt(TAG_SUP)),
+          RVM.IPush(RVM.LInt(l))]
+         ++ ca ++ cb ++
+         [RVM.IMkTuple(4)], ctx2)
+
+    // Duplication: create dup node, bind, continue
+    // Runtime will handle interaction when accessed
+    (HVM.Dup(x, HVM.Lab(l), val, body), Ctx(scope, dc, fc, blocks, errs))
+      ↦ let (cv, ctx1) = compile(val, Ctx(scope, dc, fc, blocks, errs)) in
+        let scope' = ScopeBind(x, dc, scope) in
+        let ctx2 = Ctx(scope', dc + 1, fc, blocks, errs) in
+        let (cb, ctx3) = compile(body, ctx2) in
+        // Create dup node: {TAG_DUP, label, val, dp0_slot, dp1_slot}
+        ([RVM.IPush(RVM.LInt(TAG_DUP)),
+          RVM.IPush(RVM.LInt(l))]
+         ++ cv ++
+         [RVM.IMkTuple(3),
+          RVM.IStore(dc)]  // Store dup node in slot
+         ++ cb, ctx3)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Numbers and Operations
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    // Number literal
+    (HVM.Num(n), ctx)
+      ↦ ([RVM.IPush(RVM.LInt(n))], ctx)
+
+    // Binary operations
+    (HVM.Op2(HVM.OpAdd, a, b), ctx)
+      ↦ let (ca, ctx1) = compile(a, ctx) in
+        let (cb, ctx2) = compile(b, ctx1) in
+        (ca ++ cb ++ [RVM.IAdd], ctx2)
+
+    (HVM.Op2(HVM.OpSub, a, b), ctx)
+      ↦ let (ca, ctx1) = compile(a, ctx) in
+        let (cb, ctx2) = compile(b, ctx1) in
+        (ca ++ cb ++ [RVM.ISub], ctx2)
+
+    (HVM.Op2(HVM.OpMul, a, b), ctx)
+      ↦ let (ca, ctx1) = compile(a, ctx) in
+        let (cb, ctx2) = compile(b, ctx1) in
+        (ca ++ cb ++ [RVM.IMul], ctx2)
+
+    (HVM.Op2(HVM.OpDiv, a, b), ctx)
+      ↦ let (ca, ctx1) = compile(a, ctx) in
+        let (cb, ctx2) = compile(b, ctx1) in
+        (ca ++ cb ++ [RVM.IDiv], ctx2)
+
+    (HVM.Op2(HVM.OpMod, a, b), ctx)
+      ↦ let (ca, ctx1) = compile(a, ctx) in
+        let (cb, ctx2) = compile(b, ctx1) in
+        (ca ++ cb ++ [RVM.IMod], ctx2)
+
+    (HVM.Op2(HVM.OpEq, a, b), ctx)
+      ↦ let (ca, ctx1) = compile(a, ctx) in
+        let (cb, ctx2) = compile(b, ctx1) in
+        (ca ++ cb ++ [RVM.IEq], ctx2)
+
+    (HVM.Op2(HVM.OpNe, a, b), ctx)
+      ↦ let (ca, ctx1) = compile(a, ctx) in
+        let (cb, ctx2) = compile(b, ctx1) in
+        (ca ++ cb ++ [RVM.INe], ctx2)
+
+    (HVM.Op2(HVM.OpLt, a, b), ctx)
+      ↦ let (ca, ctx1) = compile(a, ctx) in
+        let (cb, ctx2) = compile(b, ctx1) in
+        (ca ++ cb ++ [RVM.ILt], ctx2)
+
+    (HVM.Op2(HVM.OpLe, a, b), ctx)
+      ↦ let (ca, ctx1) = compile(a, ctx) in
+        let (cb, ctx2) = compile(b, ctx1) in
+        (ca ++ cb ++ [RVM.ILe], ctx2)
+
+    (HVM.Op2(HVM.OpGt, a, b), ctx)
+      ↦ let (ca, ctx1) = compile(a, ctx) in
+        let (cb, ctx2) = compile(b, ctx1) in
+        (ca ++ cb ++ [RVM.IGt], ctx2)
+
+    (HVM.Op2(HVM.OpGe, a, b), ctx)
+      ↦ let (ca, ctx1) = compile(a, ctx) in
+        let (cb, ctx2) = compile(b, ctx1) in
+        (ca ++ cb ++ [RVM.IGe], ctx2)
+
+    (HVM.Op2(HVM.OpAnd, a, b), ctx)
+      ↦ let (ca, ctx1) = compile(a, ctx) in
+        let (cb, ctx2) = compile(b, ctx1) in
+        (ca ++ cb ++ [RVM.IAnd], ctx2)
+
+    (HVM.Op2(HVM.OpOr, a, b), ctx)
+      ↦ let (ca, ctx1) = compile(a, ctx) in
+        let (cb, ctx2) = compile(b, ctx1) in
+        (ca ++ cb ++ [RVM.IOr], ctx2)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Constructors and Pattern Matching
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    // Constructor: {TAG_CTR, name_hash, fields...}
+    (HVM.Ctr(name, args), ctx)
+      ↦ let (argsCode, ctx') = compileAll(args, ctx) in
+        ([RVM.IPush(RVM.LInt(TAG_CTR)),
+          RVM.IPush(RVM.LHash(hashOf(name)))]
+         ++ argsCode ++
+         [RVM.IMkTuple(2 + length(args))], ctx')
+
+    // Match: compile as closure that tests tag
+    (HVM.Mat(k, h, m), ctx)
+      ↦ let (ch, ctx1) = compile(h, ctx) in
+        let (cm, ctx2) = compile(m, ctx1) in
+        // Create match closure: test tag, branch to h or m
+        ([RVM.IPush(RVM.LInt(TAG_CTR)),
+          RVM.IPush(RVM.LHash(hashOf(k)))]
+         ++ ch ++ cm ++
+         [RVM.IMkTuple(4)], ctx2)  // {TAG_CTR, expected_hash, handler, default}
+
+    // Switch: compile as conditional
+    (HVM.Swi(n, z, s), ctx)
+      ↦ let (cz, ctx1) = compile(z, ctx) in
+        let (cs, ctx2) = compile(s, ctx1) in
+        ([RVM.IPush(RVM.LInt(n))]
+         ++ cz ++ cs ++
+         [RVM.IMkTuple(3)], ctx2)  // {expected_n, zero_case, succ_case}
+  }
+
+  // ---------------------------------------------------------------------------
+  // Definitions
+  // ---------------------------------------------------------------------------
+
+  rule compile {
+    // Definition: compile body, store globally, continue
+    (HVM.Def(name, body, rest), ctx)
+      ↦ let (cb, ctx1) = compile(body, ctx) in
+        let (cr, ctx2) = compile(rest, ctx1) in
+        (cb ++ [RVM.IStoreGlobal(hashOf(name))] ++ cr, ctx2)
+  }
+
+  // ===========================================================================
+  // Runtime Interaction Implementation
+  // ===========================================================================
+  // These generate the runtime dispatch code for HVM interactions.
+  // Called when we need to force evaluation of a thunk/dup.
+
+  xform genInteractionDispatch : Ctx ⇄ (RVM.Instr* × Ctx)
+  rule genInteractionDispatch {
+    ctx ↦
+      // Generate code that:
+      // 1. Checks tag of top-of-stack
+      // 2. Dispatches to appropriate interaction rule
+      // 3. Recurses until WHNF
+      let dispatch = [
+        // Get tag
+        RVM.IDup,
+        RVM.IGetField(0),
+        // Match on tag
+        RVM.IMatch([
+          (TAG_LAM, 0),   // Already WHNF
+          (TAG_SUP, 0),   // Already WHNF
+          (TAG_DUP, 10),  // Needs interaction
+          (TAG_ERA, 0),   // Already WHNF
+          (TAG_CTR, 0),   // Already WHNF
+          (TAG_RED, 20)   // Reduction hint
+        ])
+      ] in
+      (dispatch, ctx)
+  }
+
+  // ===========================================================================
+  // Helper Functions
+  // ===========================================================================
+
+  xform lookupVar : String × Scope ⇄ Int?
+  rule lookupVar {
+    (x, ScopeEmpty)              ↦ None
+    (x, ScopeBind(x, slot, _))   ↦ Some(slot)
+    (x, ScopeBind(y, _, rest))   ↦ lookupVar(x, rest)  where x ≠ y
+  }
+
+  xform compileAll : HVM.Term* × Ctx ⇄ (RVM.Instr* × Ctx)
+  rule compileAll {
+    ([], ctx)          ↦ ([], ctx)
+    (t :: ts, ctx)     ↦ let (c, ctx1) = compile(t, ctx) in
+                         let (cs, ctx2) = compileAll(ts, ctx1) in
+                         (c ++ cs, ctx2)
+  }
+
+  xform freeVars : HVM.Term ⇄ String*
+  rule freeVars {
+    HVM.Var(x)             ↦ [x]
+    HVM.Lam(x, body)       ↦ freeVars(body) \\ [x]
+    HVM.App(f, a)          ↦ freeVars(f) ++ freeVars(a)
+    HVM.Sup(_, a, b)       ↦ freeVars(a) ++ freeVars(b)
+    HVM.Dup(x, _, v, body) ↦ freeVars(v) ++ (freeVars(body) \\ [x])
+    HVM.Dp0(x)             ↦ [x]
+    HVM.Dp1(x)             ↦ [x]
+    HVM.Op2(_, a, b)       ↦ freeVars(a) ++ freeVars(b)
+    HVM.Num(_)             ↦ []
+    HVM.Era                ↦ []
+    HVM.Ctr(_, args)       ↦ concat(map(freeVars, args))
+    HVM.Ref(_)             ↦ []
+    _                      ↦ []
+  }
+
+}

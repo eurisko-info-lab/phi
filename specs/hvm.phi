@@ -1,0 +1,448 @@
+// =============================================================================
+// HVM4: Interaction Calculus Specification
+// =============================================================================
+// A phi spec for HigherOrderCO's HVM4 runtime.
+// HVM4 implements the Interaction Calculus - optimal lambda calculus with
+// superpositions and duplications for automatic parallelism.
+//
+// Core insight: Graph nodes interact pairwise. Four fundamental rules
+// (APP-LAM, DUP-SUP, APP-SUP, DUP-LAM) give optimal evaluation.
+//
+// References:
+//   - https://github.com/HigherOrderCO/hvm4
+//   - docs/theory/interaction_calculus.md
+
+language HVM {
+
+  // ===========================================================================
+  // Core Sorts
+  // ===========================================================================
+
+  sort Term      // Interaction calculus terms
+  sort Label     // Dup/Sup labels for tracking interactions
+  sort Name      // Variable/reference names
+  sort Op        // Binary operators
+
+  // ===========================================================================
+  // Labels (for DUP/SUP pairing)
+  // ===========================================================================
+  // Labels determine when DUP-SUP annihilate vs commute.
+  // Same label → values extracted; different labels → nested sups created.
+
+  constructor
+    Lab    : Int → Label         // Static label (numeric)
+    LabDyn : Term → Label        // Dynamic label (computed at runtime)
+
+  // ===========================================================================
+  // Core Terms
+  // ===========================================================================
+
+  constructor
+    // Lambda calculus core
+    Var    : Name → Term                        // Variable reference
+    Lam    : Name → Term → Term                 // λx.body
+    App    : Term → Term → Term                 // (f x)
+
+    // Superposition/Duplication (the magic sauce)
+    Era    : Term                               // &{} - erasure (black hole)
+    Sup    : Label → Term → Term → Term         // &L{a, b} - superposition
+    Dup    : Name → Label → Term → Term → Term  // !x &L= val; body
+
+    // Dup projections (runtime artifacts)
+    Dp0    : Name → Term                        // x₀ - first projection
+    Dp1    : Name → Term                        // x₁ - second projection
+
+    // Numbers and operations
+    Num    : Int → Term                         // Integer literal
+    Op2    : Op → Term → Term → Term            // (a op b)
+
+    // Constructors and pattern matching
+    Ctr    : Name → Term* → Term                // #Name{a, b, ...}
+    Mat    : Name → Term → Term → Term          // λ{#K: h; m} - match K
+    Swi    : Int → Term → Term → Term           // λ{n: h; m} - switch on n
+
+    // References and definitions
+    Ref    : Name → Term                        // @name - reference
+    Def    : Name → Term → Term                 // @name = body; rest
+
+    // Special forms
+    Use    : Term → Term                        // λ{x} - unbox/use
+    Red    : Term → Term → Term                 // f ~> g - reduction hint
+    Nam    : Name → Term                        // ^name - stuck name
+    Dry    : Term → Term → Term                 // ^(f x) - stuck app
+
+    // Dynamic superposition (label computed at runtime)
+    DSu    : Term → Term → Term → Term          // &(lab){a, b}
+    DDu    : Name → Term → Term → Term → Term   // !x &(lab)= val; body
+
+    // Move (linear resource)
+    Mov    : Name → Term → Term → Term          // %x= val; body
+    Got    : Name → Term                        // Mov-bound variable
+
+    // Increment (priority wrapper)
+    Inc    : Term → Term                        // ↑term
+
+  // ===========================================================================
+  // Binary Operators
+  // ===========================================================================
+
+  constructor
+    OpAdd  : Op       // +
+    OpSub  : Op       // -
+    OpMul  : Op       // *
+    OpDiv  : Op       // /
+    OpMod  : Op       // %
+    OpAnd  : Op       // &&
+    OpOr   : Op       // ||
+    OpXor  : Op       // ^
+    OpShl  : Op       // <<
+    OpShr  : Op       // >>
+    OpEq   : Op       // ==
+    OpNe   : Op       // !=
+    OpLt   : Op       // <
+    OpLe   : Op       // <=
+    OpGt   : Op       // >
+    OpGe   : Op       // >=
+
+  // ===========================================================================
+  // SECTION: Interaction Rules (Reductions)
+  // ===========================================================================
+  // These are the heart of HVM - graph node interactions.
+  // Each rule describes how two nodes interact when connected.
+
+  // ---------------------------------------------------------------------------
+  // APP-LAM: Application eliminates lambda (β-reduction)
+  // ---------------------------------------------------------------------------
+  // (λx.body)(arg)
+  // -------------- APP-LAM
+  // x ← arg
+  // body
+
+  xform app_lam : Term ⇄ Term
+  rule app_lam {
+    App(Lam(x, body), arg) ↦ subst(x, arg, body)
+  }
+
+  // ---------------------------------------------------------------------------
+  // DUP-SUP: Duplication eliminates superposition (same label)
+  // ---------------------------------------------------------------------------
+  // !x &L= &L{a, b}; t
+  // ------------------ DUP-SUP (L = L)
+  // x₀ ← a, x₁ ← b
+  // t
+
+  xform dup_sup_same : Term ⇄ Term
+  rule dup_sup_same {
+    Dup(x, l, Sup(l, a, b), body)
+      ↦ subst2(Dp0(x), a, Dp1(x), b, body)
+  }
+
+  // ---------------------------------------------------------------------------
+  // DUP-SUP: Commute when labels differ
+  // ---------------------------------------------------------------------------
+  // !x &L= &R{a, b}; t
+  // ------------------- DUP-SUP (L ≠ R)
+  // !A &L= a;
+  // !B &L= b;
+  // x₀ ← &R{A₀, B₀}
+  // x₁ ← &R{A₁, B₁}
+  // t
+
+  xform dup_sup_diff : Term ⇄ Term
+  rule dup_sup_diff {
+    Dup(x, l, Sup(r, a, b), body)
+      ↦ Dup(fresh("A"), l, a,
+          Dup(fresh("B"), l, b,
+            subst2(Dp0(x), Sup(r, Dp0(fresh("A")), Dp0(fresh("B"))),
+                   Dp1(x), Sup(r, Dp1(fresh("A")), Dp1(fresh("B"))),
+                   body)))
+      where l ≠ r
+  }
+
+  // ---------------------------------------------------------------------------
+  // APP-SUP: Application propagates through superposition
+  // ---------------------------------------------------------------------------
+  // (&L{f, g})(a)
+  // ----------------- APP-SUP
+  // !A &L= a;
+  // &L{(f A₀), (g A₁)}
+
+  xform app_sup : Term ⇄ Term
+  rule app_sup {
+    App(Sup(l, f, g), a)
+      ↦ Dup(fresh("A"), l, a,
+          Sup(l, App(f, Dp0(fresh("A"))),
+                 App(g, Dp1(fresh("A")))))
+  }
+
+  // ---------------------------------------------------------------------------
+  // DUP-LAM: Duplication propagates through lambda
+  // ---------------------------------------------------------------------------
+  // !F &L= λx.body; t
+  // ----------------- DUP-LAM
+  // F₀ ← λ$x0.B₀
+  // F₁ ← λ$x1.B₁
+  // x  ← &L{$x0, $x1}
+  // !B &L= body; t
+
+  xform dup_lam : Term ⇄ Term
+  rule dup_lam {
+    Dup(f, l, Lam(x, body), t)
+      ↦ let x0 = fresh(x ++ "0") in
+        let x1 = fresh(x ++ "1") in
+        let body' = subst(x, Sup(l, Var(x0), Var(x1)), body) in
+        Dup(fresh("B"), l, body',
+          subst2(Dp0(f), Lam(x0, Dp0(fresh("B"))),
+                 Dp1(f), Lam(x1, Dp1(fresh("B"))),
+                 t))
+  }
+
+  // ---------------------------------------------------------------------------
+  // DUP-ERA: Duplication of erasure
+  // ---------------------------------------------------------------------------
+  // !x &L= &{}; t
+  // ------------- DUP-ERA
+  // x₀ ← &{}, x₁ ← &{}
+  // t
+
+  xform dup_era : Term ⇄ Term
+  rule dup_era {
+    Dup(x, _, Era, body)
+      ↦ subst2(Dp0(x), Era, Dp1(x), Era, body)
+  }
+
+  // ---------------------------------------------------------------------------
+  // DUP-NUM: Duplication of number (clones value)
+  // ---------------------------------------------------------------------------
+  // !x &L= #n; t
+  // ------------ DUP-NUM
+  // x₀ ← #n, x₁ ← #n
+  // t
+
+  xform dup_num : Term ⇄ Term
+  rule dup_num {
+    Dup(x, _, Num(n), body)
+      ↦ subst2(Dp0(x), Num(n), Dp1(x), Num(n), body)
+  }
+
+  // ---------------------------------------------------------------------------
+  // APP-ERA: Application to erasure
+  // ---------------------------------------------------------------------------
+  // (&{} a)
+  // -------- APP-ERA
+  // &{}
+
+  xform app_era : Term ⇄ Term
+  rule app_era {
+    App(Era, _) ↦ Era
+  }
+
+  // ---------------------------------------------------------------------------
+  // OP2-NUM: Binary operation on numbers
+  // ---------------------------------------------------------------------------
+  // (#a op #b)
+  // ---------- OP2-NUM
+  // #(a op b)
+
+  xform op2_num : Term ⇄ Term
+  rule op2_num {
+    Op2(OpAdd, Num(a), Num(b)) ↦ Num(a + b)
+    Op2(OpSub, Num(a), Num(b)) ↦ Num(a - b)
+    Op2(OpMul, Num(a), Num(b)) ↦ Num(a * b)
+    Op2(OpDiv, Num(a), Num(b)) ↦ Num(a / b)
+    Op2(OpMod, Num(a), Num(b)) ↦ Num(a % b)
+    Op2(OpEq,  Num(a), Num(b)) ↦ Num(if a == b then 1 else 0)
+    Op2(OpNe,  Num(a), Num(b)) ↦ Num(if a != b then 1 else 0)
+    Op2(OpLt,  Num(a), Num(b)) ↦ Num(if a < b then 1 else 0)
+    Op2(OpLe,  Num(a), Num(b)) ↦ Num(if a <= b then 1 else 0)
+    Op2(OpGt,  Num(a), Num(b)) ↦ Num(if a > b then 1 else 0)
+    Op2(OpGe,  Num(a), Num(b)) ↦ Num(if a >= b then 1 else 0)
+  }
+
+  // ---------------------------------------------------------------------------
+  // OP2-SUP: Binary operation distributes over superposition
+  // ---------------------------------------------------------------------------
+  // (#a op &L{b, c})
+  // ---------------- OP2-SUP
+  // !X &L= #a;
+  // &L{(X₀ op b), (X₁ op c)}
+
+  xform op2_sup : Term ⇄ Term
+  rule op2_sup {
+    Op2(op, a, Sup(l, b, c))
+      ↦ Dup(fresh("X"), l, a,
+          Sup(l, Op2(op, Dp0(fresh("X")), b),
+                 Op2(op, Dp1(fresh("X")), c)))
+  }
+
+  // ---------------------------------------------------------------------------
+  // MAT-CTR: Pattern match on constructor
+  // ---------------------------------------------------------------------------
+  // (λ{#K: h; m} #K{...})
+  // --------------------- MAT-CTR (matching)
+  // (h ...)
+
+  xform mat_ctr : Term ⇄ Term
+  rule mat_ctr {
+    App(Mat(k, h, _), Ctr(k, args))
+      ↦ foldl(App, h, args)
+  }
+
+  // ---------------------------------------------------------------------------
+  // SWI-NUM: Switch on number
+  // ---------------------------------------------------------------------------
+  // (λ{0: z; s} #0)    → z
+  // (λ{0: z; s} #(n+1)) → (s #n)
+
+  xform swi_num : Term ⇄ Term
+  rule swi_num {
+    App(Swi(0, z, _), Num(0)) ↦ z
+    App(Swi(0, _, s), Num(n)) ↦ App(s, Num(n - 1))
+      where n > 0
+  }
+
+  // ===========================================================================
+  // SECTION: Helper Transforms
+  // ===========================================================================
+
+  // Substitution: replace variable with term
+  xform subst : Name × Term × Term ⇄ Term
+  rule subst {
+    (x, val, Var(x))           ↦ val
+    (x, val, Var(y))           ↦ Var(y)           where x ≠ y
+    (x, val, Lam(x, body))     ↦ Lam(x, body)     // shadowed
+    (x, val, Lam(y, body))     ↦ Lam(y, subst(x, val, body))  where x ≠ y
+    (x, val, App(f, a))        ↦ App(subst(x, val, f), subst(x, val, a))
+    (x, val, Sup(l, a, b))     ↦ Sup(l, subst(x, val, a), subst(x, val, b))
+    (x, val, Dup(y, l, v, b))  ↦ Dup(y, l, subst(x, val, v), subst(x, val, b))
+    (x, val, Dp0(y))           ↦ if x == y then val else Dp0(y)
+    (x, val, Dp1(y))           ↦ if x == y then val else Dp1(y)
+    (x, val, Op2(op, a, b))    ↦ Op2(op, subst(x, val, a), subst(x, val, b))
+    (x, val, Num(n))           ↦ Num(n)
+    (x, val, Era)              ↦ Era
+    (x, val, Ctr(k, args))     ↦ Ctr(k, map(subst(x, val, _), args))
+    (x, val, Ref(n))           ↦ Ref(n)
+  }
+
+  // Double substitution (for DUP elimination)
+  xform subst2 : Name × Term × Name × Term × Term ⇄ Term
+  rule subst2 {
+    (x0, v0, x1, v1, t) ↦ subst(x1, v1, subst(x0, v0, t))
+  }
+
+  // ===========================================================================
+  // SECTION: Normal Form Computation
+  // ===========================================================================
+  // Reduce to weak head normal form (WHNF)
+
+  xform whnf : Term ⇄ Term
+  rule whnf {
+    // Already in WHNF
+    Lam(x, b)          ↦ Lam(x, b)
+    Num(n)             ↦ Num(n)
+    Era                ↦ Era
+    Sup(l, a, b)       ↦ Sup(l, a, b)
+    Ctr(k, args)       ↦ Ctr(k, args)
+
+    // Reduce redexes
+    App(f, a)          ↦ match whnf(f) with
+                           Lam(x, body) → whnf(subst(x, a, body))
+                           Era          → Era
+                           Sup(l, g, h) → whnf(app_sup(App(Sup(l, g, h), a)))
+                           f'           → App(f', a)
+                         end
+
+    Dup(x, l, v, body) ↦ match whnf(v) with
+                           Sup(l, a, b) → whnf(dup_sup_same(Dup(x, l, Sup(l, a, b), body)))
+                           Sup(r, a, b) → whnf(dup_sup_diff(Dup(x, l, Sup(r, a, b), body)))
+                             where l ≠ r
+                           Era          → whnf(dup_era(Dup(x, l, Era, body)))
+                           Num(n)       → whnf(dup_num(Dup(x, l, Num(n), body)))
+                           Lam(y, b)    → whnf(dup_lam(Dup(x, l, Lam(y, b), body)))
+                           v'           → Dup(x, l, v', body)
+                         end
+
+    Op2(op, a, b)      ↦ match (whnf(a), whnf(b)) with
+                           (Num(x), Num(y)) → whnf(op2_num(Op2(op, Num(x), Num(y))))
+                           (a', Sup(l, c, d)) → whnf(op2_sup(Op2(op, a', Sup(l, c, d))))
+                           (a', b')      → Op2(op, a', b')
+                         end
+
+    Ref(name)          ↦ whnf(lookup(name))
+
+    t                  ↦ t  // Default: already normal
+  }
+
+  // ===========================================================================
+  // SECTION: Grammar (Surface Syntax)
+  // ===========================================================================
+
+  grammar Term {
+    // Lambda: λx.body or \x.body
+    "λ" name "." term           → Lam(name, term)
+    "\\" name "." term          → Lam(name, term)
+
+    // Application: (f x) or f(x)
+    "(" term term ")"           → App(term, term)
+    term "(" term ")"           → App(term, term)
+
+    // Superposition: &L{a, b}
+    "&" label "{" term "," term "}" → Sup(label, term, term)
+    "&" "{" "}"                     → Era
+
+    // Duplication: !x &L= val; body
+    "!" name "&" label "=" term ";" term → Dup(name, label, term, term)
+
+    // Dup projections
+    name "₀"                    → Dp0(name)
+    name "₁"                    → Dp1(name)
+
+    // Numbers and ops
+    int                         → Num(int)
+    "(" term op term ")"        → Op2(op, term, term)
+
+    // Constructor: #Name{args...}
+    "#" name "{" term* "}"      → Ctr(name, term*)
+    "#" name                    → Ctr(name, [])
+
+    // Match: λ{#K: h; m}
+    "λ" "{" "#" name ":" term ";" term "}" → Mat(name, term, term)
+
+    // Switch: λ{n: h; m}
+    "λ" "{" int ":" term ";" term "}" → Swi(int, term, term)
+
+    // Reference: @name
+    "@" name                    → Ref(name)
+
+    // Definition: @name = body
+    "@" name "=" term           → Def(name, term, Ref("main"))
+
+    // Variable
+    name                        → Var(name)
+  }
+
+  grammar Label {
+    int                         → Lab(int)
+    "(" term ")"                → LabDyn(term)
+  }
+
+  grammar Op {
+    "+"   → OpAdd
+    "-"   → OpSub
+    "*"   → OpMul
+    "/"   → OpDiv
+    "%"   → OpMod
+    "&&"  → OpAnd
+    "||"  → OpOr
+    "^"   → OpXor
+    "<<"  → OpShl
+    ">>"  → OpShr
+    "=="  → OpEq
+    "!="  → OpNe
+    "<"   → OpLt
+    "<="  → OpLe
+    ">"   → OpGt
+    ">="  → OpGe
+  }
+
+}
