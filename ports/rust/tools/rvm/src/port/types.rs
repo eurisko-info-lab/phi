@@ -2,8 +2,6 @@
 //!
 //! Types, Kinds, Modules, and Declarations.
 
-use std::rc::Rc;
-
 /// Type parameters for generic types
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeParam {

@@ -2,10 +2,13 @@
 # Φ (Phi) - Algebraic Metaprogramming Framework
 # ═══════════════════════════════════════════════════════════════════════════
 
-.PHONY: all build clean test help scala rust rvm phi haskell install install-rvm
+.PHONY: all build clean test help scala rust rvm phi haskell install install-rvm full
 
 # Default target
-all: build
+all: build test
+
+# Full pipeline: clean, build, test, install
+full: clean build test install
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Build targets
@@ -96,8 +99,11 @@ help:
 	@echo ""
 	@echo "Usage: make [target]"
 	@echo ""
+	@echo "Main targets:"
+	@echo "  all          Build and test all ports (default)"
+	@echo "  full         Clean, build, test, and install"
+	@echo ""
 	@echo "Build targets:"
-	@echo "  all          Build all ports (default)"
 	@echo "  build        Build all ports"
 	@echo "  scala/phi    Build Scala phi interpreter"
 	@echo "  rust/rvm     Build Rust RVM"

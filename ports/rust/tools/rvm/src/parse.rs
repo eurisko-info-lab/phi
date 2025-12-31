@@ -1,7 +1,7 @@
 //! Simple parser for RosettaVM assembly
 
 use crate::hash::Hash;
-use crate::instr::{Instr, Literal, CodeBlock, BuiltinOp, MatchArm};
+use crate::instr::{Instr, Literal, CodeBlock, BuiltinOp};
 use crate::store::Store;
 
 /// Parse a .rvm assembly file

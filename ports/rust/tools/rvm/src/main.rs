@@ -18,7 +18,6 @@ pub mod port;  // Port of Port - the real Phi interpreter
 
 use std::env;
 use std::fs;
-use crate::value::Val;
 
 fn main() {
     let args: Vec<String> = env::args().collect();

@@ -2,7 +2,9 @@
 
 use std::rc::Rc;
 use crate::hash::Hash;
-use crate::instr::{Instr, Literal, CodeBlock, BuiltinOp, MatchArm};
+use crate::instr::{Instr, Literal, BuiltinOp};
+#[cfg(test)]
+use crate::instr::CodeBlock;
 use crate::value::{Val, Env, Frame};
 use crate::store::Store;
 
@@ -429,7 +431,7 @@ impl<'a> VM<'a> {
                 let tail = self.pop()?;
                 let head = self.pop()?;
                 match tail {
-                    Val::List(mut l) => {
+                    Val::List(l) => {
                         let mut new_list = vec![head];
                         new_list.extend(Rc::try_unwrap(l).unwrap_or_else(|rc| (*rc).clone()));
                         self.stack.push(Val::list(new_list));
@@ -494,7 +496,7 @@ impl<'a> VM<'a> {
                 let b = self.pop()?;
                 let a = self.pop()?;
                 match (a, b) {
-                    (Val::List(mut la), Val::List(lb)) => {
+                    (Val::List(la), Val::List(lb)) => {
                         let mut new_list = Rc::try_unwrap(la).unwrap_or_else(|rc| (*rc).clone());
                         new_list.extend((*lb).clone());
                         self.stack.push(Val::list(new_list));

@@ -246,16 +246,19 @@ impl Compiler {
         self.code.push(instr);
     }
 
+    #[allow(dead_code)]
     fn emit_placeholder(&mut self) -> usize {
         let addr = self.code.len();
         self.code.push(Instr::Nop);
         addr
     }
 
+    #[allow(dead_code)]
     fn patch(&mut self, addr: usize, instr: Instr) {
         self.code[addr] = instr;
     }
 
+    #[allow(dead_code)]
     fn current_addr(&self) -> usize {
         self.code.len()
     }

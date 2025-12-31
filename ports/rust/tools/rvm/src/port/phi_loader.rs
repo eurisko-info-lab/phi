@@ -3,12 +3,9 @@
 //! Loads Phi language specifications and creates interpreters.
 
 use std::collections::HashMap;
-use super::expr::{Expr, MatchCase};
-use super::pattern::Pattern;
 use super::val::Val;
 use super::env::{Env, standard_env};
 use super::eval::{Evaluator, EvalResult, EvalError};
-use super::parser;
 
 /// A loaded Phi language
 #[derive(Debug, Clone)]
@@ -61,7 +58,7 @@ impl PhiLanguage {
     pub fn parse(source: &str) -> Result<Self, String> {
         let mut lang = PhiLanguage::new("");
         let mut current_xform: Option<String> = None;
-        let mut in_rule_block = false;
+        let mut _in_rule_block = false;
         
         for line in source.lines() {
             let line = line.trim();
@@ -172,7 +169,7 @@ impl PhiLanguage {
                     .map(|s| s.trim())
                     .unwrap_or("");
                 current_xform = Some(xform_name.to_string());
-                in_rule_block = true;
+                _in_rule_block = true;
                 continue;
             }
             
@@ -621,7 +618,7 @@ impl PhiInterpreter {
     }
     
     /// Try to solve using loaded program clauses
-    fn solve_from_program(&mut self, pred: &str, args: &[Val]) -> EvalResult {
+    fn solve_from_program(&mut self, pred: &str, _args: &[Val]) -> EvalResult {
         // For now, return an error for unknown predicates
         Err(EvalError::Custom(format!("unknown predicate: {}", pred)))
     }

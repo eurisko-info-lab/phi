@@ -3,8 +3,7 @@
 //! Parses Port/Phi syntax into AST.
 
 use super::expr::{Expr, MatchCase};
-use super::pattern::{Pattern, Literal};
-use super::types::*;
+use super::pattern::Pattern;
 
 /// Parse error
 #[derive(Debug, Clone)]
@@ -391,6 +390,7 @@ impl<'a> Parser<'a> {
         Ok(old)
     }
     
+    #[allow(dead_code)]
     fn peek(&mut self) -> ParseResult<&Token> {
         Ok(&self.current)
     }
