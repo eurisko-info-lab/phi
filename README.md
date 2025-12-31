@@ -19,9 +19,100 @@
 
 ## Quick Start
 
+### Prerequisites
+
+**For RVM (Rust)** - the cornerstone:
 ```bash
-cd hello
-sbt run   # Run the demo
+# Install Rust (Linux/macOS)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+```
+
+**For Scala Phi** (optional):
+```bash
+# Install SDKMAN, then SBT
+curl -s "https://get.sdkman.io" | bash
+sdk install java 21-tem    # or any JDK 11+
+sdk install sbt
+```
+
+**For Haskell Phi** (optional):
+```bash
+# Install GHCup
+curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
+ghcup install ghc
+ghcup install cabal
+```
+
+### Install RVM (RosettaVM) - The Cornerstone
+
+```bash
+# One command to build and install
+make install
+
+# Or step by step:
+make rust          # Build RVM
+make install-rvm   # Install to ~/bin/rvm
+```
+
+Make sure `~/bin` is in your PATH:
+```bash
+export PATH="$HOME/bin:$PATH"  # Add to ~/.bashrc or ~/.zshrc
+```
+
+### Build Everything
+
+```bash
+make              # Build all ports (scala, rust, haskell)
+make test         # Run all tests
+make clean        # Clean all build artifacts
+```
+
+### Build by Language
+
+| Language | Prerequisites | Build | Test | Clean |
+|----------|--------------|-------|------|-------|
+| **Rust** (RVM) | `rustc`, `cargo` | `make rust` | `make test-rust` | `make clean-rust` |
+| **Scala** (Phi) | `sbt`, JDK 11+ | `make scala` | `make test-scala` | `make clean-scala` |
+| **Haskell** (Phi) | `ghc`, `cabal` | `make haskell` | `make test-haskell` | `make clean-haskell` |
+
+### Run
+
+```bash
+make run-rvm      # Run Rust RVM
+make run-phi      # Run Scala phi interpreter
+```
+
+## Project Structure
+
+```
+phi/
+├── specs/                       # Core Phi language specifications
+│   ├── phi.phi                  # Self-describing Phi spec
+│   ├── meta.phi                 # Meta-language definition
+│   ├── rvm.phi                  # RosettaVM specification
+│   └── xforms/                  # Transformations
+│       ├── phi2rvm.phi          # Phi to RVM
+│       ├── phi2scala.phi        # Phi to Scala
+│       └── meta2scala.phi       # Meta to Scala
+├── examples/                    # Example .phi programs
+│   ├── hello.phi, core.phi, cat.phi, coc.phi, ...
+│   └── tests/                   # Test cases
+├── docs/                        # Documentation
+├── ports/                       # Language implementations
+│   ├── rust/
+│   │   ├── tools/rvm/           # RosettaVM (Cargo)
+│   │   └── specs/               # Rust port specs
+│   ├── scala/
+│   │   ├── tools/phi/           # Phi interpreter (SBT)
+│   │   └── specs/scala.phi      # Scala port spec
+│   └── haskell/
+│       ├── tools/phi/           # Phi interpreter (Cabal)
+│       └── specs/haskell.phi    # Haskell port spec
+├── Makefile                     # Build orchestration
+├── README.md                    # This file
+├── FEATURES.md, MATH.md, PITCH.md, PROMPT.md
+└── ...
 ```
 
 ## Architecture
@@ -139,8 +230,8 @@ The `examples/` directory contains several .phi specifications:
 |------|-------------|
 | `hello.phi` | Minimal "Hello World" language |
 | `core.phi` | Meta-circular Core definition with HKT |
-| `phi.phi` | Self-describing Phi specification |
 | `cat.phi` | Category theory (functors, monads) |
+| `coc.phi` | Calculus of Constructions |
 | `hkt.phi` | Higher-kinded types and type classes |
 | `poly.phi` | Polymorphic lambda calculus |
 | `stlc-nat.phi` | Simply-typed lambda calculus |
@@ -148,30 +239,10 @@ The `examples/` directory contains several .phi specifications:
 | `cubical.phi` | Cubical type theory |
 | `minimal.phi` | Minimal dependently-typed language |
 
-## Project Structure
-
-```
-hello/
-├── build.sbt                    # SBT configuration
-├── README.md                    # This file
-├── src/main/scala/phi/
-│   ├── Core.scala              # Algebraic foundation
-│   ├── Meta.scala              # Evaluation and patterns
-│   ├── Syntax.scala            # Bidirectional parsing
-│   ├── Lang.scala              # .phi specification parser
-│   └── Run.scala               # Examples and entry point
-└── examples/
-    ├── hello.phi               # Basic example
-    ├── core.phi                # Meta-circular definition
-    └── ...                     # More examples
-```
-
-## Philosophy
-
-1. **Minimal Primitives**: Everything derives from a small set of concepts
-2. **Maximum Density**: Every line teaches something
-3. **Practical Theory**: Abstract math with concrete applications
-4. **Self-Describing**: The system can define itself
+See `specs/` for core definitions:
+- `phi.phi` - Self-describing Phi specification
+- `meta.phi` - Meta-language for transformations
+- `rvm.phi` - RosettaVM target specification
 
 ## License
 

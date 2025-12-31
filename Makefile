@@ -2,7 +2,7 @@
 # Φ (Phi) - Algebraic Metaprogramming Framework
 # ═══════════════════════════════════════════════════════════════════════════
 
-.PHONY: all build clean test help scala rust rvm phi
+.PHONY: all build clean test help scala rust rvm phi haskell install install-rvm
 
 # Default target
 all: build
@@ -11,51 +11,73 @@ all: build
 # Build targets
 # ─────────────────────────────────────────────────────────────────────────────
 
-build: scala rust
+build: scala rust haskell
 
 # Scala phi interpreter
 scala phi:
-	cd ports/scala/phi && sbt compile
+	cd ports/scala/tools/phi && sbt compile
 
 # Rust RVM implementation
 rust rvm:
-	cd ports/rust/rvm && cargo build --release
+	cd ports/rust/tools/rvm && cargo build --release
+
+# Haskell phi interpreter
+haskell:
+	cd ports/haskell/tools/phi && cabal build
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Install targets
+# ─────────────────────────────────────────────────────────────────────────────
+
+install: install-rvm
+
+install-rvm: rust
+	@mkdir -p ~/bin
+	cp ports/rust/tools/rvm/target/release/rosettavm ~/bin/rvm
+	@echo "Installed rvm to ~/bin/rvm"
+	@echo "Make sure ~/bin is in your PATH"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Test targets
 # ─────────────────────────────────────────────────────────────────────────────
 
-test: test-scala test-rust
+test: test-scala test-rust test-haskell
 
 test-scala:
-	cd ports/scala/phi && sbt test
+	cd ports/scala/tools/phi && sbt test
 
 test-rust:
-	cd ports/rust/rvm && cargo test
+	cd ports/rust/tools/rvm && cargo test
+
+test-haskell:
+	cd ports/haskell/tools/phi && cabal test
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Run targets
 # ─────────────────────────────────────────────────────────────────────────────
 
 run-phi:
-	cd ports/scala/phi && sbt run
+	cd ports/scala/tools/phi && sbt run
 
 run-rvm:
-	cd ports/rust/rvm && cargo run --release
+	cd ports/rust/tools/rvm && cargo run --release
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Clean targets
 # ─────────────────────────────────────────────────────────────────────────────
 
-clean: clean-scala clean-rust
+clean: clean-scala clean-rust clean-haskell
 
 clean-scala:
-	cd ports/scala/phi && sbt clean
-	rm -rf ports/scala/phi/target
-	rm -rf ports/scala/phi/project/target
+	cd ports/scala/tools/phi && sbt clean
+	rm -rf ports/scala/tools/phi/target
+	rm -rf ports/scala/tools/phi/project/target
 
 clean-rust:
-	cd ports/rust/rvm && cargo clean
+	cd ports/rust/tools/rvm && cargo clean
+
+clean-haskell:
+	cd ports/haskell/tools/phi && cabal clean
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Documentation
@@ -79,20 +101,27 @@ help:
 	@echo "  build        Build all ports"
 	@echo "  scala/phi    Build Scala phi interpreter"
 	@echo "  rust/rvm     Build Rust RVM"
+	@echo "  haskell      Build Haskell phi interpreter"
 	@echo ""
 	@echo "Test targets:"
 	@echo "  test         Run all tests"
 	@echo "  test-scala   Run Scala tests"
 	@echo "  test-rust    Run Rust tests"
+	@echo "  test-haskell Run Haskell tests"
 	@echo ""
 	@echo "Run targets:"
 	@echo "  run-phi      Run Scala phi interpreter"
 	@echo "  run-rvm      Run Rust RVM"
 	@echo ""
+	@echo "Install targets:"
+	@echo "  install      Install rvm to ~/bin"
+	@echo "  install-rvm  Install rvm to ~/bin"
+	@echo ""
 	@echo "Clean targets:"
-	@echo "  clean        Clean all build artifacts"
-	@echo "  clean-scala  Clean Scala build artifacts"
-	@echo "  clean-rust   Clean Rust build artifacts"
+	@echo "  clean          Clean all build artifacts"
+	@echo "  clean-scala    Clean Scala build artifacts"
+	@echo "  clean-rust     Clean Rust build artifacts"
+	@echo "  clean-haskell  Clean Haskell build artifacts"
 	@echo ""
 	@echo "Directory structure:"
 	@echo "  specs/       Phi language specifications"
