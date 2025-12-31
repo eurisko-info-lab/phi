@@ -88,4 +88,4 @@ If you find Phi useful: [PayPal](https://www.paypal.com/paypalme/euriskoPal)
 
 ## License
 
-MIT
+MIT modulo the banks using euros, the people who don't eat pork, the anti-Musk people... These have no right whatsoever in my opinion.
