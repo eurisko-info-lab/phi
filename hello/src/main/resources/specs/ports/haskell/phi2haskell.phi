@@ -1,0 +1,579 @@
+// =============================================================================
+// Phi2Haskell: Generate Haskell code from Phi language specifications
+// =============================================================================
+// This transforms phi.phi (the meta-language spec) into Haskell source code.
+// GenRender generates Phi/Phi/Gen/Render.hs for pretty printing LangSpec.
+// GenToVal generates Phi/Phi/Gen/ToVal.hs for converting to Val representation.
+//
+// GenPhi orchestrates:
+//   1. Load phi.phi (language spec definitions)
+//   2. Load phi2haskell.phi (this file - code generators)
+//   3. Apply GenRender → HaskellModule AST
+//   4. Apply GenToVal → HaskellModule AST
+//   5. Render via haskell.phi grammar → String
+//   6. Write to Phi/Phi/Gen/*.hs
+
+language Phi2Haskell {
+  // ==========================================================================
+  // Input Sorts (from phi.phi)
+  // ==========================================================================
+  sort Spec           // LangSpec
+  sort Sort           // Sort declaration
+  sort Constructor    // Constructor with types
+  sort LangType       // Type expressions
+  sort Grammar        // Grammar with rules  
+  sort SyntaxRule     // Individual syntax rules
+  sort SyntaxToken    // Literal | NonTerm
+  sort SyntaxArg      // ArgRef | ArgCon | ArgLit | etc
+  sort Xform          // Transform declaration
+  sort Rule           // Transform rule
+  sort RuleCase       // Pattern ↦ body
+
+  // ==========================================================================
+  // Output Sorts (Haskell AST - from haskell.phi)
+  // ==========================================================================
+  sort HaskellModule
+  sort HaskellDecl
+  sort HaskellExpr
+  sort HaskellPat
+  sort HaskellType
+  sort HaskellGuard
+  sort HaskellMatch
+
+  // ==========================================================================
+  // Transforms
+  // ==========================================================================
+  xform GenRender : Spec ⇄ HaskellModule
+  xform GenToVal : Spec ⇄ HaskellModule
+  xform GenFold : Spec ⇄ HaskellModule
+  xform GenValidate : Spec ⇄ HaskellModule
+  xform GenParser : Spec ⇄ HaskellModule
+  xform GenInterp : Spec ⇄ HaskellModule
+
+  // ==========================================================================
+  // GenRender: LangSpec → Phi/Phi/Gen/Render.hs
+  // ==========================================================================
+  // Generates pretty printing functions for all phi.phi types
+  
+  rule GenRender.file {
+    LangSpec(name, sorts, constructors, grammars, xforms, rules) ↦ 
+      HsModuleSimple("Phi.Phi.Gen.Render", List(
+        HsImport("Phi.Phi.Types"),
+        HsBlankDecl,
+        HsDocComment("Render: Pretty printing for phi.phi AST types (generated from phi.phi)"),
+        GenRender.renderClass,
+        GenRender.specInstance(constructors, grammars),
+        GenRender.sortInstance,
+        GenRender.constructorInstance,
+        GenRender.typeInstance,
+        GenRender.syntaxInstances,
+        GenRender.xformInstances,
+        GenRender.ruleInstances
+      ))
+  }
+  
+  // Render class definition
+  rule GenRender.renderClass {
+    _ ↦ HsClassDecl("Render", List(), "a", List(
+      HsTypeSig("render", HsTyFun(HsTyVar("a"), HsTyCon("String")))
+    ))
+  }
+  
+  // ==========================================================================
+  // LangSpec instance
+  // ==========================================================================
+  rule GenRender.specInstance {
+    Args(constructors, grammars) ↦ 
+      HsInstanceDecl("Render", HsTyCon("LangSpec"), List(
+        HsFunDecl("render", List(HsPCon("LangSpec", List(
+          HsPVar("name"), HsPVar("sorts"), HsPVar("cons"), 
+          HsPVar("grammars"), HsPVar("xforms"), HsPVar("rules")))),
+          HsLet(List(
+            HsPatternDecl(HsPVar("decls"),
+              HsApp(HsVar("concat"), HsList(List(
+                HsApp(HsApp(HsVar("map"), HsLambda(List(HsPVar("s")), HsInfix(HsString("  "), "<>", HsApp(HsVar("render"), HsVar("s"))))), HsVar("sorts")),
+                HsApp(HsApp(HsVar("map"), HsLambda(List(HsPVar("c")), HsInfix(HsString("  "), "<>", HsApp(HsVar("render"), HsVar("c"))))), HsVar("cons")),
+                HsApp(HsApp(HsVar("map"), HsLambda(List(HsPTuple(List(HsPVar("n"), HsPVar("rs"))))), HsInfix(HsString("  "), "<>", HsApp(HsApp(HsVar("renderGrammar"), HsVar("n")), HsVar("rs"))))), HsVar("grammars")),
+                HsApp(HsApp(HsVar("map"), HsLambda(List(HsPVar("x")), HsInfix(HsString("  "), "<>", HsApp(HsVar("render"), HsVar("x"))))), HsVar("xforms")),
+                HsApp(HsApp(HsVar("map"), HsLambda(List(HsPVar("r")), HsInfix(HsString("  "), "<>", HsApp(HsVar("render"), HsVar("r"))))), HsVar("rules"))
+              ))))
+          ),
+            HsInfix(HsInfix(HsInfix(HsInfix(HsString("language "), "<>", HsVar("name")), "<>", HsString(" {")), "<>", HsString("\n")), "<>",
+              HsInfix(HsApp(HsApp(HsVar("intercalate"), HsString("\n")), HsVar("decls")), "<>", HsString("\n}")))
+          ))
+      ))
+  }
+  
+  // ==========================================================================
+  // Sort instance
+  // ==========================================================================
+  rule GenRender.sortInstance {
+    _ ↦ HsInstanceDecl("Render", HsTyCon("Sort"), List(
+      HsFunDecl("render", List(HsPCon("Sort", List(HsPVar("name")))),
+        HsInfix(HsString("sort "), "<>", HsVar("name")))
+    ))
+  }
+  
+  // ==========================================================================
+  // Constructor instance
+  // ==========================================================================
+  rule GenRender.constructorInstance {
+    _ ↦ HsInstanceDecl("Render", HsTyCon("Constructor"), List(
+      HsFunDecl("render", List(HsPCon("Constructor", List(HsPVar("name"), HsPVar("argTypes"), HsPVar("returnType")))),
+        HsLet(List(
+          HsPatternDecl(HsPVar("typeStr"),
+            HsIf(HsApp(HsVar("null"), HsVar("argTypes")),
+              HsVar("returnType"),
+              HsInfix(HsInfix(HsApp(HsApp(HsVar("intercalate"), HsString(" -> ")), HsApp(HsApp(HsVar("map"), HsVar("render")), HsVar("argTypes"))), "<>", HsString(" -> ")), "<>", HsVar("returnType"))))
+        ),
+          HsInfix(HsInfix(HsInfix(HsString("constructor "), "<>", HsVar("name")), "<>", HsString(" : ")), "<>", HsVar("typeStr")))
+      ))
+    ))
+  }
+  
+  // ==========================================================================
+  // LangType instance
+  // ==========================================================================
+  rule GenRender.typeInstance {
+    _ ↦ HsInstanceDecl("Render", HsTyCon("LangType"), List(
+      HsFunDecl("render", List(HsPVar("ty")),
+        HsCase(HsVar("ty"), List(
+          HsMatch(HsPCon("SortRef", List(HsPVar("name"))), HsVar("name")),
+          HsMatch(HsPCon("Arrow", List(HsPVar("from"), HsPVar("to"))),
+            HsInfix(HsInfix(HsApp(HsVar("render"), HsVar("from")), "<>", HsString(" -> ")), "<>", HsApp(HsVar("render"), HsVar("to")))),
+          HsMatch(HsPCon("ListOf", List(HsPVar("elem"))),
+            HsInfix(HsInfix(HsString("List["), "<>", HsApp(HsVar("render"), HsVar("elem"))), "<>", HsString("]"))),
+          HsMatch(HsPCon("Product", List(HsPVar("left"), HsPVar("right"))),
+            HsInfix(HsInfix(HsInfix(HsInfix(HsString("("), "<>", HsApp(HsVar("render"), HsVar("left"))), "<>", HsString(", ")), "<>", HsApp(HsVar("render"), HsVar("right"))), "<>", HsString(")"))),
+          HsMatch(HsPCon("TypeApp", List(HsPVar("name"), HsPVar("args"))),
+            HsInfix(HsInfix(HsInfix(HsVar("name"), "<>", HsString("[")), "<>", HsApp(HsApp(HsVar("intercalate"), HsString(", ")), HsApp(HsApp(HsVar("map"), HsVar("render")), HsVar("args")))), "<>", HsString("]"))),
+          HsMatch(HsPCon("TypeVar", List(HsPVar("name"))), HsVar("name"))
+        )))
+    ))
+  }
+  
+  // ==========================================================================
+  // Syntax-related instances (SyntaxRule, SyntaxToken, SyntaxArg)
+  // ==========================================================================
+  rule GenRender.syntaxInstances {
+    _ ↦ Cons(
+      HsBlankDecl,
+      Cons(
+        HsComment("-- Grammar helper"),
+        Cons(
+          HsTypeSig("renderGrammar", HsTyFun(HsTyCon("String"), HsTyFun(HsTyList(HsTyCon("SyntaxRule")), HsTyCon("String")))),
+          Cons(
+            HsFunDecl("renderGrammar", List(HsPVar("name"), HsPVar("rules")),
+              HsInfix(HsInfix(HsInfix(HsInfix(HsString("grammar "), "<>", HsVar("name")), "<>", HsString(" {")), "<>", HsString("\n")), "<>",
+                HsInfix(HsApp(HsApp(HsVar("intercalate"), HsString("\n")), 
+                  HsApp(HsApp(HsVar("map"), HsLambda(List(HsPVar("r")), HsInfix(HsString("    "), "<>", HsApp(HsVar("render"), HsVar("r"))))), HsVar("rules"))), "<>", HsString("\n  }")))),
+            Cons(
+              HsBlankDecl,
+              Cons(
+                HsInstanceDecl("Render", HsTyCon("SyntaxRule"), List(
+                  HsFunDecl("render", List(HsPCon("SyntaxRule", List(HsPVar("tokens"), HsPVar("conRef"), HsPVar("args")))),
+                    HsInfix(HsInfix(HsApp(HsApp(HsVar("unwords"), HsApp(HsApp(HsVar("map"), HsVar("renderToken")), HsVar("tokens")))), "<>", HsString(" => ")), "<>",
+                      HsIf(HsApp(HsVar("null"), HsVar("args")),
+                        HsVar("conRef"),
+                        HsInfix(HsInfix(HsInfix(HsVar("conRef"), "<>", HsString("(")), "<>", HsApp(HsApp(HsVar("intercalate"), HsString(", ")), HsApp(HsApp(HsVar("map"), HsVar("renderArg")), HsVar("args")))), "<>", HsString(")")))))
+                )),
+                Cons(
+                  HsBlankDecl,
+                  Cons(
+                    HsTypeSig("renderToken", HsTyFun(HsTyCon("SyntaxToken"), HsTyCon("String"))),
+                    Cons(
+                      HsFunDecl("renderToken", List(HsPCon("Literal", List(HsPVar("s")))),
+                        HsInfix(HsInfix(HsString("\""), "<>", HsVar("s")), "<>", HsString("\""))),
+                      Cons(
+                        HsFunDecl("renderToken", List(HsPCon("NonTerm", List(HsPVar("name")))), HsVar("name")),
+                        Cons(
+                          HsBlankDecl,
+                          Cons(
+                            HsTypeSig("renderArg", HsTyFun(HsTyCon("SyntaxArg"), HsTyCon("String"))),
+                            Cons(
+                              HsFunDecl("renderArg", List(HsPCon("ArgRef", List(HsPVar("name")))), HsVar("name")),
+                              Cons(
+                                HsFunDecl("renderArg", List(HsPCon("ArgCon", List(HsPVar("name"), HsPVar("args")))),
+                                  HsInfix(HsInfix(HsInfix(HsVar("name"), "<>", HsString("(")), "<>", HsApp(HsApp(HsVar("intercalate"), HsString(", ")), HsApp(HsApp(HsVar("map"), HsVar("renderArg")), HsVar("args")))), "<>", HsString(")"))),
+                                Cons(
+                                  HsFunDecl("renderArg", List(HsPCon("ArgLit", List(HsPVar("s")))),
+                                    HsInfix(HsInfix(HsString("\""), "<>", HsVar("s")), "<>", HsString("\""))),
+                                  Nil
+                                )
+                              )
+                            )
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  }
+  
+  // ==========================================================================
+  // Xform instances
+  // ==========================================================================
+  rule GenRender.xformInstances {
+    _ ↦ Cons(
+      HsBlankDecl,
+      Cons(
+        HsInstanceDecl("Render", HsTyCon("Xform"), List(
+          HsFunDecl("render", List(HsPCon("Xform", List(HsPVar("name"), HsPVar("params"), HsPVar("srcType"), HsPVar("tgtType"), HsPVar("rules")))),
+            HsInfix(HsInfix(HsInfix(HsInfix(HsString("xform "), "<>", HsVar("name")), "<>", HsString(" : ")), "<>", HsApp(HsVar("render"), HsVar("srcType"))), "<>",
+              HsInfix(HsString(" ⇄ "), "<>", HsApp(HsVar("render"), HsVar("tgtType")))))
+        )),
+        Nil
+      )
+    )
+  }
+  
+  // ==========================================================================
+  // Rule instances
+  // ==========================================================================
+  rule GenRender.ruleInstances {
+    _ ↦ Cons(
+      HsBlankDecl,
+      Cons(
+        HsInstanceDecl("Render", HsTyCon("Rule"), List(
+          HsFunDecl("render", List(HsPCon("Rule", List(HsPVar("name"), HsPVar("cases")))),
+            HsInfix(HsInfix(HsInfix(HsInfix(HsString("rule "), "<>", HsVar("name")), "<>", HsString(" {")), "<>", HsString("\n")), "<>",
+              HsInfix(HsApp(HsApp(HsVar("intercalate"), HsString("\n")), HsApp(HsApp(HsVar("map"), HsVar("renderCase")), HsVar("cases"))), "<>", HsString("\n}"))))
+        )),
+        Cons(
+          HsBlankDecl,
+          Cons(
+            HsTypeSig("renderCase", HsTyFun(HsTyCon("RuleCase"), HsTyCon("String"))),
+            Cons(
+              HsFunDecl("renderCase", List(HsPCon("RuleCase", List(HsPVar("pat"), HsPVar("body")))),
+                HsInfix(HsInfix(HsInfix(HsString("    "), "<>", HsApp(HsVar("renderPat"), HsVar("pat"))), "<>", HsString(" ↦ ")), "<>", HsApp(HsVar("renderExpr"), HsVar("body")))),
+              Nil
+            )
+          )
+        )
+      )
+    )
+  }
+  
+  // ==========================================================================
+  // GenToVal: LangSpec → Phi/Phi/Gen/ToVal.hs
+  // ==========================================================================
+  // Generates conversion to Val representation for all phi.phi types
+  
+  rule GenToVal.file {
+    LangSpec(name, sorts, constructors, grammars, xforms, rules) ↦ 
+      HsModuleSimple("Phi.Phi.Gen.ToVal", List(
+        HsImport("Phi.Phi.Types"),
+        HsImport("Phi.Meta.Val"),
+        HsBlankDecl,
+        HsDocComment("ToVal: Convert phi.phi AST to Val representation (generated from phi.phi)"),
+        GenToVal.toValClass,
+        GenToVal.specInstance,
+        GenToVal.sortInstance,
+        GenToVal.constructorInstance,
+        GenToVal.typeInstance,
+        GenToVal.syntaxInstances,
+        GenToVal.xformInstance,
+        GenToVal.ruleInstance
+      ))
+  }
+  
+  rule GenToVal.toValClass {
+    _ ↦ HsClassDecl("ToVal", List(), "a", List(
+      HsTypeSig("toVal", HsTyFun(HsTyVar("a"), HsTyCon("Val")))
+    ))
+  }
+  
+  rule GenToVal.specInstance {
+    _ ↦ HsInstanceDecl("ToVal", HsTyCon("LangSpec"), List(
+      HsFunDecl("toVal", List(HsPCon("LangSpec", List(HsPVar("name"), HsPVar("sorts"), HsPVar("cons"), HsPVar("grammars"), HsPVar("xforms"), HsPVar("rules")))),
+        HsApp(HsApp(HsCon("VCon"), HsString("LangSpec")), HsList(List(
+          HsApp(HsApp(HsCon("VCon"), HsVar("name")), HsList(Nil)),
+          HsApp(HsApp(HsCon("VCon"), HsString("List")), HsApp(HsApp(HsVar("map"), HsVar("toVal")), HsVar("sorts"))),
+          HsApp(HsApp(HsCon("VCon"), HsString("List")), HsApp(HsApp(HsVar("map"), HsVar("toVal")), HsVar("cons"))),
+          HsApp(HsApp(HsCon("VCon"), HsString("Map")), HsApp(HsApp(HsVar("map"), HsLambda(List(HsPTuple(List(HsPVar("k"), HsPVar("v"))))), HsApp(HsApp(HsCon("VCon"), HsString("Pair")), HsList(List(HsApp(HsApp(HsCon("VCon"), HsVar("k")), HsList(Nil)), HsApp(HsVar("toVal"), HsVar("v"))))))), HsVar("grammars"))),
+          HsApp(HsApp(HsCon("VCon"), HsString("List")), HsApp(HsApp(HsVar("map"), HsVar("toVal")), HsVar("xforms"))),
+          HsApp(HsApp(HsCon("VCon"), HsString("List")), HsApp(HsApp(HsVar("map"), HsVar("toVal")), HsVar("rules")))
+        ))))
+    ))
+  }
+  
+  rule GenToVal.sortInstance {
+    _ ↦ HsInstanceDecl("ToVal", HsTyCon("Sort"), List(
+      HsFunDecl("toVal", List(HsPCon("Sort", List(HsPVar("name")))),
+        HsApp(HsApp(HsCon("VCon"), HsString("Sort")), HsList(List(HsApp(HsApp(HsCon("VCon"), HsVar("name")), HsList(Nil))))))
+    ))
+  }
+  
+  rule GenToVal.constructorInstance {
+    _ ↦ HsInstanceDecl("ToVal", HsTyCon("Constructor"), List(
+      HsFunDecl("toVal", List(HsPCon("Constructor", List(HsPVar("name"), HsPVar("argTypes"), HsPVar("returnType")))),
+        HsApp(HsApp(HsCon("VCon"), HsString("Constructor")), HsList(List(
+          HsApp(HsApp(HsCon("VCon"), HsVar("name")), HsList(Nil)),
+          HsApp(HsApp(HsCon("VCon"), HsString("List")), HsApp(HsApp(HsVar("map"), HsVar("toVal")), HsVar("argTypes"))),
+          HsApp(HsApp(HsCon("VCon"), HsVar("returnType")), HsList(Nil))
+        ))))
+    ))
+  }
+  
+  rule GenToVal.typeInstance {
+    _ ↦ HsInstanceDecl("ToVal", HsTyCon("LangType"), List(
+      HsFunDecl("toVal", List(HsPVar("ty")),
+        HsCase(HsVar("ty"), List(
+          HsMatch(HsPCon("SortRef", List(HsPVar("name"))),
+            HsApp(HsApp(HsCon("VCon"), HsString("SortRef")), HsList(List(HsApp(HsApp(HsCon("VCon"), HsVar("name")), HsList(Nil)))))),
+          HsMatch(HsPCon("Arrow", List(HsPVar("from"), HsPVar("to"))),
+            HsApp(HsApp(HsCon("VCon"), HsString("Arrow")), HsList(List(HsApp(HsVar("toVal"), HsVar("from")), HsApp(HsVar("toVal"), HsVar("to")))))),
+          HsMatch(HsPCon("ListOf", List(HsPVar("elem"))),
+            HsApp(HsApp(HsCon("VCon"), HsString("ListOf")), HsList(List(HsApp(HsVar("toVal"), HsVar("elem")))))),
+          HsMatch(HsPCon("Product", List(HsPVar("left"), HsPVar("right"))),
+            HsApp(HsApp(HsCon("VCon"), HsString("Product")), HsList(List(HsApp(HsVar("toVal"), HsVar("left")), HsApp(HsVar("toVal"), HsVar("right")))))),
+          HsMatch(HsPCon("TypeApp", List(HsPVar("name"), HsPVar("args"))),
+            HsApp(HsApp(HsCon("VCon"), HsString("TypeApp")), HsList(List(HsApp(HsApp(HsCon("VCon"), HsVar("name")), HsList(Nil)), HsApp(HsApp(HsCon("VCon"), HsString("List")), HsApp(HsApp(HsVar("map"), HsVar("toVal")), HsVar("args"))))))),
+          HsMatch(HsPCon("TypeVar", List(HsPVar("name"))),
+            HsApp(HsApp(HsCon("VCon"), HsString("TypeVar")), HsList(List(HsApp(HsApp(HsCon("VCon"), HsVar("name")), HsList(Nil))))))
+        )))
+    ))
+  }
+  
+  rule GenToVal.syntaxInstances {
+    _ ↦ Cons(
+      HsBlankDecl,
+      Cons(
+        HsInstanceDecl("ToVal", HsTyCon("SyntaxRule"), List(
+          HsFunDecl("toVal", List(HsPCon("SyntaxRule", List(HsPVar("tokens"), HsPVar("conRef"), HsPVar("args")))),
+            HsApp(HsApp(HsCon("VCon"), HsString("SyntaxRule")), HsList(List(
+              HsApp(HsApp(HsCon("VCon"), HsString("List")), HsApp(HsApp(HsVar("map"), HsVar("toVal")), HsVar("tokens"))),
+              HsApp(HsApp(HsCon("VCon"), HsVar("conRef")), HsList(Nil)),
+              HsApp(HsApp(HsCon("VCon"), HsString("List")), HsApp(HsApp(HsVar("map"), HsVar("toVal")), HsVar("args")))
+            ))))
+        )),
+        Cons(
+          HsBlankDecl,
+          Cons(
+            HsInstanceDecl("ToVal", HsTyCon("SyntaxToken"), List(
+              HsFunDecl("toVal", List(HsPCon("Literal", List(HsPVar("s")))),
+                HsApp(HsApp(HsCon("VCon"), HsString("Literal")), HsList(List(HsApp(HsApp(HsCon("VCon"), HsVar("s")), HsList(Nil)))))),
+              HsFunDecl("toVal", List(HsPCon("NonTerm", List(HsPVar("name")))),
+                HsApp(HsApp(HsCon("VCon"), HsString("NonTerm")), HsList(List(HsApp(HsApp(HsCon("VCon"), HsVar("name")), HsList(Nil))))))
+            )),
+            Cons(
+              HsBlankDecl,
+              Cons(
+                HsInstanceDecl("ToVal", HsTyCon("SyntaxArg"), List(
+                  HsFunDecl("toVal", List(HsPCon("ArgRef", List(HsPVar("name")))),
+                    HsApp(HsApp(HsCon("VCon"), HsString("ArgRef")), HsList(List(HsApp(HsApp(HsCon("VCon"), HsVar("name")), HsList(Nil)))))),
+                  HsFunDecl("toVal", List(HsPCon("ArgCon", List(HsPVar("name"), HsPVar("args")))),
+                    HsApp(HsApp(HsCon("VCon"), HsString("ArgCon")), HsList(List(HsApp(HsApp(HsCon("VCon"), HsVar("name")), HsList(Nil)), HsApp(HsApp(HsCon("VCon"), HsString("List")), HsApp(HsApp(HsVar("map"), HsVar("toVal")), HsVar("args"))))))),
+                  HsFunDecl("toVal", List(HsPCon("ArgLit", List(HsPVar("s")))),
+                    HsApp(HsApp(HsCon("VCon"), HsString("ArgLit")), HsList(List(HsApp(HsApp(HsCon("VCon"), HsVar("s")), HsList(Nil))))))
+                )),
+                Nil
+              )
+            )
+          )
+        )
+      )
+    )
+  }
+  
+  rule GenToVal.xformInstance {
+    _ ↦ HsInstanceDecl("ToVal", HsTyCon("Xform"), List(
+      HsFunDecl("toVal", List(HsPCon("Xform", List(HsPVar("name"), HsPVar("params"), HsPVar("srcType"), HsPVar("tgtType"), HsPVar("rules")))),
+        HsApp(HsApp(HsCon("VCon"), HsString("Xform")), HsList(List(
+          HsApp(HsApp(HsCon("VCon"), HsVar("name")), HsList(Nil)),
+          HsApp(HsApp(HsCon("VCon"), HsString("List")), HsApp(HsApp(HsVar("map"), HsLambda(List(HsPVar("p")), HsApp(HsApp(HsCon("VCon"), HsVar("p")), HsList(Nil)))), HsVar("params"))),
+          HsApp(HsVar("toVal"), HsVar("srcType")),
+          HsApp(HsVar("toVal"), HsVar("tgtType")),
+          HsApp(HsApp(HsCon("VCon"), HsString("List")), HsApp(HsApp(HsVar("map"), HsVar("toVal")), HsVar("rules")))
+        ))))
+    ))
+  }
+  
+  rule GenToVal.ruleInstance {
+    _ ↦ Cons(
+      HsInstanceDecl("ToVal", HsTyCon("Rule"), List(
+        HsFunDecl("toVal", List(HsPCon("Rule", List(HsPVar("name"), HsPVar("cases")))),
+          HsApp(HsApp(HsCon("VCon"), HsString("Rule")), HsList(List(
+            HsApp(HsApp(HsCon("VCon"), HsVar("name")), HsList(Nil)),
+            HsApp(HsApp(HsCon("VCon"), HsString("List")), HsApp(HsApp(HsVar("map"), HsVar("toVal")), HsVar("cases")))
+          ))))
+      )),
+      Cons(
+        HsBlankDecl,
+        Cons(
+          HsInstanceDecl("ToVal", HsTyCon("RuleCase"), List(
+            HsFunDecl("toVal", List(HsPCon("RuleCase", List(HsPVar("pat"), HsPVar("body")))),
+              HsApp(HsApp(HsCon("VCon"), HsString("RuleCase")), HsList(List(
+                HsApp(HsVar("toVal"), HsVar("pat")),
+                HsApp(HsVar("toVal"), HsVar("body"))
+              ))))
+          )),
+          Nil
+        )
+      )
+    )
+  }
+  
+  // ==========================================================================
+  // GenFold: LangSpec → Phi/Phi/Gen/Fold.hs
+  // ==========================================================================
+  // Generates catamorphism for phi.phi AST
+  
+  rule GenFold.file {
+    LangSpec(name, sorts, constructors, grammars, xforms, rules) ↦ 
+      HsModuleSimple("Phi.Phi.Gen.Fold", List(
+        HsPragma("LANGUAGE RankNTypes"),
+        HsImport("Phi.Phi.Types"),
+        HsBlankDecl,
+        HsDocComment("Fold: Catamorphism for phi.phi AST (generated from phi.phi)"),
+        GenFold.algebraType(constructors),
+        GenFold.foldFunction(constructors)
+      ))
+  }
+  
+  // Generate Algebra record type
+  rule GenFold.algebraType {
+    constructors ↦ HsDataDecl("Algebra", List("r"), List(
+      HsRecordCon("Algebra", GenFold.algebraFields(constructors))
+    ))
+  }
+  
+  rule GenFold.algebraFields {
+    Cons(Constructor(name, argTypes, returnType), rest) ↦ Cons(
+      HsField(GenFold.fieldName(name), GenFold.fieldType(argTypes, "r")),
+      GenFold.algebraFields(rest)
+    )
+  }
+  
+  rule GenFold.algebraFields {
+    Nil ↦ Nil
+  }
+  
+  rule GenFold.fieldName {
+    name ↦ GenFold.uncapitalize(name)
+  }
+  
+  rule GenFold.fieldType {
+    Args(Cons(argType, rest), resultType) ↦ 
+      HsTyFun(GenFold.convertType(argType), GenFold.fieldType(Args(rest, resultType)))
+  }
+  
+  rule GenFold.fieldType {
+    Args(Nil, resultType) ↦ HsTyVar(resultType)
+  }
+  
+  rule GenFold.convertType {
+    SortRef(name) ↦ HsTyVar("r")  // Replace sort refs with result type
+  }
+  
+  rule GenFold.convertType {
+    ListOf(elem) ↦ HsTyList(GenFold.convertType(elem))
+  }
+  
+  rule GenFold.convertType {
+    Arrow(from, to) ↦ HsTyFun(GenFold.convertType(from), GenFold.convertType(to))
+  }
+  
+  // Generate fold function
+  rule GenFold.foldFunction {
+    constructors ↦ Cons(
+      HsTypeSig("foldSpec", 
+        HsTyFun(HsTyCon("Algebra r"), HsTyFun(HsTyCon("LangSpec"), HsTyVar("r")))),
+      Cons(
+        HsFunDecl("foldSpec", List(HsPVar("alg"), HsPVar("spec")),
+          HsCase(HsVar("spec"), GenFold.foldCases(constructors))),
+        Nil
+      )
+    )
+  }
+  
+  rule GenFold.foldCases {
+    Cons(Constructor(name, argTypes, returnType), rest) ↦ Cons(
+      HsMatch(HsPCon(name, GenFold.patVars(argTypes, 0)),
+        HsApp(HsApp(HsVar(GenFold.fieldName(name)), HsVar("alg")), GenFold.foldArgs(argTypes, 0))),
+      GenFold.foldCases(rest)
+    )
+  }
+  
+  rule GenFold.foldCases {
+    Nil ↦ Nil
+  }
+  
+  rule GenFold.patVars {
+    Args(Cons(ty, rest), n) ↦ Cons(
+      HsPVar(GenFold.varName(n)),
+      GenFold.patVars(Args(rest, GenFold.succ(n)))
+    )
+  }
+  
+  rule GenFold.patVars {
+    Args(Nil, n) ↦ Nil
+  }
+  
+  rule GenFold.foldArgs {
+    Args(Cons(ty, rest), n) ↦ 
+      HsApp(GenFold.foldArg(ty, n), GenFold.foldArgs(Args(rest, GenFold.succ(n))))
+  }
+  
+  rule GenFold.foldArgs {
+    Args(Nil, n) ↦ HsVar("alg")  // Base case returns alg for partial application
+  }
+  
+  rule GenFold.foldArg {
+    Args(SortRef(name), n) ↦ HsApp(HsApp(HsVar("foldSpec"), HsVar("alg")), HsVar(GenFold.varName(n)))
+  }
+  
+  rule GenFold.foldArg {
+    Args(ListOf(elem), n) ↦ 
+      HsApp(HsApp(HsVar("map"), HsApp(HsVar("foldSpec"), HsVar("alg"))), HsVar(GenFold.varName(n)))
+  }
+  
+  rule GenFold.foldArg {
+    Args(ty, n) ↦ HsVar(GenFold.varName(n))  // Non-recursive types pass through
+  }
+  
+  rule GenFold.varName {
+    0 ↦ "x0"
+  }
+  rule GenFold.varName {
+    1 ↦ "x1"
+  }
+  rule GenFold.varName {
+    2 ↦ "x2"
+  }
+  rule GenFold.varName {
+    3 ↦ "x3"
+  }
+  rule GenFold.varName {
+    4 ↦ "x4"
+  }
+  rule GenFold.varName {
+    5 ↦ "x5"
+  }
+  
+  rule GenFold.succ {
+    0 ↦ 1
+  }
+  rule GenFold.succ {
+    1 ↦ 2
+  }
+  rule GenFold.succ {
+    2 ↦ 3
+  }
+  rule GenFold.succ {
+    3 ↦ 4
+  }
+  rule GenFold.succ {
+    4 ↦ 5
+  }
+  
+  rule GenFold.uncapitalize {
+    name ↦ name  // In real impl would lowercase first char
+  }
+}

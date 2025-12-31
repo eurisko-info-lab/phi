@@ -1,0 +1,206 @@
+// =============================================================================
+// Haskell: Target language spec for code generation
+// =============================================================================
+// Constructors define the AST. Grammars enable bidirectional rendering.
+// 
+// Attribute grammar tokens:
+//   \n   - newline at current indent level
+//   \n+  - newline and increase indent
+//   \n-  - newline and decrease indent
+
+language Haskell {
+  // ----- Sorts -----
+  sort HaskellModule
+  sort HaskellDecl
+  sort HaskellExpr
+  sort HaskellPat
+  sort HaskellType
+  sort HaskellGuard
+  sort HaskellMatch
+  sort HaskellImport
+  sort HaskellExport
+  
+  // ----- Module-level constructs -----
+  constructor HsModule : String → List[HaskellExport] → List[HaskellImport] → List[HaskellDecl] → HaskellModule
+  constructor HsModuleSimple : String → List[HaskellImport] → List[HaskellDecl] → HaskellModule
+  
+  // ----- Exports -----
+  constructor HsExportVar : String → HaskellExport
+  constructor HsExportType : String → HaskellExport       // Type(..)
+  constructor HsExportModule : String → HaskellExport     // module M
+  
+  // ----- Imports -----
+  constructor HsImport : String → HaskellImport
+  constructor HsImportQualified : String → String → HaskellImport   // qualified M as A
+  constructor HsImportHiding : String → List[String] → HaskellImport
+  constructor HsImportOnly : String → List[String] → HaskellImport
+  
+  // ----- Declarations -----
+  constructor HsDataDecl : String → List[String] → List[HaskellDecl] → HaskellDecl  // data T a b = ...
+  constructor HsNewtypeDecl : String → List[String] → String → HaskellType → HaskellDecl
+  constructor HsTypeAlias : String → List[String] → HaskellType → HaskellDecl
+  constructor HsClassDecl : String → List[String] → String → List[HaskellDecl] → HaskellDecl  // class C a where ...
+  constructor HsInstanceDecl : String → HaskellType → List[HaskellDecl] → HaskellDecl  // instance C T where ...
+  constructor HsDataCon : String → List[HaskellType] → HaskellDecl   // Constructor within data
+  constructor HsRecordCon : String → List[HaskellDecl] → HaskellDecl  // Record constructor
+  constructor HsField : String → HaskellType → HaskellDecl           // Record field
+  constructor HsTypeSig : String → HaskellType → HaskellDecl
+  constructor HsFunDecl : String → List[HaskellPat] → HaskellExpr → HaskellDecl
+  constructor HsFunDeclGuarded : String → List[HaskellPat] → List[HaskellGuard] → HaskellDecl
+  constructor HsPatternDecl : HaskellPat → HaskellExpr → HaskellDecl   // pat = expr
+  constructor HsDerivingDecl : List[String] → HaskellDecl              // deriving (Eq, Show)
+  constructor HsBlankDecl : HaskellDecl
+  constructor HsComment : String → HaskellDecl
+  constructor HsDocComment : String → HaskellDecl
+  constructor HsPragma : String → HaskellDecl  // {-# LANGUAGE ... #-}
+  
+  // ----- Guards -----
+  constructor HsGuard : HaskellExpr → HaskellExpr → HaskellGuard   // | cond = expr
+  constructor HsOtherwise : HaskellExpr → HaskellGuard              // | otherwise = expr
+  
+  // ----- Types -----
+  constructor HsTyVar : String → HaskellType
+  constructor HsTyCon : String → HaskellType
+  constructor HsTyApp : HaskellType → HaskellType → HaskellType
+  constructor HsTyFun : HaskellType → HaskellType → HaskellType     // a -> b
+  constructor HsTyTuple : List[HaskellType] → HaskellType           // (a, b, ...)
+  constructor HsTyList : HaskellType → HaskellType                  // [a]
+  constructor HsTyForall : List[String] → HaskellType → HaskellType // forall a. T
+  constructor HsTyContext : List[HaskellType] → HaskellType → HaskellType  // (C a, D b) => T
+  
+  // ----- Patterns -----
+  constructor HsPVar : String → HaskellPat
+  constructor HsPWildcard : HaskellPat                    // _
+  constructor HsPCon : String → List[HaskellPat] → HaskellPat
+  constructor HsPInfix : HaskellPat → String → HaskellPat → HaskellPat  // x : xs
+  constructor HsPTuple : List[HaskellPat] → HaskellPat
+  constructor HsPList : List[HaskellPat] → HaskellPat
+  constructor HsPAs : String → HaskellPat → HaskellPat    // name@pat
+  constructor HsPLit : String → HaskellPat                // Literal patterns
+  constructor HsPRecord : String → List[HaskellPat] → HaskellPat  // Con { field = pat, ... }
+  
+  // ----- Expressions -----
+  constructor HsVar : String → HaskellExpr
+  constructor HsCon : String → HaskellExpr
+  constructor HsApp : HaskellExpr → HaskellExpr → HaskellExpr
+  constructor HsInfix : HaskellExpr → String → HaskellExpr → HaskellExpr  // a `op` b or a + b
+  constructor HsLambda : List[HaskellPat] → HaskellExpr → HaskellExpr
+  constructor HsLet : List[HaskellDecl] → HaskellExpr → HaskellExpr
+  constructor HsIf : HaskellExpr → HaskellExpr → HaskellExpr → HaskellExpr
+  constructor HsCase : HaskellExpr → List[HaskellMatch] → HaskellExpr
+  constructor HsDo : List[HaskellExpr] → HaskellExpr       // do-notation
+  constructor HsBind : HaskellPat → HaskellExpr → HaskellExpr  // pat <- expr (in do)
+  constructor HsTuple : List[HaskellExpr] → HaskellExpr
+  constructor HsList : List[HaskellExpr] → HaskellExpr
+  constructor HsListComp : HaskellExpr → List[HaskellExpr] → HaskellExpr  // [expr | quals]
+  constructor HsSection : String → HaskellExpr → HaskellExpr  // (+ 1) or (1 +)
+  constructor HsTyped : HaskellExpr → HaskellType → HaskellExpr  // expr :: Type
+  constructor HsLit : String → HaskellExpr                 // Literals
+  constructor HsString : String → HaskellExpr
+  constructor HsChar : String → HaskellExpr
+  constructor HsInt : String → HaskellExpr
+  constructor HsRecordExpr : String → List[HaskellExpr] → HaskellExpr  // Con { field = expr }
+  constructor HsRecordUpdate : HaskellExpr → List[HaskellExpr] → HaskellExpr
+  constructor HsFieldAssign : String → HaskellExpr → HaskellExpr  // field = expr
+  
+  // ----- Case alternatives -----
+  constructor HsMatch : HaskellPat → HaskellExpr → HaskellMatch
+  constructor HsMatchGuarded : HaskellPat → List[HaskellGuard] → HaskellMatch
+  
+  // ----- Grammars for rendering -----
+  grammar haskellModule {
+    "module" modName "(" haskellExport* ")" "where" NL haskellImport* NL haskellDecl* => HsModule(modName, haskellExport, haskellImport, haskellDecl)
+    "module" modName "where" NL haskellImport* NL haskellDecl* => HsModuleSimple(modName, haskellImport, haskellDecl)
+  }
+  
+  grammar haskellExport {
+    varName => HsExportVar(varName)
+    typeName "(..)" => HsExportType(typeName)
+    "module" modName => HsExportModule(modName)
+  }
+  
+  grammar haskellImport {
+    NL "import" modName => HsImport(modName)
+    NL "import" "qualified" modName "as" aliasName => HsImportQualified(modName, aliasName)
+    NL "import" modName "hiding" "(" hiddenNames* ")" => HsImportHiding(modName, hiddenNames)
+    NL "import" modName "(" importedNames* ")" => HsImportOnly(modName, importedNames)
+  }
+  
+  grammar haskellDecl {
+    NL "data" typeName typeParams* "=" INDENT haskellDataCon* DEDENT => HsDataDecl(typeName, typeParams, haskellDataCon)
+    NL "newtype" typeName typeParams* "=" conName haskellType => HsNewtypeDecl(typeName, typeParams, conName, haskellType)
+    NL "type" typeName typeParams* "=" haskellType => HsTypeAlias(typeName, typeParams, haskellType)
+    NL "class" className constraints* tyVar "where" INDENT haskellDecl* DEDENT => HsClassDecl(className, constraints, tyVar, haskellDecl)
+    NL "instance" className haskellType "where" INDENT haskellDecl* DEDENT => HsInstanceDecl(className, haskellType, haskellDecl)
+    NL conName haskellType* => HsDataCon(conName, haskellType)
+    NL conName "{" haskellField* "}" => HsRecordCon(conName, haskellField)
+    NL fieldName "::" haskellType => HsField(fieldName, haskellType)
+    NL funName "::" haskellType => HsTypeSig(funName, haskellType)
+    NL funName haskellPat* "=" haskellExpr => HsFunDecl(funName, haskellPat, haskellExpr)
+    NL funName haskellPat* INDENT haskellGuard* DEDENT => HsFunDeclGuarded(funName, haskellPat, haskellGuard)
+    NL haskellPat "=" haskellExpr => HsPatternDecl(haskellPat, haskellExpr)
+    NL "deriving" "(" derivingNames* ")" => HsDerivingDecl(derivingNames)
+    BLANKLINE => HsBlankDecl
+    NL "--" commentText => HsComment(commentText)
+    NL "-- |" docText => HsDocComment(docText)
+    NL "{-#" pragmaText "#-}" => HsPragma(pragmaText)
+  }
+  
+  grammar haskellGuard {
+    NL "|" guardCond "=" guardExpr => HsGuard(guardCond, guardExpr)
+    NL "|" "otherwise" "=" guardExpr => HsOtherwise(guardExpr)
+  }
+  
+  grammar haskellType {
+    tyVarName => HsTyVar(tyVarName)
+    tyConName => HsTyCon(tyConName)
+    haskellType haskellType => HsTyApp(haskellType, haskellType)
+    haskellType "->" haskellType => HsTyFun(haskellType, haskellType)
+    "(" haskellType* ")" => HsTyTuple(haskellType)
+    "[" haskellType "]" => HsTyList(haskellType)
+    "forall" tyVars* "." haskellType => HsTyForall(tyVars, haskellType)
+    "(" haskellContext* ")" "=>" haskellType => HsTyContext(haskellContext, haskellType)
+  }
+  
+  grammar haskellPat {
+    varName => HsPVar(varName)
+    "_" => HsPWildcard
+    conName haskellPat* => HsPCon(conName, haskellPat)
+    haskellPat infixOp haskellPat => HsPInfix(haskellPat, infixOp, haskellPat)
+    "(" haskellPat* ")" => HsPTuple(haskellPat)
+    "[" haskellPat* "]" => HsPList(haskellPat)
+    asName "@" haskellPat => HsPAs(asName, haskellPat)
+    litVal => HsPLit(litVal)
+    conName "{" haskellFieldPat* "}" => HsPRecord(conName, haskellFieldPat)
+  }
+  
+  grammar haskellExpr {
+    varName => HsVar(varName)
+    conName => HsCon(conName)
+    haskellExpr haskellExpr => HsApp(haskellExpr, haskellExpr)
+    haskellExpr infixOp haskellExpr => HsInfix(haskellExpr, infixOp, haskellExpr)
+    "\\" haskellPat* "->" haskellExpr => HsLambda(haskellPat, haskellExpr)
+    "let" INDENT haskellDecl* DEDENT "in" haskellExpr => HsLet(haskellDecl, haskellExpr)
+    "if" condExpr "then" thenExpr "else" elseExpr => HsIf(condExpr, thenExpr, elseExpr)
+    "case" scrutExpr "of" INDENT haskellMatch* DEDENT => HsCase(scrutExpr, haskellMatch)
+    "do" INDENT haskellDoStmt* DEDENT => HsDo(haskellDoStmt)
+    haskellPat "<-" haskellExpr => HsBind(haskellPat, haskellExpr)
+    "(" haskellExpr* ")" => HsTuple(haskellExpr)
+    "[" haskellExpr* "]" => HsList(haskellExpr)
+    "[" haskellExpr "|" haskellQual* "]" => HsListComp(haskellExpr, haskellQual)
+    "(" infixOp haskellExpr ")" => HsSection(infixOp, haskellExpr)
+    haskellExpr "::" haskellType => HsTyped(haskellExpr, haskellType)
+    litVal => HsLit(litVal)
+    STRLIT strVal STRLIT => HsString(strVal)
+    CHARLIT charVal CHARLIT => HsChar(charVal)
+    intVal => HsInt(intVal)
+    conName "{" haskellFieldExpr* "}" => HsRecordExpr(conName, haskellFieldExpr)
+    haskellExpr "{" haskellFieldExpr* "}" => HsRecordUpdate(haskellExpr, haskellFieldExpr)
+    fieldName "=" haskellExpr => HsFieldAssign(fieldName, haskellExpr)
+  }
+  
+  grammar haskellMatch {
+    NL haskellPat "->" haskellExpr => HsMatch(haskellPat, haskellExpr)
+    NL haskellPat INDENT haskellGuard* DEDENT => HsMatchGuarded(haskellPat, haskellGuard)
+  }
+}

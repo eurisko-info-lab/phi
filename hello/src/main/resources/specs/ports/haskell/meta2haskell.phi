@@ -1,0 +1,448 @@
+// =============================================================================
+// Meta2Haskell: Generate Haskell code from Meta semantic definitions
+// =============================================================================
+// This transforms meta.phi semantic operations into Haskell source code.
+// Each xform (Eval, Match, Show, Subst) gets a corresponding Gen* xform
+// that produces a HaskellModule AST, rendered via haskell.phi grammar.
+//
+// GenMeta orchestrates:
+//   1. Load meta.phi (semantic definitions)
+//   2. Load meta2haskell.phi (this file - code generators)
+//   3. For each semantic xform, apply Gen* → HaskellModule AST
+//   4. Render via haskell.phi grammar → String
+//   5. Write to gen/*.hs
+
+language Meta2Haskell {
+  // We need to reference types from both meta.phi and haskell.phi
+  // The xforms transform Xform (from meta) to HaskellModule (from haskell)
+  
+  // ==========================================================================
+  // GenEval: Eval xform → gen/Eval.hs
+  // ==========================================================================
+  xform GenEval : Xform ⇄ HaskellModule
+  
+  rule GenEval.file {
+    Xform("Eval", params, srcType, tgtType, rules) ↦ 
+      HsModuleSimple("Phi.Meta.Gen.Eval", List(
+        HsImport("Phi.Meta.Val"),
+        HsImport("Phi.Meta.Env"),
+        HsImport("Phi.Meta.Pat"),
+        HsImport("Phi.Meta.Expr"),
+        HsImport("Phi.Meta.Result"),
+        HsImportQualified("Phi.Meta.Gen.Match", "Match"),
+        HsBlankDecl,
+        HsDocComment("Eval: Expression evaluation (generated from meta.phi Eval xform)"),
+        GenEval.dataDecl,
+        GenEval.evalClass,
+        GenEval.instances(rules),
+        GenEval.helpers
+      ))
+  }
+  
+  // No data decl needed - we use existing Expr type
+  rule GenEval.dataDecl {
+    _ ↦ HsBlankDecl
+  }
+  
+  // Type class for evaluation
+  rule GenEval.evalClass {
+    _ ↦ HsClassDecl("Eval", List(), "e", List(
+      HsTypeSig("eval", HsTyFun(HsTyVar("e"), HsTyFun(HsTyCon("Env"), HsTyCon("Val"))))
+    ))
+  }
+  
+  // Generate instances for each expression type
+  rule GenEval.instances {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenEval.instance(name, cases),
+      GenEval.instances(rest)
+    )
+  }
+  
+  rule GenEval.instances {
+    Nil ↦ Nil
+  }
+  
+  // Generate instance for a single expression type
+  rule GenEval.instance {
+    Args("Eval.var", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      HsInstanceDecl("Eval", HsTyCon(conName), List(
+        HsComment("rule Eval.var { EVar(name) ↦ Lookup(name, env) }"),
+        HsFunDecl("eval", List(HsPCon(conName, GenEval.patArgs(patArgs)), HsPVar("env")), 
+          GenEval.body(body))
+      ))
+  }
+  
+  rule GenEval.instance {
+    Args("Eval.con", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      HsInstanceDecl("Eval", HsTyCon(conName), List(
+        HsComment("rule Eval.con { ECon(name, args) ↦ VCon(name, Eval.list(args, env)) }"),
+        HsFunDecl("eval", List(HsPCon(conName, GenEval.patArgs(patArgs)), HsPVar("env")), 
+          GenEval.body(body))
+      ))
+  }
+  
+  rule GenEval.instance {
+    Args("Eval.app", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      HsInstanceDecl("Eval", HsTyCon(conName), List(
+        HsComment("rule Eval.app { EApp(func, arg) ↦ Apply(Eval(func), Eval(arg)) }"),
+        HsFunDecl("eval", List(HsPCon(conName, GenEval.patArgs(patArgs)), HsPVar("env")), 
+          GenEval.body(body))
+      ))
+  }
+  
+  rule GenEval.instance {
+    Args("Eval.lam", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      HsInstanceDecl("Eval", HsTyCon(conName), List(
+        HsComment("rule Eval.lam { ELam(param, body) ↦ VClosure(param, body, env) }"),
+        HsFunDecl("eval", List(HsPCon(conName, GenEval.patArgs(patArgs)), HsPVar("env")), 
+          GenEval.body(body))
+      ))
+  }
+  
+  rule GenEval.instance {
+    Args("Eval.let", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      HsInstanceDecl("Eval", HsTyCon(conName), List(
+        HsComment("rule Eval.let { ELet(name, value, body) ↦ Eval(body, Bind(name, Eval(value), env)) }"),
+        HsFunDecl("eval", List(HsPCon(conName, GenEval.patArgs(patArgs)), HsPVar("env")), 
+          GenEval.body(body))
+      ))
+  }
+  
+  rule GenEval.instance {
+    Args("Eval.match", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      HsInstanceDecl("Eval", HsTyCon(conName), List(
+        HsComment("rule Eval.match { EMatch(scrutinee, cases) ↦ TryCases(Eval(scrutinee), cases, env) }"),
+        HsFunDecl("eval", List(HsPCon(conName, GenEval.patArgs(patArgs)), HsPVar("env")), 
+          GenEval.body(body))
+      ))
+  }
+  
+  rule GenEval.instance {
+    Args("Eval.case", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      HsInstanceDecl("Eval", HsTyCon(conName), List(
+        HsComment("rule Eval.case { ECase(pat, body) ↦ Error(...) }"),
+        HsFunDecl("eval", List(HsPCon(conName, GenEval.patArgs(patArgs)), HsPVar("env")), 
+          GenEval.body(body))
+      ))
+  }
+  
+  // Convert pattern args to Haskell patterns
+  rule GenEval.patArgs {
+    Cons(PVar(name), rest) ↦ Cons(HsPVar(name), GenEval.patArgs(rest))
+  }
+  
+  rule GenEval.patArgs {
+    Nil ↦ Nil
+  }
+  
+  // Helper functions
+  rule GenEval.helpers {
+    _ ↦ Cons(
+      HsBlankDecl,
+      Cons(
+        HsDocComment("Try each case until one matches (part of EMatch semantics)"),
+        Cons(
+          HsTypeSig("tryCases", HsTyFun(HsTyCon("Val"), HsTyFun(HsTyList(HsTyCon("Expr")), HsTyFun(HsTyCon("Env"), HsTyCon("Val"))))),
+          Cons(
+            HsFunDecl("tryCases", List(HsPVar("value"), HsPList(Nil), HsPVar("env")),
+              HsApp(HsApp(HsCon("VCon"), HsString("MatchError")), HsList(List(HsVar("value"))))),
+            Cons(
+              HsFunDeclGuarded("tryCases", List(HsPVar("value"), HsPInfix(HsPCon("ECase", List(HsPVar("pat"), HsPVar("body"))), ":", HsPVar("rest")), HsPVar("env")),
+                List(
+                  HsGuard(HsApp(HsApp(HsApp(HsVar("matchWith"), HsVar("pat")), HsVar("value")), HsVar("env")),
+                    HsApp(HsApp(HsVar("eval"), HsVar("body")), HsVar("env1"))),
+                  HsOtherwise(HsApp(HsApp(HsApp(HsVar("tryCases"), HsVar("value")), HsVar("rest")), HsVar("env")))
+                )),
+              Cons(
+                HsFunDecl("tryCases", List(HsPVar("value"), HsPInfix(HsPWildcard, ":", HsPVar("rest")), HsPVar("env")),
+                  HsApp(HsApp(HsApp(HsVar("tryCases"), HsVar("value")), HsVar("rest")), HsVar("env"))),
+                Cons(
+                  HsBlankDecl,
+                  Cons(
+                    HsDocComment("Apply a function value to an argument"),
+                    Cons(
+                      HsTypeSig("applyVal", HsTyFun(HsTyCon("Val"), HsTyFun(HsTyCon("Val"), HsTyFun(HsTyCon("Env"), HsTyCon("Val"))))),
+                      Cons(
+                        HsFunDecl("applyVal", List(HsPVar("func"), HsPVar("arg"), HsPVar("env")),
+                          HsApp(HsApp(HsCon("VCon"), HsString("App")), HsList(List(HsVar("func"), HsVar("arg"))))),
+                        Nil
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  }
+  
+  // Transform rule body to Haskell expression
+  rule GenEval.body {
+    Lookup(name, env) ↦ 
+      HsApp(HsApp(HsVar("fromMaybe"), 
+        HsApp(HsApp(HsCon("VCon"), HsVar(name)), HsList(Nil))),
+        HsApp(HsApp(HsVar("lookup"), HsVar(name)), HsVar("env")))
+  }
+  
+  rule GenEval.body {
+    VCon(name, args) ↦ HsApp(HsApp(HsCon("VCon"), GenEval.body(name)), GenEval.body(args))
+  }
+  
+  rule GenEval.body {
+    VClosure(param, body, env) ↦ 
+      HsApp(HsApp(HsApp(HsCon("VClosure"), GenEval.body(param)), GenEval.body(body)), HsVar("env"))
+  }
+  
+  rule GenEval.body {
+    Eval(expr) ↦ HsApp(HsApp(HsVar("eval"), GenEval.body(expr)), HsVar("env"))
+  }
+  
+  rule GenEval.body {
+    Apply(func, arg) ↦ 
+      HsApp(HsApp(HsApp(HsVar("applyVal"), GenEval.body(func)), GenEval.body(arg)), HsVar("env"))
+  }
+  
+  rule GenEval.body {
+    TryCases(scrutinee, cases, env) ↦ 
+      HsApp(HsApp(HsApp(HsVar("tryCases"), GenEval.body(scrutinee)), GenEval.body(cases)), HsVar("env"))
+  }
+  
+  rule GenEval.body {
+    Bind(name, value, env) ↦ 
+      HsInfix(HsTuple(List(HsVar(name), GenEval.body(value))), ":", HsVar("env"))
+  }
+  
+  rule GenEval.body {
+    Error(msg) ↦ HsApp(HsVar("error"), HsString(msg))
+  }
+  
+  rule GenEval.body {
+    EvalList(exprs, env) ↦ 
+      HsApp(HsApp(HsVar("map"), HsLambda(List(HsPVar("e")), HsApp(HsApp(HsVar("eval"), HsVar("e")), HsVar("env")))), GenEval.body(exprs))
+  }
+  
+  // Pass through field access as record access
+  rule GenEval.body {
+    FieldAccess(obj, field) ↦ HsApp(HsVar(field), GenEval.body(obj))
+  }
+  
+  rule GenEval.body {
+    Var(name) ↦ HsVar(name)
+  }
+  
+  rule GenEval.body {
+    StringLit(s) ↦ HsString(s)
+  }
+  
+  // ==========================================================================
+  // GenMatch: Match xform → gen/Match.hs
+  // ==========================================================================
+  xform GenMatch : Xform ⇄ HaskellModule
+  
+  rule GenMatch.file {
+    Xform("Match", params, srcType, tgtType, rules) ↦ 
+      HsModuleSimple("Phi.Meta.Gen.Match", List(
+        HsImport("Phi.Meta.Val"),
+        HsImport("Phi.Meta.Env"),
+        HsImport("Phi.Meta.Pat"),
+        HsImport("Phi.Meta.Result"),
+        HsBlankDecl,
+        HsDocComment("Match: Pattern matching (generated from meta.phi Match xform)"),
+        GenMatch.typeSig,
+        GenMatch.cases(rules)
+      ))
+  }
+  
+  rule GenMatch.typeSig {
+    _ ↦ HsTypeSig("matchWith", 
+      HsTyFun(HsTyCon("Pat"), 
+        HsTyFun(HsTyCon("Val"), 
+          HsTyFun(HsTyCon("Env"), 
+            HsTyCon("Result")))))
+  }
+  
+  rule GenMatch.cases {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenMatch.oneCase(name, cases),
+      GenMatch.cases(rest)
+    )
+  }
+  
+  rule GenMatch.cases {
+    Nil ↦ Nil
+  }
+  
+  rule GenMatch.oneCase {
+    Args("Match.var", Cons(RuleCase(PCon("PVar", patArgs), body), rest)) ↦ 
+      HsComment("rule Match.var { PVar(name), value, env ↦ Ok(value, Bind(name, value, env)) }"),
+      HsFunDecl("matchWith", List(HsPCon("PVar", List(HsPVar("name"))), HsPVar("value"), HsPVar("env")),
+        HsApp(HsApp(HsCon("ROk"), HsVar("value")), 
+          HsInfix(HsTuple(List(HsVar("name"), HsVar("value"))), ":", HsVar("env"))))
+  }
+  
+  rule GenMatch.oneCase {
+    Args("Match.wildcard", Cons(RuleCase(PCon("PWildcard", patArgs), body), rest)) ↦ 
+      HsComment("rule Match.wildcard { PWildcard, value, env ↦ Ok(value, env) }"),
+      HsFunDecl("matchWith", List(HsCon("PWildcard"), HsPVar("value"), HsPVar("env")),
+        HsApp(HsApp(HsCon("ROk"), HsVar("value")), HsVar("env")))
+  }
+  
+  rule GenMatch.oneCase {
+    Args("Match.con", Cons(RuleCase(PCon("PCon", patArgs), body), rest)) ↦ 
+      HsComment("rule Match.con { PCon(name, pats), VCon(name, vals), env ↦ ... }"),
+      HsFunDeclGuarded("matchWith", List(HsPCon("PCon", List(HsPVar("pn"), HsPVar("pats"))), HsPCon("VCon", List(HsPVar("vn"), HsPVar("vals"))), HsPVar("env")),
+        List(
+          HsGuard(HsInfix(HsVar("pn"), "==", HsVar("vn")),
+            HsApp(HsApp(HsApp(HsVar("matchArgs"), HsVar("pats")), HsVar("vals")), HsVar("env"))),
+          HsOtherwise(HsCon("RFail"))
+        ))
+  }
+  
+  // ==========================================================================
+  // GenShow: Show xform → gen/Show.hs
+  // ==========================================================================
+  xform GenShow : Xform ⇄ HaskellModule
+  
+  rule GenShow.file {
+    Xform("Show", params, srcType, tgtType, rules) ↦ 
+      HsModuleSimple("Phi.Meta.Gen.Show", List(
+        HsImport("Phi.Meta.Val"),
+        HsImport("Phi.Meta.Expr"),
+        HsBlankDecl,
+        HsDocComment("Show: Pretty printing (generated from meta.phi Show xform)"),
+        GenShow.instances(rules)
+      ))
+  }
+  
+  rule GenShow.instances {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenShow.instance(name, cases),
+      GenShow.instances(rest)
+    )
+  }
+  
+  rule GenShow.instances {
+    Nil ↦ Nil
+  }
+  
+  rule GenShow.instance {
+    Args("Show.val", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      HsInstanceDecl("Show", HsTyCon("Val"), List(
+        GenShow.showCases("Show.val", cases)
+      ))
+  }
+  
+  rule GenShow.showCases {
+    Args(name, Cons(RuleCase(pat, body), rest)) ↦ Cons(
+      HsFunDecl("show", List(GenShow.toPat(pat)), GenShow.body(body)),
+      GenShow.showCases(Args(name, rest))
+    )
+  }
+  
+  rule GenShow.showCases {
+    Args(name, Nil) ↦ Nil
+  }
+  
+  rule GenShow.toPat {
+    PCon(name, args) ↦ HsPCon(name, GenShow.patArgs(args))
+  }
+  
+  rule GenShow.patArgs {
+    Cons(PVar(name), rest) ↦ Cons(HsPVar(name), GenShow.patArgs(rest))
+  }
+  
+  rule GenShow.patArgs {
+    Nil ↦ Nil
+  }
+  
+  rule GenShow.body {
+    Concat(parts) ↦ HsApp(HsVar("concat"), HsList(GenShow.parts(parts)))
+  }
+  
+  rule GenShow.body {
+    Show(expr) ↦ HsApp(HsVar("show"), GenShow.body(expr))
+  }
+  
+  rule GenShow.body {
+    Var(name) ↦ HsVar(name)
+  }
+  
+  rule GenShow.body {
+    StringLit(s) ↦ HsString(s)
+  }
+  
+  rule GenShow.parts {
+    Cons(part, rest) ↦ Cons(GenShow.body(part), GenShow.parts(rest))
+  }
+  
+  rule GenShow.parts {
+    Nil ↦ Nil
+  }
+  
+  // ==========================================================================
+  // GenSubst: Subst xform → gen/Subst.hs
+  // ==========================================================================
+  xform GenSubst : Xform ⇄ HaskellModule
+  
+  rule GenSubst.file {
+    Xform("Subst", params, srcType, tgtType, rules) ↦ 
+      HsModuleSimple("Phi.Meta.Gen.Subst", List(
+        HsImport("Phi.Meta.Expr"),
+        HsBlankDecl,
+        HsDocComment("Subst: Substitution (generated from meta.phi Subst xform)"),
+        GenSubst.typeSig,
+        GenSubst.cases(rules)
+      ))
+  }
+  
+  rule GenSubst.typeSig {
+    _ ↦ HsTypeSig("subst",
+      HsTyFun(HsTyCon("String"),
+        HsTyFun(HsTyCon("Expr"),
+          HsTyFun(HsTyCon("Expr"),
+            HsTyCon("Expr")))))
+  }
+  
+  rule GenSubst.cases {
+    Cons(Rule(name, cases), rest) ↦ Cons(
+      GenSubst.oneCase(name, cases),
+      GenSubst.cases(rest)
+    )
+  }
+  
+  rule GenSubst.cases {
+    Nil ↦ Nil
+  }
+  
+  rule GenSubst.oneCase {
+    Args("Subst.var", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      HsComment("rule Subst.var { EVar(name), x, replacement ↦ if name == x then replacement else EVar(name) }"),
+      HsFunDeclGuarded("subst", List(HsPVar("x"), HsPVar("replacement"), HsPCon("EVar", List(HsPVar("name")))),
+        List(
+          HsGuard(HsInfix(HsVar("name"), "==", HsVar("x")), HsVar("replacement")),
+          HsOtherwise(HsApp(HsCon("EVar"), HsVar("name")))
+        ))
+  }
+  
+  rule GenSubst.oneCase {
+    Args("Subst.lam", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      HsComment("rule Subst.lam { ELam(param, body), x, replacement ↦ if param == x then ELam(param, body) else ELam(param, Subst(body, x, replacement)) }"),
+      HsFunDeclGuarded("subst", List(HsPVar("x"), HsPVar("replacement"), HsPCon("ELam", List(HsPVar("param"), HsPVar("body")))),
+        List(
+          HsGuard(HsInfix(HsVar("param"), "==", HsVar("x")), HsApp(HsApp(HsCon("ELam"), HsVar("param")), HsVar("body"))),
+          HsOtherwise(HsApp(HsApp(HsCon("ELam"), HsVar("param")), HsApp(HsApp(HsApp(HsVar("subst"), HsVar("x")), HsVar("replacement")), HsVar("body"))))
+        ))
+  }
+  
+  rule GenSubst.oneCase {
+    Args("Subst.app", Cons(RuleCase(PCon(conName, patArgs), body), rest)) ↦ 
+      HsComment("rule Subst.app { EApp(func, arg), x, replacement ↦ EApp(Subst(func, x, replacement), Subst(arg, x, replacement)) }"),
+      HsFunDecl("subst", List(HsPVar("x"), HsPVar("replacement"), HsPCon("EApp", List(HsPVar("func"), HsPVar("arg")))),
+        HsApp(HsApp(HsCon("EApp"),
+          HsApp(HsApp(HsApp(HsVar("subst"), HsVar("x")), HsVar("replacement")), HsVar("func"))),
+          HsApp(HsApp(HsApp(HsVar("subst"), HsVar("x")), HsVar("replacement")), HsVar("arg"))))
+  }
+}
