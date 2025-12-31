@@ -1,0 +1,352 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// PORT.PHI - The Universal Port Abstraction
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Port is the intermediate representation between phi specifications and 
+// concrete language implementations. It captures the ESSENCE of a phi 
+// implementation without language-specific details.
+//
+// ABSTRACTION HIERARCHY:
+//   phi.phi     →  High-level language specification (sorts, constructors, xforms)
+//   port.phi    →  Implementation abstraction (modules, types, functions)
+//   haskell.phi →  Haskell-specific (data, deriving, type classes)
+//   scala.phi   →  Scala-specific (sealed trait, enum, given)
+//
+// Port deliberately OMITS:
+//   - Type class derivation mechanisms
+//   - Visibility modifiers (public/private)
+//   - Memory management details
+//   - Concurrency primitives
+//   - FFI bindings
+//
+// Port deliberately INCLUDES:
+//   - Type structure (sum/product/recursive)
+//   - Function signatures and semantics
+//   - Module organization
+//   - Core abstractions (functor, monad patterns)
+//
+// ═══════════════════════════════════════════════════════════════════════════
+
+language Port {
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SECTION 1: Module System
+  // ─────────────────────────────────────────────────────────────────────────
+
+  sort Module
+  sort Export
+  sort Import
+
+  // A module groups related types and functions
+  constructor Module : name:String → exports:Export* → imports:Import* → decls:Decl* → Module
+
+  // What a module exposes
+  constructor ExportType : name:String → Export
+  constructor ExportFunc : name:String → Export
+  constructor ExportAll : Export
+
+  // What a module needs
+  constructor ImportModule : module:String → Import
+  constructor ImportQualified : module:String → alias:String → Import
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SECTION 2: Type Declarations
+  // ─────────────────────────────────────────────────────────────────────────
+
+  sort Decl
+  sort Type
+  sort TypeParam
+  sort Constructor
+  sort Field
+
+  // Sum type (enum/sealed trait/data with |)
+  constructor SumType : name:String → params:TypeParam* → ctors:Constructor* → Decl
+
+  // Product type (record/case class/data with single constructor)
+  constructor ProductType : name:String → params:TypeParam* → fields:Field* → Decl
+
+  // Newtype wrapper (zero-cost abstraction)
+  constructor Newtype : name:String → params:TypeParam* → wrapped:Type → Decl
+
+  // Type alias
+  constructor TypeAlias : name:String → params:TypeParam* → target:Type → Decl
+
+  // Type parameters
+  constructor TypeParam : name:String → TypeParam
+  constructor TypeParamKinded : name:String → kind:Kind → TypeParam
+
+  // Constructors for sum types
+  constructor Constructor : name:String → fields:Field* → Constructor
+
+  // Fields (named or positional)
+  constructor NamedField : name:String → typ:Type → Field
+  constructor AnonField : typ:Type → Field
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SECTION 3: Types
+  // ─────────────────────────────────────────────────────────────────────────
+
+  sort Kind
+
+  // Primitive types
+  constructor TInt : Type
+  constructor TString : Type
+  constructor TBool : Type
+  constructor TUnit : Type
+
+  // Type references
+  constructor TRef : name:String → Type
+  constructor TApp : ctor:Type → args:Type* → Type
+  constructor TVar : name:String → Type
+
+  // Structural types
+  constructor TList : elem:Type → Type
+  constructor TOption : elem:Type → Type
+  constructor TTuple : elems:Type* → Type
+  constructor TFunc : from:Type → to:Type → Type
+
+  // Higher-kinded
+  constructor THigher : name:String → arity:Int → Type
+
+  // Kinds
+  constructor KType : Kind                           // *
+  constructor KFunc : from:Kind → to:Kind → Kind     // * -> *
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SECTION 4: Function Declarations
+  // ─────────────────────────────────────────────────────────────────────────
+
+  sort Func
+  sort Param
+  sort Body
+
+  // Function declaration
+  constructor Func : name:String → params:Param* → ret:Type → body:Body → Decl
+
+  // Parameters
+  constructor Param : name:String → typ:Type → Param
+  constructor ImplicitParam : name:String → typ:Type → Param
+
+  // Function bodies (semantic, not syntactic)
+  constructor BodyExpr : expr:Expr → Body
+  constructor BodyMatch : scrutinee:String → cases:MatchCase* → Body
+  constructor BodyRecursive : scheme:RecScheme → algebra:Body → Body
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SECTION 5: Expressions (Semantic Core)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  sort Expr
+  sort MatchCase
+  sort Pattern
+
+  // Literals
+  constructor EInt : value:Int → Expr
+  constructor EString : value:String → Expr
+  constructor EBool : value:Bool → Expr
+
+  // Variables and constructors
+  constructor EVar : name:String → Expr
+  constructor ECtor : name:String → args:Expr* → Expr
+
+  // Function application
+  constructor EApp : func:Expr → arg:Expr → Expr
+  constructor ELam : param:String → body:Expr → Expr
+
+  // Let binding
+  constructor ELet : name:String → value:Expr → body:Expr → Expr
+  constructor ELetRec : name:String → value:Expr → body:Expr → Expr
+
+  // Pattern matching
+  constructor EMatch : scrutinee:Expr → cases:MatchCase* → Expr
+  constructor MatchCase : pattern:Pattern → guard:Expr? → body:Expr → MatchCase
+
+  // Patterns
+  constructor PWild : Pattern
+  constructor PVar : name:String → Pattern
+  constructor PCtor : name:String → args:Pattern* → Pattern
+  constructor PLit : value:Expr → Pattern
+  constructor PAs : name:String → pattern:Pattern → Pattern
+
+  // Lists
+  constructor EList : elems:Expr* → Expr
+  constructor EListCons : head:Expr → tail:Expr → Expr
+
+  // Tuples
+  constructor ETuple : elems:Expr* → Expr
+  constructor EProj : tuple:Expr → index:Int → Expr
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SECTION 6: Recursion Schemes (Core Patterns)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  sort RecScheme
+
+  // The four fundamental recursion schemes
+  constructor Cata : RecScheme      // Fold (bottom-up)
+  constructor Ana : RecScheme       // Unfold (top-down)
+  constructor Hylo : RecScheme      // Fused fold-unfold
+  constructor Para : RecScheme      // Fold with original subtree access
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SECTION 7: Core Abstractions (Patterns, not implementations)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  sort Abstraction
+
+  // Functor pattern: map over contents
+  constructor FunctorLike : typeFor:String → mapFunc:String → Abstraction
+
+  // Monad pattern: sequencing with context
+  constructor MonadLike : typeFor:String → pureFunc:String → bindFunc:String → Abstraction
+
+  // Comonad pattern: extraction with context
+  constructor ComonadLike : typeFor:String → extractFunc:String → extendFunc:String → Abstraction
+
+  // Foldable pattern: reduce to single value
+  constructor FoldableLike : typeFor:String → foldFunc:String → Abstraction
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SECTION 8: Optics (Focus patterns)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  sort Optic
+
+  // Lens: focus on exactly one part
+  constructor LensDecl : name:String → source:Type → target:Type → 
+                         getter:Expr → setter:Expr → Optic
+
+  // Prism: focus on one case of sum type
+  constructor PrismDecl : name:String → source:Type → target:Type →
+                          preview:Expr → review:Expr → Optic
+
+  // Traversal: focus on zero or more parts
+  constructor TraversalDecl : name:String → source:Type → target:Type →
+                              getAll:Expr → modifyAll:Expr → Optic
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SECTION 9: Port Metadata
+  // ─────────────────────────────────────────────────────────────────────────
+
+  sort PortSpec
+  sort Capability
+
+  // The complete port specification
+  constructor PortSpec : 
+    name:String → 
+    modules:Module* → 
+    capabilities:Capability* → 
+    PortSpec
+
+  // What capabilities this port provides
+  constructor CapRecursionSchemes : Capability
+  constructor CapOptics : Capability
+  constructor CapValidation : Capability
+  constructor CapZipper : Capability
+  constructor CapFreeMonad : Capability
+  constructor CapCofree : Capability
+  constructor CapParsing : Capability
+  constructor CapPrettyPrint : Capability
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TRANSFORMATIONS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // phi → port : Extract implementation essence
+  xform FromPhi : Phi.LangSpec ⇄ PortSpec {
+    // Language spec becomes port spec
+    LangSpec(name, sorts, cons, grammars, xforms, rules) ↦ 
+      PortSpec(name, extractModules(sorts, cons), inferCapabilities(xforms))
+  }
+
+  // port → haskell : Generate Haskell code
+  xform ToHaskell : PortSpec ⇄ Haskell.Module {
+    // Sum types become data declarations
+    SumType(name, params, ctors) ↦ 
+      HsData(name, map(toHsTypeParam, params), map(toHsCtor, ctors), defaultDerivations)
+    
+    // Product types become data with single constructor
+    ProductType(name, params, fields) ↦
+      HsData(name, map(toHsTypeParam, params), [HsCtor(name, map(toHsField, fields))], defaultDerivations)
+    
+    // Functions become top-level bindings
+    Func(name, params, ret, body) ↦
+      HsBinding(name, HsTypeSig(map(paramType, params), ret), toHsExpr(body))
+  }
+
+  // port → scala : Generate Scala code
+  xform ToScala : PortSpec ⇄ Scala.File {
+    // Sum types become enums
+    SumType(name, params, ctors) ↦
+      ScalaEnum(name, map(toScalaTypeParam, params), map(toScalaCtor, ctors))
+    
+    // Product types become case classes
+    ProductType(name, params, fields) ↦
+      ScalaCaseClass(name, map(toScalaTypeParam, params), map(toScalaField, fields))
+    
+    // Functions become def declarations
+    Func(name, params, ret, body) ↦
+      ScalaDef(name, map(toScalaParam, params), toScalaType(ret), toScalaExpr(body))
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // RULES: Semantic Equivalences
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Types with single constructor are equivalent to product types
+  rule SingleCtorSum {
+    SumType(name, params, [ctor]) ⇌ ProductType(name, params, ctorFields(ctor))
+  }
+
+  // Newtype is sum with single constructor single field
+  rule NewtypeEquiv {
+    Newtype(name, params, wrapped) ⇌ 
+      SumType(name, params, [Constructor(name, [AnonField(wrapped)])])
+  }
+
+  // Recursion scheme fusion
+  rule HyloFusion {
+    compose(Cata(alg), Ana(coalg)) ⇌ Hylo(alg, coalg)
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXAMPLE: Core Module in Port
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// This shows how the Haskell/Scala Core modules would be represented in Port:
+//
+// Module("Core", 
+//   exports: [ExportType("Val"), ExportFunc("cata"), ExportFunc("ana"), ...],
+//   imports: [],
+//   decls: [
+//     SumType("Val", [], [
+//       Constructor("VCon", [NamedField("name", TString), NamedField("args", TList(TRef("Val")))]),
+//       Constructor("VStr", [NamedField("s", TString)]),
+//       Constructor("VInt", [NamedField("n", TInt)]),
+//       Constructor("VList", [NamedField("elems", TList(TRef("Val")))])
+//     ]),
+//     
+//     SumType("V", [TypeParam("a")], [
+//       Constructor("C", [NamedField("name", TString), NamedField("args", TList(TVar("a")))]),
+//       Constructor("S", [NamedField("s", TString)]),
+//       Constructor("I", [NamedField("n", TInt)]),
+//       Constructor("L", [NamedField("elems", TList(TVar("a")))])
+//     ]),
+//     
+//     Func("cata", 
+//       [Param("alg", TFunc(TApp(TRef("V"), [TVar("a")]), TVar("a")))],
+//       TFunc(TRef("Val"), TVar("a")),
+//       BodyRecursive(Cata, BodyExpr(EVar("alg")))
+//     ),
+//     
+//     Func("ana",
+//       [Param("coalg", TFunc(TVar("a"), TApp(TRef("V"), [TVar("a")])))],
+//       TFunc(TVar("a"), TRef("Val")),
+//       BodyRecursive(Ana, BodyExpr(EVar("coalg")))
+//     )
+//   ]
+// )
+//
+// ═══════════════════════════════════════════════════════════════════════════

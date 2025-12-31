@@ -1,0 +1,379 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// PORT2SCALA.PHI - Transform Port Abstraction to Scala Code
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// This transformation generates idiomatic Scala 3 from Port specifications.
+//
+// INPUT:  A Port specification (modules, types, functions)
+// OUTPUT: Scala source code (objects with enums, case classes, methods)
+//
+// KEY MAPPINGS:
+//   Port.SumType      → Scala enum
+//   Port.ProductType  → Scala case class
+//   Port.Newtype      → Scala opaque type or case class
+//   Port.Func         → Scala def
+//   Port.TList        → Scala List[A]
+//   Port.TOption      → Scala Option[A]
+//   Port.TFunc        → Scala A => B
+//
+// ═══════════════════════════════════════════════════════════════════════════
+
+language Port2Scala {
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TARGET: Scala 3 AST
+  // ─────────────────────────────────────────────────────────────────────────
+
+  sort ScFile
+  sort ScImport
+  sort ScDecl
+  sort ScType
+  sort ScExpr
+  sort ScPat
+  sort ScEnumCase
+  sort ScParam
+
+  // File structure
+  constructor ScFile : package:String → imports:ScImport* → decls:ScDecl* → ScFile
+  constructor ScImport : path:String → ScImport
+
+  // Declarations
+  constructor ScObject : name:String → decls:ScDecl* → ScDecl
+  constructor ScEnum : name:String → params:String* → cases:ScEnumCase* → ScDecl
+  constructor ScCaseClass : name:String → params:String* → fields:ScParam* → ScDecl
+  constructor ScOpaqueType : name:String → params:String* → underlying:ScType → ScDecl
+  constructor ScTypeAlias : name:String → params:String* → target:ScType → ScDecl
+  constructor ScDef : name:String → tparams:String* → params:ScParam* → ret:ScType → body:ScExpr → ScDecl
+  constructor ScVal : name:String → typ:ScType? → body:ScExpr → ScDecl
+  constructor ScGiven : name:String → typ:ScType → body:ScExpr → ScDecl
+  constructor ScExtension : forType:ScType → methods:ScDecl* → ScDecl
+
+  // Enum cases
+  constructor ScEnumCase : name:String → fields:ScParam* → ScEnumCase
+
+  // Parameters
+  constructor ScParam : name:String → typ:ScType → ScParam
+
+  // Types
+  constructor ScTyRef : name:String → ScType
+  constructor ScTyApp : ctor:ScType → args:ScType* → ScType
+  constructor ScTyFunc : params:ScType* → ret:ScType → ScType
+  constructor ScTyTuple : elems:ScType* → ScType
+  constructor ScTyVar : name:String → ScType
+
+  // Expressions
+  constructor ScVar : name:String → ScExpr
+  constructor ScCon : name:String → args:ScExpr* → ScExpr
+  constructor ScApp : func:ScExpr → args:ScExpr* → ScExpr
+  constructor ScLam : params:ScParam* → body:ScExpr → ScExpr
+  constructor ScMatch : scrut:ScExpr → cases:ScMatchCase* → ScExpr
+  constructor ScIf : cond:ScExpr → then:ScExpr → else:ScExpr → ScExpr
+  constructor ScBlock : stmts:ScExpr* → ScExpr
+  constructor ScLet : name:String → value:ScExpr → body:ScExpr → ScExpr
+  constructor ScList : elems:ScExpr* → ScExpr
+  constructor ScTuple : elems:ScExpr* → ScExpr
+  constructor ScLit : value:String → ScExpr
+  constructor ScInfix : op:String → lhs:ScExpr → rhs:ScExpr → ScExpr
+  constructor ScSelect : obj:ScExpr → field:String → ScExpr
+  constructor ScFor : gens:ScForGen* → body:ScExpr → ScExpr
+
+  // Match cases
+  constructor ScMatchCase : pat:ScPat → guard:ScExpr? → body:ScExpr → ScMatchCase
+
+  // Patterns  
+  constructor ScPVar : name:String → ScPat
+  constructor ScPCon : name:String → args:ScPat* → ScPat
+  constructor ScPWild : ScPat
+  constructor ScPLit : value:String → ScPat
+  constructor ScPTyped : pat:ScPat → typ:ScType → ScPat
+
+  // For comprehension generators
+  constructor ScForGen : name:String → expr:ScExpr → ScForGen
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // MAIN TRANSFORMATION: Port → Scala
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform PortToScala : Port.PortSpec → ScFile* {
+    PortSpec(name, modules, caps) ↦ 
+      // All modules go into one object file
+      [ScFile(
+        concat("phi.", toLower(name)),
+        standardImports,
+        map(moduleToObject, modules)
+      )]
+  }
+
+  xform ModuleToObject : Port.Module → ScDecl {
+    Module(name, exports, imports, decls) ↦
+      ScObject(name, concatMap(declToSc, decls))
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TYPE DECLARATIONS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform DeclToSc : Port.Decl → ScDecl* {
+    // Sum type → Scala enum
+    SumType(name, params, ctors) ↦ [
+      ScEnum(
+        name,
+        map(typeParamName, params),
+        map(ctorToEnumCase, ctors)
+      )
+    ]
+
+    // Product type → case class
+    ProductType(name, params, fields) ↦ [
+      ScCaseClass(
+        name,
+        map(typeParamName, params),
+        map(fieldToParam, fields)
+      )
+    ]
+
+    // Newtype → opaque type or case class
+    Newtype(name, params, wrapped) ↦ [
+      ScOpaqueType(name, map(typeParamName, params), typeToSc(wrapped))
+    ]
+
+    // Type alias
+    TypeAlias(name, params, target) ↦ [
+      ScTypeAlias(name, map(typeParamName, params), typeToSc(target))
+    ]
+
+    // Function → def
+    Func(name, params, ret, body) ↦ [
+      ScDef(
+        name,
+        inferTypeParams(params, ret),
+        map(paramToSc, params),
+        typeToSc(ret),
+        bodyToSc(body)
+      )
+    ]
+  }
+
+  xform CtorToEnumCase : Port.Constructor → ScEnumCase {
+    Constructor(name, []) ↦ ScEnumCase(name, [])
+    Constructor(name, fields) ↦ ScEnumCase(name, map(fieldToParam, fields))
+  }
+
+  xform FieldToParam : Port.Field → ScParam {
+    NamedField(name, typ) ↦ ScParam(name, typeToSc(typ))
+    AnonField(typ) ↦ ScParam(freshName(), typeToSc(typ))
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TYPES
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform TypeToSc : Port.Type → ScType {
+    // Primitives
+    TInt ↦ ScTyRef("Int")
+    TString ↦ ScTyRef("String")
+    TBool ↦ ScTyRef("Boolean")
+    TUnit ↦ ScTyRef("Unit")
+
+    // References
+    TRef(name) ↦ ScTyRef(name)
+    TVar(name) ↦ ScTyVar(toUpper(name))  // Scala uses uppercase type params
+
+    // Applications
+    TApp(ctor, args) ↦ ScTyApp(typeToSc(ctor), map(typeToSc, args))
+
+    // Structural
+    TList(elem) ↦ ScTyApp(ScTyRef("List"), [typeToSc(elem)])
+    TOption(elem) ↦ ScTyApp(ScTyRef("Option"), [typeToSc(elem)])
+    TTuple(elems) ↦ ScTyTuple(map(typeToSc, elems))
+    TFunc(from, to) ↦ ScTyFunc([typeToSc(from)], typeToSc(to))
+
+    // Higher-kinded
+    THigher(name, arity) ↦ ScTyRef(concat(name, "[_]"))
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // EXPRESSIONS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform BodyToSc : Port.Body → ScExpr {
+    BodyExpr(expr) ↦ exprToSc(expr)
+    BodyMatch(scrut, cases) ↦ ScMatch(ScVar(scrut), map(matchCaseToSc, cases))
+    BodyRecursive(Cata, alg) ↦ ScApp(ScVar("cata"), [bodyToSc(alg)])
+    BodyRecursive(Ana, coalg) ↦ ScApp(ScVar("ana"), [bodyToSc(coalg)])
+    BodyRecursive(Hylo, body) ↦ ScApp(ScVar("hylo"), [bodyToSc(body)])
+    BodyRecursive(Para, alg) ↦ ScApp(ScVar("para"), [bodyToSc(alg)])
+  }
+
+  xform ExprToSc : Port.Expr → ScExpr {
+    // Literals
+    EInt(n) ↦ ScLit(show(n))
+    EString(s) ↦ ScLit(concat("\"", escape(s), "\""))
+    EBool(true) ↦ ScVar("true")
+    EBool(false) ↦ ScVar("false")
+
+    // Variables and constructors
+    EVar(name) ↦ ScVar(name)
+    ECtor(name, []) ↦ ScVar(name)
+    ECtor(name, args) ↦ ScCon(name, map(exprToSc, args))
+
+    // Application - Scala uses parentheses
+    EApp(f, arg) ↦ ScApp(exprToSc(f), [exprToSc(arg)])
+    
+    // Lambda - Scala style
+    ELam(x, body) ↦ ScLam([ScParam(x, ScTyRef("_"))], exprToSc(body))
+
+    // Let - becomes block with val
+    ELet(x, v, body) ↦ ScBlock([
+      ScLet(x, exprToSc(v), exprToSc(body))
+    ])
+
+    // Pattern matching
+    EMatch(e, cases) ↦ ScMatch(exprToSc(e), map(matchCaseToSc, cases))
+
+    // Lists
+    EList(elems) ↦ ScApp(ScVar("List"), map(exprToSc, elems))
+    EListCons(h, t) ↦ ScInfix("::", exprToSc(h), exprToSc(t))
+
+    // Tuples
+    ETuple(elems) ↦ ScTuple(map(exprToSc, elems))
+    EProj(e, i) ↦ ScSelect(exprToSc(e), concat("_", show(add(i, 1))))
+  }
+
+  xform MatchCaseToSc : Port.MatchCase → ScMatchCase {
+    MatchCase(pat, None, body) ↦ ScMatchCase(patToSc(pat), None, exprToSc(body))
+    MatchCase(pat, Some(guard), body) ↦ ScMatchCase(patToSc(pat), Some(exprToSc(guard)), exprToSc(body))
+  }
+
+  xform PatToSc : Port.Pattern → ScPat {
+    PWild ↦ ScPWild
+    PVar(name) ↦ ScPVar(name)
+    PCtor(name, args) ↦ ScPCon(name, map(patToSc, args))
+    PLit(EInt(n)) ↦ ScPLit(show(n))
+    PLit(EString(s)) ↦ ScPLit(concat("\"", escape(s), "\""))
+    PAs(name, pat) ↦ ScPTyped(patToSc(pat), ScTyRef("@"))  // name @ pattern
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CODE GENERATION HELPERS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  rule StandardImports {
+    standardImports ⇌ []  // Scala 3 has good defaults
+  }
+
+  rule InferTypeParams {
+    inferTypeParams(params, ret) ⇌
+      unique(concat(
+        concatMap(extractTypeVars, map(paramType, params)),
+        extractTypeVars(ret)
+      ))
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // RENDERING (Scala AST → Text)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform RenderFile : ScFile → String {
+    ScFile(pkg, imports, decls) ↦
+      unlines([
+        concat("package ", pkg),
+        "",
+        unlines(map(renderImport, imports)),
+        "",
+        unlines(map(renderDecl, decls))
+      ])
+  }
+
+  xform RenderDecl : ScDecl → String {
+    ScObject(name, decls) ↦
+      unlines([
+        concat("object ", name, ":"),
+        indent(unlines(map(renderDecl, decls)))
+      ])
+    
+    ScEnum(name, [], cases) ↦
+      unlines([
+        concat("enum ", name, ":"),
+        indent(unlines(map(renderEnumCase, cases)))
+      ])
+    
+    ScEnum(name, params, cases) ↦
+      unlines([
+        concat("enum ", name, "[", intercalate(", ", params), "]:"),
+        indent(unlines(map(renderEnumCase, cases)))
+      ])
+    
+    ScCaseClass(name, [], fields) ↦
+      concat("case class ", name, "(", 
+        intercalate(", ", map(renderParam, fields)), ")")
+    
+    ScCaseClass(name, params, fields) ↦
+      concat("case class ", name, "[", intercalate(", ", params), "](",
+        intercalate(", ", map(renderParam, fields)), ")")
+    
+    ScDef(name, [], params, ret, body) ↦
+      concat("def ", name, "(", intercalate(", ", map(renderParam, params)), 
+        "): ", renderType(ret), " =\n", indent(renderExpr(body)))
+    
+    ScDef(name, tparams, params, ret, body) ↦
+      concat("def ", name, "[", intercalate(", ", tparams), "](",
+        intercalate(", ", map(renderParam, params)), 
+        "): ", renderType(ret), " =\n", indent(renderExpr(body)))
+  }
+
+  xform RenderEnumCase : ScEnumCase → String {
+    ScEnumCase(name, []) ↦ concat("case ", name)
+    ScEnumCase(name, fields) ↦ 
+      concat("case ", name, "(", intercalate(", ", map(renderParam, fields)), ")")
+  }
+
+  xform RenderParam : ScParam → String {
+    ScParam(name, typ) ↦ concat(name, ": ", renderType(typ))
+  }
+
+  xform RenderType : ScType → String {
+    ScTyRef(name) ↦ name
+    ScTyVar(name) ↦ name
+    ScTyApp(ctor, args) ↦ 
+      concat(renderType(ctor), "[", intercalate(", ", map(renderType, args)), "]")
+    ScTyFunc([param], ret) ↦ 
+      concat(renderType(param), " => ", renderType(ret))
+    ScTyFunc(params, ret) ↦
+      concat("(", intercalate(", ", map(renderType, params)), ") => ", renderType(ret))
+    ScTyTuple(elems) ↦
+      concat("(", intercalate(", ", map(renderType, elems)), ")")
+  }
+
+  xform RenderExpr : ScExpr → String {
+    ScVar(name) ↦ name
+    ScCon(name, args) ↦ concat(name, "(", intercalate(", ", map(renderExpr, args)), ")")
+    ScApp(f, args) ↦ concat(renderExpr(f), "(", intercalate(", ", map(renderExpr, args)), ")")
+    ScLam(params, body) ↦ 
+      concat("(", intercalate(", ", map(paramName, params)), ") => ", renderExpr(body))
+    ScMatch(e, cases) ↦
+      concat(renderExpr(e), " match\n", indent(unlines(map(renderCase, cases))))
+    ScBlock(stmts) ↦
+      concat("{\n", indent(unlines(map(renderExpr, stmts))), "\n}")
+    ScList(elems) ↦ 
+      concat("List(", intercalate(", ", map(renderExpr, elems)), ")")
+    ScLit(s) ↦ s
+    ScTuple(elems) ↦
+      concat("(", intercalate(", ", map(renderExpr, elems)), ")")
+  }
+
+  xform RenderCase : ScMatchCase → String {
+    ScMatchCase(pat, None, body) ↦
+      concat("case ", renderPat(pat), " => ", renderExpr(body))
+    ScMatchCase(pat, Some(guard), body) ↦
+      concat("case ", renderPat(pat), " if ", renderExpr(guard), " => ", renderExpr(body))
+  }
+
+  xform RenderPat : ScPat → String {
+    ScPWild ↦ "_"
+    ScPVar(name) ↦ name
+    ScPCon(name, []) ↦ name
+    ScPCon(name, args) ↦ concat(name, "(", intercalate(", ", map(renderPat, args)), ")")
+    ScPLit(s) ↦ s
+  }
+}

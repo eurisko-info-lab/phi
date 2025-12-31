@@ -1,0 +1,231 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// PHI2PORT.PHI - Transform Phi Language Specs to Port Abstraction
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// This transformation extracts the implementation essence from phi specs.
+// 
+// INPUT:  A phi language specification (sorts, constructors, xforms, rules)
+// OUTPUT: A port specification (modules, types, functions, abstractions)
+//
+// ═══════════════════════════════════════════════════════════════════════════
+
+language Phi2Port {
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // MAIN TRANSFORMATION
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform LangToPort : Phi.LangSpec → Port.PortSpec {
+    // A phi LangSpec becomes a PortSpec with inferred structure
+    LangSpec(name, sorts, cons, grammars, xforms, rules) ↦
+      PortSpec(
+        name,
+        [
+          // Core module with all types
+          Module("Core",
+            exports: collectExports(sorts, cons),
+            imports: [],
+            decls: concat(
+              map(sortToType, sorts),
+              map(conToConstructor, cons)
+            )
+          ),
+          // Meta module with evaluation machinery
+          Module("Meta",
+            exports: [ExportAll],
+            imports: [ImportModule("Core")],
+            decls: concat(
+              map(xformToFunc, xforms),
+              map(ruleToFunc, rules)
+            )
+          ),
+          // Grammar module for parsing
+          Module("Grammar",
+            exports: [ExportAll],
+            imports: [ImportModule("Core"), ImportModule("Meta")],
+            decls: map(grammarToParser, grammars)
+          )
+        ],
+        inferCapabilities(xforms, rules)
+      )
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SORT TRANSFORMATION
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform SortToType : Phi.SortDecl → Port.Decl {
+    // A sort with no parameters becomes a simple sum type
+    SortDecl(name, []) ↦ 
+      SumType(name, [], [])  // Constructors added separately
+    
+    // A sort with type parameters becomes a parameterized sum type
+    SortDecl(name, params) ↦
+      SumType(name, map(nameToTypeParam, params), [])
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CONSTRUCTOR TRANSFORMATION
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform ConToConstructor : Phi.ConDecl → Port.Constructor {
+    // Constructor with named fields
+    ConDecl(name, fields, returnSort) ↦
+      Constructor(name, map(fieldToPortField, fields))
+  }
+
+  xform FieldToPortField : Phi.Field → Port.Field {
+    // Named field with type
+    Field(name, typeRef) ↦
+      NamedField(name, typeRefToType(typeRef))
+    
+    // Anonymous field
+    Field(_, typeRef) where isEmpty(name) ↦
+      AnonField(typeRefToType(typeRef))
+  }
+
+  xform TypeRefToType : Phi.TypeRef → Port.Type {
+    // Simple type reference
+    TSimple(name) ↦ TRef(name)
+    
+    // Generic type application
+    TGeneric(name, args) ↦ TApp(TRef(name), map(typeRefToType, args))
+    
+    // Function type
+    TArrow(from, to) ↦ TFunc(typeRefToType(from), typeRefToType(to))
+    
+    // List type (sugar)
+    TList(elem) ↦ TList(typeRefToType(elem))
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // XFORM TRANSFORMATION
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform XformToFunc : Phi.XformDecl → Port.Decl {
+    // An xform becomes a function with pattern matching
+    XformDecl(name, source, target, cases) ↦
+      Func(
+        toLowerCamel(name),  // eval, show, etc.
+        [Param("input", TRef(source))],
+        TRef(target),
+        BodyMatch("input", map(xformCaseToMatchCase, cases))
+      )
+  }
+
+  xform XformCaseToMatchCase : Phi.XformCase → Port.MatchCase {
+    // Pattern → Body becomes MatchCase
+    XformCase(pattern, body) ↦
+      MatchCase(patToPattern(pattern), None, bodyToExpr(body))
+  }
+
+  xform PatToPattern : Phi.Pat → Port.Pattern {
+    PVar(name) ↦ PVar(name)
+    PCon(name, args) ↦ PCtor(name, map(patToPattern, args))
+    PWild ↦ PWild
+    PLit(v) ↦ PLit(valToExpr(v))
+  }
+
+  xform BodyToExpr : Phi.Expr → Port.Expr {
+    EVar(name) ↦ EVar(name)
+    ECon(name, args) ↦ ECtor(name, map(bodyToExpr, args))
+    EApp(f, arg) ↦ EApp(bodyToExpr(f), bodyToExpr(arg))
+    ELam(x, body) ↦ ELam(x, bodyToExpr(body))
+    ELet(x, v, body) ↦ ELet(x, bodyToExpr(v), bodyToExpr(body))
+    EMatch(e, cases) ↦ EMatch(bodyToExpr(e), map(xformCaseToMatchCase, cases))
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // RULE TRANSFORMATION
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform RuleToFunc : Phi.RuleDecl → Port.Decl {
+    // A reduction rule becomes a function
+    RuleDecl(name, lhs, rhs, premises) ↦
+      Func(
+        concat("apply", name),  // applyBeta, applyEta, etc.
+        [Param("term", TRef("Val"))],
+        TOption(TRef("Val")),
+        BodyMatch("term", [
+          MatchCase(
+            lhsToPattern(lhs), 
+            premisesToGuard(premises),
+            EApp(EVar("Some"), rhsToExpr(rhs))
+          ),
+          MatchCase(PWild, None, EVar("None"))
+        ])
+      )
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GRAMMAR TRANSFORMATION
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform GrammarToParser : Phi.GrammarDecl → Port.Decl {
+    // A grammar becomes a parser function
+    GrammarDecl(name, sort, productions) ↦
+      Func(
+        concat("parse", capitalize(name)),
+        [Param("input", TString)],
+        TApp(TRef("Result"), [TRef(sort)]),
+        BodyExpr(
+          EApp(
+            EVar("choice"),
+            EList(map(productionToParser, productions))
+          )
+        )
+      )
+  }
+
+  xform ProductionToParser : Phi.Production → Port.Expr {
+    // Pattern => Constructor becomes a parser alternative
+    Production(pattern, ctor, bindings) ↦
+      EApp(
+        EApp(EVar("map"), grammarPatToParser(pattern)),
+        ELam("matched", ECtor(ctor, map(bindingToExpr, bindings)))
+      )
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CAPABILITY INFERENCE
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform InferCapabilities : (Phi.XformDecl*, Phi.RuleDecl*) → Port.Capability* {
+    // Analyze xforms and rules to infer needed capabilities
+    (xforms, rules) ↦
+      concat(
+        // If there are xforms, we need pattern matching
+        if (notEmpty(xforms)) [CapRecursionSchemes] else [],
+        
+        // If xforms use recursive calls, we need full recursion schemes
+        if (any(usesRecursion, xforms)) [CapRecursionSchemes] else [],
+        
+        // If there are grammars, we need parsing
+        [CapParsing],
+        
+        // Standard capabilities all ports should have
+        [CapPrettyPrint, CapValidation]
+      )
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // HELPER RULES
+  // ─────────────────────────────────────────────────────────────────────────
+
+  rule ExportCollection {
+    collectExports(sorts, cons) ⇌ 
+      concat(
+        map(s -> ExportType(sortName(s)), sorts),
+        map(c -> ExportType(conName(c)), cons)
+      )
+  }
+
+  rule NameToTypeParam {
+    nameToTypeParam(name) ⇌ TypeParam(toLower(name))
+  }
+
+  rule CamelCase {
+    toLowerCamel(s) ⇌ concat(toLower(head(s)), tail(s))
+    toUpperCamel(s) ⇌ concat(toUpper(head(s)), tail(s))
+  }
+}

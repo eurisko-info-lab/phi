@@ -1,0 +1,344 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// PORT2HASKELL.PHI - Transform Port Abstraction to Haskell Code
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// This transformation generates idiomatic Haskell from Port specifications.
+//
+// INPUT:  A Port specification (modules, types, functions)
+// OUTPUT: Haskell source code (modules with data, functions, instances)
+//
+// KEY MAPPINGS:
+//   Port.SumType      → Haskell data with multiple constructors
+//   Port.ProductType  → Haskell data with single constructor + record syntax
+//   Port.Newtype      → Haskell newtype
+//   Port.Func         → Haskell function binding with type signature
+//   Port.TList        → Haskell [a]
+//   Port.TOption      → Haskell Maybe a
+//   Port.TFunc        → Haskell a -> b
+//
+// ═══════════════════════════════════════════════════════════════════════════
+
+language Port2Haskell {
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TARGET: Haskell AST
+  // ─────────────────────────────────────────────────────────────────────────
+
+  sort HsModule
+  sort HsImport
+  sort HsExport
+  sort HsDecl
+  sort HsType
+  sort HsExpr
+  sort HsPat
+  sort HsCtor
+  sort HsField
+  sort HsDerivation
+
+  // Module structure
+  constructor HsModule : name:String → exports:HsExport* → imports:HsImport* → decls:HsDecl* → HsModule
+  constructor HsExportType : name:String → HsExport
+  constructor HsExportFunc : name:String → HsExport
+  constructor HsExportAll : HsExport
+  constructor HsImport : module:String → qualified:Bool → alias:String? → HsImport
+
+  // Declarations
+  constructor HsData : name:String → params:String* → ctors:HsCtor* → derivs:HsDerivation* → HsDecl
+  constructor HsNewtype : name:String → params:String* → ctor:HsCtor → derivs:HsDerivation* → HsDecl
+  constructor HsTypeSig : name:String → typ:HsType → HsDecl
+  constructor HsBinding : name:String → pats:HsPat* → body:HsExpr → HsDecl
+  constructor HsInstance : cls:String → typ:HsType → methods:HsDecl* → HsDecl
+
+  // Constructors and fields
+  constructor HsCtor : name:String → fields:HsField* → HsCtor
+  constructor HsField : name:String? → typ:HsType → HsField
+
+  // Derivations
+  constructor HsDerive : cls:String → HsDerivation
+
+  // Types
+  constructor HsTyVar : name:String → HsType
+  constructor HsTyCon : name:String → HsType
+  constructor HsTyApp : ctor:HsType → arg:HsType → HsType
+  constructor HsTyFun : from:HsType → to:HsType → HsType
+  constructor HsTyList : elem:HsType → HsType
+  constructor HsTyTuple : elems:HsType* → HsType
+  constructor HsTyForall : vars:String* → body:HsType → HsType
+
+  // Expressions
+  constructor HsVar : name:String → HsExpr
+  constructor HsCon : name:String → HsExpr
+  constructor HsApp : func:HsExpr → arg:HsExpr → HsExpr
+  constructor HsLam : pats:HsPat* → body:HsExpr → HsExpr
+  constructor HsLet : binds:HsDecl* → body:HsExpr → HsExpr
+  constructor HsCase : scrut:HsExpr → alts:HsCaseAlt* → HsExpr
+  constructor HsIf : cond:HsExpr → then:HsExpr → else:HsExpr → HsExpr
+  constructor HsList : elems:HsExpr* → HsExpr
+  constructor HsTuple : elems:HsExpr* → HsExpr
+  constructor HsLit : value:String → HsExpr
+  constructor HsDo : stmts:HsStmt* → HsExpr
+  constructor HsInfix : op:String → lhs:HsExpr → rhs:HsExpr → HsExpr
+
+  // Case alternatives
+  constructor HsCaseAlt : pat:HsPat → body:HsExpr → HsCaseAlt
+
+  // Patterns
+  constructor HsPVar : name:String → HsPat
+  constructor HsPCon : name:String → args:HsPat* → HsPat
+  constructor HsPWild : HsPat
+  constructor HsPLit : value:String → HsPat
+  constructor HsPAs : name:String → pat:HsPat → HsPat
+
+  // Do notation statements
+  constructor HsStmtBind : pat:HsPat → expr:HsExpr → HsStmt
+  constructor HsStmtExpr : expr:HsExpr → HsStmt
+  constructor HsStmtLet : binds:HsDecl* → HsStmt
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // MAIN TRANSFORMATION: Port → Haskell
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform PortToHaskell : Port.PortSpec → HsModule* {
+    PortSpec(name, modules, caps) ↦ map(moduleToHs, modules)
+  }
+
+  xform ModuleToHs : Port.Module → HsModule {
+    Module(name, exports, imports, decls) ↦
+      HsModule(
+        concat("Phi.", name),
+        map(exportToHs, exports),
+        concat(
+          standardImports,
+          map(importToHs, imports)
+        ),
+        concat(
+          languageExtensions(decls),
+          concatMap(declToHs, decls)
+        )
+      )
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TYPE DECLARATIONS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform DeclToHs : Port.Decl → HsDecl* {
+    // Sum type → data with deriving
+    SumType(name, params, ctors) ↦ [
+      HsData(
+        name,
+        map(typeParamName, params),
+        map(ctorToHs, ctors),
+        defaultDerivations
+      )
+    ]
+
+    // Product type → data with record syntax
+    ProductType(name, params, fields) ↦ [
+      HsData(
+        name,
+        map(typeParamName, params),
+        [HsCtor(name, map(fieldToHs, fields))],
+        defaultDerivations
+      )
+    ]
+
+    // Newtype → newtype
+    Newtype(name, params, wrapped) ↦ [
+      HsNewtype(
+        name,
+        map(typeParamName, params),
+        HsCtor(name, [HsField(None, typeToHs(wrapped))]),
+        defaultDerivations
+      )
+    ]
+
+    // Type alias → type synonym
+    TypeAlias(name, params, target) ↦ [
+      HsTypeSyn(name, map(typeParamName, params), typeToHs(target))
+    ]
+
+    // Function → type signature + binding
+    Func(name, params, ret, body) ↦ [
+      HsTypeSig(name, funcTypeToHs(params, ret)),
+      HsBinding(name, map(paramToPat, params), bodyToHs(body))
+    ]
+  }
+
+  xform CtorToHs : Port.Constructor → HsCtor {
+    Constructor(name, fields) ↦ HsCtor(name, map(fieldToHs, fields))
+  }
+
+  xform FieldToHs : Port.Field → HsField {
+    NamedField(name, typ) ↦ HsField(Some(toLowerCamel(name)), typeToHs(typ))
+    AnonField(typ) ↦ HsField(None, typeToHs(typ))
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TYPES
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform TypeToHs : Port.Type → HsType {
+    // Primitives
+    TInt ↦ HsTyCon("Int")
+    TString ↦ HsTyCon("String")
+    TBool ↦ HsTyCon("Bool")
+    TUnit ↦ HsTyTuple([])
+
+    // References
+    TRef(name) ↦ HsTyCon(name)
+    TVar(name) ↦ HsTyVar(name)
+
+    // Applications
+    TApp(ctor, args) ↦ foldl(HsTyApp, typeToHs(ctor), map(typeToHs, args))
+
+    // Structural
+    TList(elem) ↦ HsTyList(typeToHs(elem))
+    TOption(elem) ↦ HsTyApp(HsTyCon("Maybe"), typeToHs(elem))
+    TTuple(elems) ↦ HsTyTuple(map(typeToHs, elems))
+    TFunc(from, to) ↦ HsTyFun(typeToHs(from), typeToHs(to))
+
+    // Higher-kinded
+    THigher(name, _) ↦ HsTyVar(name)
+  }
+
+  xform FuncTypeToHs : (Port.Param*, Port.Type) → HsType {
+    (params, ret) ↦ foldr(HsTyFun, typeToHs(ret), map(paramType, params))
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // EXPRESSIONS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform BodyToHs : Port.Body → HsExpr {
+    BodyExpr(expr) ↦ exprToHs(expr)
+    BodyMatch(scrut, cases) ↦ HsCase(HsVar(scrut), map(matchCaseToAlt, cases))
+    BodyRecursive(Cata, alg) ↦ HsApp(HsVar("cata"), bodyToHs(alg))
+    BodyRecursive(Ana, coalg) ↦ HsApp(HsVar("ana"), bodyToHs(coalg))
+    BodyRecursive(Hylo, body) ↦ HsApp(HsVar("hylo"), bodyToHs(body))
+    BodyRecursive(Para, alg) ↦ HsApp(HsVar("para"), bodyToHs(alg))
+  }
+
+  xform ExprToHs : Port.Expr → HsExpr {
+    // Literals
+    EInt(n) ↦ HsLit(show(n))
+    EString(s) ↦ HsLit(show(s))
+    EBool(true) ↦ HsCon("True")
+    EBool(false) ↦ HsCon("False")
+
+    // Variables and constructors
+    EVar(name) ↦ HsVar(name)
+    ECtor(name, []) ↦ HsCon(name)
+    ECtor(name, args) ↦ foldl(HsApp, HsCon(name), map(exprToHs, args))
+
+    // Application and abstraction
+    EApp(f, arg) ↦ HsApp(exprToHs(f), exprToHs(arg))
+    ELam(x, body) ↦ HsLam([HsPVar(x)], exprToHs(body))
+
+    // Let bindings
+    ELet(x, v, body) ↦ HsLet([HsBinding(x, [], exprToHs(v))], exprToHs(body))
+
+    // Pattern matching
+    EMatch(e, cases) ↦ HsCase(exprToHs(e), map(matchCaseToAlt, cases))
+
+    // Lists
+    EList(elems) ↦ HsList(map(exprToHs, elems))
+    EListCons(h, t) ↦ HsInfix(":", exprToHs(h), exprToHs(t))
+
+    // Tuples
+    ETuple(elems) ↦ HsTuple(map(exprToHs, elems))
+    EProj(e, i) ↦ HsApp(HsVar(projName(i)), exprToHs(e))
+  }
+
+  xform MatchCaseToAlt : Port.MatchCase → HsCaseAlt {
+    MatchCase(pat, None, body) ↦ HsCaseAlt(patToHs(pat), exprToHs(body))
+    MatchCase(pat, Some(guard), body) ↦ 
+      HsCaseAlt(patToHs(pat), HsIf(exprToHs(guard), exprToHs(body), HsVar("undefined")))
+  }
+
+  xform PatToHs : Port.Pattern → HsPat {
+    PWild ↦ HsPWild
+    PVar(name) ↦ HsPVar(name)
+    PCtor(name, args) ↦ HsPCon(name, map(patToHs, args))
+    PLit(EInt(n)) ↦ HsPLit(show(n))
+    PLit(EString(s)) ↦ HsPLit(show(s))
+    PAs(name, pat) ↦ HsPAs(name, patToHs(pat))
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CODE GENERATION HELPERS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  rule DefaultDerivations {
+    defaultDerivations ⇌ [HsDerive("Eq"), HsDerive("Show")]
+  }
+
+  rule StandardImports {
+    standardImports ⇌ [
+      HsImport("Prelude", false, None),
+      HsImport("Data.List", true, Some("List"))
+    ]
+  }
+
+  rule LanguageExtensions {
+    languageExtensions(decls) ⇌
+      if (hasGADTs(decls)) 
+        [HsPragma("GADTs"), HsPragma("TypeFamilies")]
+      else if (hasHigherKinded(decls))
+        [HsPragma("RankNTypes")]
+      else
+        []
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // RENDERING (Haskell AST → Text)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  xform RenderModule : HsModule → String {
+    HsModule(name, exports, imports, decls) ↦
+      unlines([
+        renderPragmas(decls),
+        concat("module ", name, " ("),
+        indent(intercalate(",\n", map(renderExport, exports))),
+        ") where",
+        "",
+        unlines(map(renderImport, imports)),
+        "",
+        unlines(map(renderDecl, decls))
+      ])
+  }
+
+  xform RenderDecl : HsDecl → String {
+    HsData(name, params, ctors, derivs) ↦
+      unlines([
+        concat("data ", name, " ", unwords(params)),
+        indent(concat("= ", intercalate("\n  | ", map(renderCtor, ctors)))),
+        indent(concat("deriving (", intercalate(", ", map(derivName, derivs)), ")"))
+      ])
+    
+    HsTypeSig(name, typ) ↦
+      concat(name, " :: ", renderType(typ))
+    
+    HsBinding(name, pats, body) ↦
+      concat(name, " ", unwords(map(renderPat, pats)), " = ", renderExpr(body))
+  }
+
+  xform RenderType : HsType → String {
+    HsTyVar(name) ↦ name
+    HsTyCon(name) ↦ name
+    HsTyApp(f, a) ↦ concat(renderType(f), " ", parens(renderType(a)))
+    HsTyFun(a, b) ↦ concat(parens(renderType(a)), " -> ", renderType(b))
+    HsTyList(a) ↦ concat("[", renderType(a), "]")
+    HsTyTuple(elems) ↦ concat("(", intercalate(", ", map(renderType, elems)), ")")
+  }
+
+  xform RenderExpr : HsExpr → String {
+    HsVar(name) ↦ name
+    HsCon(name) ↦ name
+    HsApp(f, a) ↦ concat(renderExpr(f), " ", parens(renderExpr(a)))
+    HsLam(pats, body) ↦ concat("\\", unwords(map(renderPat, pats)), " -> ", renderExpr(body))
+    HsCase(e, alts) ↦ concat("case ", renderExpr(e), " of\n", indent(unlines(map(renderAlt, alts))))
+    HsList(elems) ↦ concat("[", intercalate(", ", map(renderExpr, elems)), "]")
+    HsLit(s) ↦ s
+  }
+}
