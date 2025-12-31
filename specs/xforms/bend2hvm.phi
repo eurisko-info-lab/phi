@@ -1,0 +1,463 @@
+-- Bend to HVM Compiler
+-- Transforms high-level Bend programs to HVM interaction calculus
+
+import "bend.phi"
+import "hvm.phi"
+
+-- ============================================================================
+-- Compilation Context
+-- ============================================================================
+
+-- Track names and fresh variable generation
+type Ctx = CompCtx Nat (List Name)  -- fresh counter, bound names
+
+-- Fresh name generation
+fresh : Ctx -> (Name, Ctx)
+fresh (CompCtx n bound) = (Name ("$" ++ show n), CompCtx (n + 1) bound)
+
+-- Bind a name in context
+bind : Name -> Ctx -> Ctx
+bind x (CompCtx n bound) = CompCtx n (x :: bound)
+
+-- Check if name is bound
+isBound : Name -> Ctx -> Bool
+isBound x (CompCtx _ bound) = elem x bound
+
+-- ============================================================================
+-- Pattern Compilation
+-- ============================================================================
+
+-- Compile pattern to HVM pattern
+compilePattern : Pattern -> HVM.Pattern
+compilePattern pat = case pat of
+  PVar x -> HVM.PVar x
+  PWild  -> HVM.PWild
+  PCtr name pats -> HVM.PCtr name (map compilePattern pats)
+  PTup pats -> 
+    -- Tuples become nested pairs: (a,b,c) -> (a,(b,c))
+    foldr1 (\p1 p2 -> HVM.PCtr "Pair" [p1, p2]) (map compilePattern pats)
+  PNum (NumU24 n) -> HVM.PNum n
+  PNum (NumI24 n) -> HVM.PNum (if n < 0 then fromInt n else toNat n)
+  PNum (NumF24 _) -> HVM.PWild  -- floats matched as wild
+  PList [] -> HVM.PCtr "Nil" []
+  PList (p :: ps) -> HVM.PCtr "Cons" [compilePattern p, compilePattern (PList ps)]
+  PStr s -> compilePattern (PList (map (\c -> PNum (NumU24 (ord c))) (toList s)))
+  PSup p1 p2 -> HVM.PSup (compilePattern p1) (compilePattern p2)
+
+-- ============================================================================
+-- Expression Compilation
+-- ============================================================================
+
+-- Compile expression to HVM term
+compile : Expr -> Ctx -> (HVM.Term, Ctx)
+
+-- Variables
+compile (EVar x) ctx = 
+  if isBound x ctx
+  then (HVM.Var x, ctx)
+  else (HVM.Ref x, ctx)  -- Global reference
+
+-- Lambda
+compile (ELam params body) ctx =
+  let ctx' = foldr (\(x, _) c -> bind x c) ctx params
+      (body', ctx'') = compile body ctx'
+      -- Build nested lambdas
+      term = foldr (\(x, unscoped) t -> 
+        if unscoped 
+        then HVM.Lam x t  -- TODO: handle unscoped properly
+        else HVM.Lam x t) body' params
+  in (term, ctx'')
+
+-- Application
+compile (EApp f x) ctx =
+  let (f', ctx1) = compile f ctx
+      (x', ctx2) = compile x ctx1
+  in (HVM.App f' x', ctx2)
+
+-- Let binding
+compile (ELet pat val body) ctx =
+  let (val', ctx1) = compile val ctx
+      -- For simple variable patterns, use Let
+      -- For complex patterns, use Mat
+  in case pat of
+    PVar x ->
+      let ctx2 = bind x ctx1
+          (body', ctx3) = compile body ctx2
+      in (HVM.Let x val' body', ctx3)
+    _ ->
+      -- Desugar to match
+      let matchExpr = EMatch val Nothing [(MArm Nothing [] body)]
+      in compile matchExpr ctx1
+
+-- Use (alias)  
+compile (EUse x val body) ctx =
+  let (val', ctx1) = compile val ctx
+      ctx2 = bind x ctx1
+      (body', ctx3) = compile body ctx2
+  in (HVM.Let x val' body', ctx3)
+
+-- Constructor
+compile (ECtr name args) ctx =
+  let (args', ctx') = compileList args ctx
+  in (HVM.Ctr name args', ctx')
+
+-- Tuple
+compile (ETup elems) ctx =
+  let (elems', ctx') = compileList elems ctx
+      -- Encode as nested pairs
+      term = foldr1 (\a b -> HVM.Ctr "Pair" [a, b]) elems'
+  in (term, ctx')
+
+-- List
+compile (EList elems) ctx =
+  let (elems', ctx') = compileList elems ctx
+      term = foldr (\x xs -> HVM.Ctr "Cons" [x, xs]) (HVM.Ctr "Nil" []) elems'
+  in (term, ctx')
+
+-- String (list of characters)
+compile (EStr s) ctx =
+  compile (EList (map (\c -> ENum (NumU24 (ord c))) (toList s))) ctx
+
+-- Numbers
+compile (ENum (NumU24 n)) ctx = (HVM.Num (HVM.U24 n), ctx)
+compile (ENum (NumI24 n)) ctx = (HVM.Num (HVM.I24 n), ctx)
+compile (ENum (NumF24 f)) ctx = (HVM.Num (HVM.F24 f), ctx)
+
+-- Binary operations
+compile (EBinOp op l r) ctx =
+  let (l', ctx1) = compile l ctx
+      (r', ctx2) = compile r ctx1
+      hvmOp = compileBinOp op
+  in (HVM.Op2 hvmOp l' r', ctx2)
+
+-- Unary operations
+compile (EUnOp Neg e) ctx =
+  let (e', ctx') = compile e ctx
+  in (HVM.Op2 HVM.SUB (HVM.Num (HVM.U24 0)) e', ctx')
+compile (EUnOp Not e) ctx =
+  let (e', ctx') = compile e ctx
+  in (HVM.Op2 HVM.XOR (HVM.Num (HVM.U24 0xFFFFFF)) e', ctx')
+
+-- If expression
+compile (EIf cond thn els) ctx =
+  -- Desugar: if c then t else e -> switch c { 0: e; _: t }
+  let (cond', ctx1) = compile cond ctx
+      (thn', ctx2) = compile thn ctx1
+      (els', ctx3) = compile els ctx2
+      (x, ctx4) = fresh ctx3
+  in (HVM.Swi cond' x els' thn', ctx4)
+
+-- Match expression
+compile (EMatch scrut bnd arms) ctx =
+  let (scrut', ctx1) = compile scrut ctx
+      (bndVar, ctx2) = case bnd of
+        Just x -> (x, ctx1)
+        Nothing -> fresh ctx1
+      ctx3 = bind bndVar ctx2
+      arms' = map (compileArm ctx3) arms
+  in (HVM.Mat scrut' bndVar arms', ctx3)
+
+-- Switch expression (numeric)
+compile (ESwitch scrut bnd cases) ctx =
+  let (scrut', ctx1) = compile scrut ctx
+      (bndVar, ctx2) = case bnd of
+        Just x -> (x, ctx1)
+        Nothing -> fresh ctx1
+      -- Build nested switch
+      (term, ctx') = compileSwitch scrut' bndVar cases ctx2
+  in (term, ctx')
+
+-- Fold expression
+compile (EFold scrut bnd arms) ctx =
+  -- Fold becomes a recursive function + match
+  -- fold x: case A: body -> def $fold(x) = match x: case A: body[$fold(x.rec)/x.rec]
+  let (foldName, ctx1) = fresh ctx
+      (scrut', ctx2) = compile scrut ctx1
+      (bndVar, ctx3) = case bnd of
+        Just x -> (x, ctx2)
+        Nothing -> fresh ctx2
+      -- Create recursive calls for fold
+      arms' = map (compileFoldArm foldName ctx3) arms
+      foldBody = HVM.Mat (HVM.Var bndVar) bndVar arms'
+      foldFn = HVM.Lam bndVar foldBody
+  in (HVM.App foldFn scrut', ctx3)
+
+-- Bend expression
+compile (EBend binds cond step base) ctx =
+  -- bend x = init: when c: step else: base
+  -- becomes: def $bend(x) = if c then step[$bend/fork] else base; $bend(init)
+  let (bendName, ctx1) = fresh ctx
+      -- Compile initial values
+      (inits', ctx2) = compileList (map snd binds) ctx1
+      -- Bind variables
+      ctx3 = foldr (\(x, _) c -> bind x c) ctx2 binds
+      (cond', ctx4) = compile cond ctx3
+      (step', ctx5) = compile step ctx4
+      (base', ctx6) = compile base ctx5
+      -- Build conditional body
+      (predVar, ctx7) = fresh ctx6
+      body = HVM.Swi cond' predVar base' step'
+      -- Build recursive function
+      bendFn = foldr (\(x, _) t -> HVM.Lam x t) body binds
+      -- Apply to initial values
+      term = foldl HVM.App (HVM.Let bendName bendFn (HVM.Var bendName)) inits'
+  in (term, ctx7)
+
+-- Reference
+compile (ERef name) ctx = (HVM.Ref name, ctx)
+
+-- Local definition
+compile (EDef def body) ctx =
+  let (defTerm, ctx1) = compileDef def ctx
+      (body', ctx2) = compile body ctx1
+  in case def of
+    FnDef name _ _ _ _ -> (HVM.Let name defTerm body', ctx2)
+
+-- Superposition
+compile (ESup l r) ctx =
+  let (l', ctx1) = compile l ctx
+      (r', ctx2) = compile r ctx1
+  in (HVM.Sup 0 l' r', ctx2)  -- Default label 0
+
+-- Era
+compile EEra ctx = (HVM.Era, ctx)
+
+-- ============================================================================
+-- Helper Functions
+-- ============================================================================
+
+-- Compile list of expressions
+compileList : List Expr -> Ctx -> (List HVM.Term, Ctx)
+compileList [] ctx = ([], ctx)
+compileList (e :: es) ctx =
+  let (e', ctx1) = compile e ctx
+      (es', ctx2) = compileList es ctx1
+  in (e' :: es', ctx2)
+
+-- Compile binary operator
+compileBinOp : BinOp -> HVM.Op
+compileBinOp op = case op of
+  Add -> HVM.ADD
+  Sub -> HVM.SUB
+  Mul -> HVM.MUL
+  Div -> HVM.DIV
+  Mod -> HVM.MOD
+  And -> HVM.AND
+  Or  -> HVM.OR
+  Xor -> HVM.XOR
+  Shl -> HVM.SHL
+  Shr -> HVM.SHR
+  Lt  -> HVM.LT
+  Le  -> HVM.LE
+  Gt  -> HVM.GT
+  Ge  -> HVM.GE
+  Eq  -> HVM.EQ
+  Ne  -> HVM.NE
+
+-- Compile match arm
+compileArm : Ctx -> MatchArm -> (Name, List Name, HVM.Term)
+compileArm ctx (MArm ctr fields body) =
+  let ctx' = foldr bind ctx fields
+      (body', _) = compile body ctx'
+  in (fromMaybe "_" ctr, fields, body')
+
+-- Compile fold arm (with recursive call substitution)
+compileFoldArm : Name -> Ctx -> MatchArm -> (Name, List Name, HVM.Term)
+compileFoldArm foldName ctx (MArm ctr fields body) =
+  let ctx' = foldr bind ctx fields
+      -- TODO: substitute recursive field accesses with fold calls
+      (body', _) = compile body ctx'
+  in (fromMaybe "_" ctr, fields, body')
+
+-- Compile switch cases
+compileSwitch : HVM.Term -> Name -> List Expr -> Ctx -> (HVM.Term, Ctx)
+compileSwitch scrut bnd [zero, succ] ctx =
+  let (zero', ctx1) = compile zero ctx
+      (succ', ctx2) = compile succ ctx1
+  in (HVM.Swi scrut bnd zero' succ', ctx2)
+compileSwitch scrut bnd (zero :: rest) ctx =
+  let (zero', ctx1) = compile zero ctx
+      (rest', ctx2) = compileSwitch (HVM.Op2 HVM.SUB (HVM.Var bnd) (HVM.Num (HVM.U24 1))) bnd rest ctx1
+  in (HVM.Swi scrut bnd zero' rest', ctx2)
+compileSwitch _ _ [] ctx = (HVM.Era, ctx)  -- Shouldn't happen
+
+-- ============================================================================
+-- Definition Compilation  
+-- ============================================================================
+
+-- Compile function definition
+compileDef : Def -> Ctx -> (HVM.Term, Ctx)
+compileDef (FnDef name args _ _ rules) ctx =
+  case rules of
+    -- Single rule: simple lambda abstraction
+    [FnRule pats body] ->
+      let argNames = map fst args
+          ctx' = foldr bind ctx argNames
+          (body', ctx'') = compile body ctx'
+          term = foldr HVM.Lam body' argNames
+      in (term, ctx'')
+    -- Multiple rules: pattern matching
+    _ ->
+      let argNames = map fst args
+          ctx' = foldr bind ctx argNames
+          arms = map (compileRule argNames ctx') rules
+          -- Build nested match on arguments
+          term = buildPatternMatch argNames arms ctx'
+      in (term, ctx')
+
+-- Compile pattern matching rule
+compileRule : List Name -> Ctx -> Rule -> (List HVM.Pattern, HVM.Term)
+compileRule argNames ctx (FnRule pats body) =
+  let pats' = map compilePattern pats
+      (body', _) = compile body ctx
+  in (pats', body')
+
+-- Build pattern match from rules
+buildPatternMatch : List Name -> List (List HVM.Pattern, HVM.Term) -> Ctx -> HVM.Term
+buildPatternMatch [] [([], body)] _ = body
+buildPatternMatch (arg :: args) rules ctx =
+  -- Group rules by first pattern, build match
+  -- Simplified: assume first rule catches all
+  case rules of
+    [(pat :: pats, body)] ->
+      case pat of
+        HVM.PVar x -> 
+          -- Variable pattern: just bind and continue
+          let innerRules = [(pats, body)]
+              inner = buildPatternMatch args innerRules ctx
+          in HVM.Let x (HVM.Var arg) inner
+        HVM.PCtr ctr fields ->
+          -- Constructor pattern: build match
+          -- Simplified version
+          HVM.Mat (HVM.Var arg) arg [(ctr, [], buildPatternMatch args [(pats, body)] ctx)]
+        _ -> buildPatternMatch args [(pats, body)] ctx
+    _ -> HVM.Era  -- Simplified: complex patterns not fully supported
+buildPatternMatch _ _ _ = HVM.Era
+
+-- ============================================================================
+-- Type Definition Compilation
+-- ============================================================================
+
+-- Compile ADT to constructor functions
+compileADT : TypeDef -> List (Name, HVM.Term)
+compileADT (ADT typeName typeParams ctors) =
+  map (compileCtor typeName) ctors
+
+-- Compile constructor
+compileCtor : Name -> Constructor -> (Name, HVM.Term)
+compileCtor typeName (Ctor ctorName fields) =
+  let fullName = typeName ++ "/" ++ ctorName
+      fieldNames = map (\(n, _, _) -> n) fields
+      body = HVM.Ctr fullName (map HVM.Var fieldNames)
+      term = foldr HVM.Lam body fieldNames
+  in (fullName, term)
+
+-- ============================================================================
+-- Program Compilation
+-- ============================================================================
+
+-- Compile program to HVM book
+compileProgram : Program -> HVM.Book
+compileProgram (Prog decls) =
+  let ctx = CompCtx 0 []
+      defs = concatMap (compileDecl ctx) decls
+  in HVM.Book defs
+
+-- Compile declaration
+compileDecl : Ctx -> Decl -> List (Name, HVM.Term)
+compileDecl ctx decl = case decl of
+  DFn def@(FnDef name _ _ _ _) ->
+    let (term, _) = compileDef def ctx
+    in [(name, term)]
+  DType adt -> compileADT adt
+  DObj (Obj name params fields) ->
+    -- Object is single-constructor ADT
+    compileADT (ADT name params [Ctor name (map (\(n, t) -> (n, t, False)) fields)])
+  DImport _ -> []  -- Imports handled separately
+
+-- ============================================================================
+-- Statement Compilation (Imperative to Functional)
+-- ============================================================================
+
+-- Convert statement to expression
+stmtToExpr : Stmt -> Expr
+
+stmtToExpr (SReturn e) = e
+
+stmtToExpr (SLet pat val rest) = ELet pat val (stmtToExpr rest)
+
+stmtToExpr (SIf cond thn els) = 
+  EIf cond (stmtToExpr thn) (stmtToExpr els)
+
+stmtToExpr (SMatch scrut bnd arms) =
+  EMatch scrut bnd (map stmtArmToArm arms)
+
+stmtToExpr (SFold scrut bnd arms) =
+  EFold scrut bnd (map stmtArmToArm arms)
+
+stmtToExpr (SBend binds cond step base) =
+  EBend binds cond (stmtToExpr step) (stmtToExpr base)
+
+stmtToExpr (SWith monad body) =
+  -- With blocks need monadic desugaring
+  -- Simplified: just compile body
+  stmtToExpr body
+
+stmtToExpr (SAsk pat val rest) =
+  -- ask x <- m; rest  ->  bind(m, \x -> rest)
+  EApp (EApp (ERef "bind") val) (ELam [(patToName pat, False)] (stmtToExpr rest))
+
+stmtToExpr (SOpen typeName varName body) =
+  -- open Type var; body  ->  match var: case Type: body
+  EMatch (EVar varName) (Just varName) 
+    [MArm (Just typeName) [] (stmtToExpr body)]
+
+stmtToExpr (SExpr e) = e
+
+-- Convert statement arm to match arm
+stmtArmToArm : StmtArm -> MatchArm
+stmtArmToArm (SAArm ctr body) = MArm ctr [] (stmtToExpr body)
+
+-- Extract name from pattern
+patToName : Pattern -> Name
+patToName (PVar x) = x
+patToName _ = "_"
+
+-- ============================================================================
+-- Example Compilations
+-- ============================================================================
+
+-- Example: identity function
+-- def identity(x): return x
+-- Compiles to: λx x
+example_identity_hvm = HVM.Lam "x" (HVM.Var "x")
+
+-- Example: factorial
+-- def fact(n): switch n: case 0: return 1; case _: return n * fact(n-1)
+-- Compiles to: λn (switch n { 0: 1; _: (* n (fact (- n 1))) })
+example_fact_hvm = 
+  HVM.Lam "n" (
+    HVM.Swi (HVM.Var "n") "n"
+      (HVM.Num (HVM.U24 1))
+      (HVM.Op2 HVM.MUL 
+        (HVM.Var "n")
+        (HVM.App (HVM.Ref "fact") 
+          (HVM.Op2 HVM.SUB (HVM.Var "n") (HVM.Num (HVM.U24 1))))))
+
+-- Example: sum tree
+-- def sum(t): fold t: case Leaf: return t.value; case Node: return t.left + t.right
+-- Compiles to: λt (match t { Leaf: t.value; Node: (+ ($fold t.left) ($fold t.right)) })
+example_sum_hvm =
+  HVM.Lam "t" (
+    HVM.Mat (HVM.Var "t") "t"
+      [ ("Tree/Leaf", ["value"], HVM.Var "value")
+      , ("Tree/Node", ["left", "right"], 
+          HVM.Op2 HVM.ADD 
+            (HVM.App (HVM.Ref "$fold") (HVM.Var "left"))
+            (HVM.App (HVM.Ref "$fold") (HVM.Var "right")))
+      ])
+
+-- Example: superposition
+-- {1 2}
+-- Compiles to: (Sup 0 1 2)
+example_sup_hvm = HVM.Sup 0 (HVM.Num (HVM.U24 1)) (HVM.Num (HVM.U24 2))

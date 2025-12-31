@@ -1,0 +1,307 @@
+-- Bend Language Specification
+-- High-level functional language targeting HVM
+-- Python-like syntax, Haskell-like semantics
+
+-- ============================================================================
+-- Types
+-- ============================================================================
+
+-- Primitive types
+type Prim = U24 | I24 | F24 | Any | None
+
+-- Type expressions
+type Type
+  = TPrim Prim                    -- Primitive type
+  | TVar Name                     -- Type variable
+  | TCtr Name (List Type)         -- Constructor type
+  | TArr Type Type                -- Function type (->)
+  | TTup (List Type)              -- Tuple type
+  | THole                         -- Type hole (_)
+
+-- Type annotation
+type TypeAnn = Ann Type | NoAnn
+
+-- ============================================================================
+-- Patterns
+-- ============================================================================
+
+-- Pattern matching
+type Pattern
+  = PVar Name                     -- Variable pattern
+  | PWild                         -- Wildcard pattern (_)
+  | PCtr Name (List Pattern)      -- Constructor pattern
+  | PTup (List Pattern)           -- Tuple pattern
+  | PNum Number                   -- Numeric literal pattern
+  | PList (List Pattern)          -- List pattern [a, b, c]
+  | PStr String                   -- String pattern
+  | PSup Pattern Pattern          -- Superposition pattern {a b}
+
+-- ============================================================================
+-- Expressions
+-- ============================================================================
+
+-- Numeric literals
+type Number = NumU24 Nat | NumI24 Int | NumF24 Float
+
+-- Binary operators
+type BinOp
+  = Add | Sub | Mul | Div | Mod   -- Arithmetic
+  | And | Or | Xor                -- Bitwise  
+  | Shl | Shr                     -- Shift
+  | Lt | Le | Gt | Ge | Eq | Ne   -- Comparison
+
+-- Unary operators
+type UnOp = Neg | Not
+
+-- Expressions
+type Expr
+  -- Core lambda calculus
+  = EVar Name                     -- Variable reference
+  | ELam (List (Name, Bool)) Expr -- Lambda: lambda x, y: body (Bool = is unscoped)
+  | EApp Expr Expr                -- Application
+  
+  -- Let and use bindings
+  | ELet Pattern Expr Expr        -- let pat = val; body
+  | EUse Name Expr Expr           -- use x = val; body (alias)
+  
+  -- Constructors and data
+  | ECtr Name (List Expr)         -- Constructor: Ctr(a, b)
+  | ETup (List Expr)              -- Tuple: (a, b, c)
+  | EList (List Expr)             -- List: [a, b, c]
+  | EStr String                   -- String literal
+  
+  -- Numbers and operations
+  | ENum Number                   -- Numeric literal
+  | EBinOp BinOp Expr Expr        -- Binary operation
+  | EUnOp UnOp Expr               -- Unary operation
+  
+  -- Control flow
+  | EIf Expr Expr Expr            -- if cond: then else: else
+  | EMatch Expr (Maybe Name) (List MatchArm) -- match expr: case ...
+  | ESwitch Expr (Maybe Name) (List Expr)    -- switch n: 0: ... _: ...
+  | EFold Expr (Maybe Name) (List MatchArm)  -- fold x: case ...
+  | EBend (List (Name, Expr)) Expr Expr Expr -- bend x = init: when cond: step else: base
+  
+  -- References and definitions
+  | ERef Name                     -- Reference to global definition
+  | EDef Def Expr                 -- Local definition
+  
+  -- Superposition (parallelism)
+  | ESup Expr Expr                -- Superposition: {a b}
+  
+  -- Era (erased value)
+  | EEra                          -- Erased: *
+
+-- Match arm: pattern -> body with optional field bindings
+type MatchArm = MArm (Maybe Name) (List Name) Expr  -- case Ctr: body (binds x.field)
+
+-- ============================================================================
+-- Definitions
+-- ============================================================================
+
+-- Function definition
+type Def = FnDef Name (List (Name, TypeAnn)) TypeAnn Bool (List Rule)
+-- FnDef name args return-type checked rules
+
+-- Pattern matching rule
+type Rule = FnRule (List Pattern) Expr
+
+-- Type/ADT definition
+type TypeDef = ADT Name (List Name) (List Constructor)
+-- ADT name type-params constructors
+
+-- Constructor definition
+type Constructor = Ctor Name (List (Name, Type, Bool))
+-- Ctor name fields (name, type, is-recursive)
+
+-- Object/Record definition (sugar for single-constructor ADT)
+type Object = Obj Name (List Name) (List (Name, Type))
+
+-- ============================================================================
+-- Program
+-- ============================================================================
+
+-- Import statement
+type Import
+  = ImportAll Name                -- from X import *
+  | ImportNames Name (List Name)  -- from X import a, b
+  | ImportAlias Name Name         -- import X as Y
+
+-- Top-level declaration
+type Decl
+  = DFn Def                       -- Function definition
+  | DType TypeDef                 -- Type definition  
+  | DObj Object                   -- Object definition
+  | DImport Import                -- Import statement
+
+-- Program is a list of declarations
+type Program = Prog (List Decl)
+
+-- ============================================================================
+-- Statements (Imperative syntax sugar)
+-- ============================================================================
+
+-- Statements (desugar to expressions)
+type Stmt
+  = SReturn Expr                  -- return expr
+  | SLet Pattern Expr Stmt        -- x = expr; ...
+  | SIf Expr Stmt Stmt            -- if cond: then else: else
+  | SMatch Expr (Maybe Name) (List StmtArm) -- match x: case ...
+  | SFold Expr (Maybe Name) (List StmtArm)  -- fold x: case ...
+  | SBend (List (Name, Expr)) Expr Stmt Stmt -- bend x = init: when cond: step else: base
+  | SWith Name Stmt               -- with Monad: ...
+  | SAsk Pattern Expr Stmt        -- x <- expr; ... (monadic)
+  | SOpen Name Name Stmt          -- open Type var; ... (destructure)
+  | SExpr Expr                    -- expression as statement
+
+-- Statement match arm
+type StmtArm = SAArm (Maybe Name) Stmt
+
+-- ============================================================================
+-- Built-in Types
+-- ============================================================================
+
+-- Standard list type
+type List a
+  = Nil                           -- List/Nil
+  | Cons a (List a)               -- List/Cons { head tail }
+
+-- Standard tree type
+type Tree a
+  = Leaf a                        -- Tree/Leaf { value }
+  | Node (Tree a) (Tree a)        -- Tree/Node { ~left ~right }
+
+-- Standard maybe type  
+type Maybe a
+  = None                          -- Maybe/None
+  | Some a                        -- Maybe/Some { value }
+
+-- Standard bool type
+type Bool
+  = True                          -- Bool/True
+  | False                         -- Bool/False
+
+-- Standard nat type (church/scott encoded)
+type Nat
+  = Z                             -- Nat/Z (zero)
+  | S Nat                         -- Nat/S { ~pred }
+
+-- ============================================================================
+-- Example Programs
+-- ============================================================================
+
+-- Identity function
+example identity =
+  def identity(x):
+    return x
+
+-- Factorial
+example factorial =
+  def factorial(n):
+    switch n:
+      case 0:
+        return 1
+      case _:
+        return n * factorial(n - 1)
+
+-- Sum of tree
+example sum_tree =
+  type Tree:
+    case Node:
+      left: Tree
+      right: Tree
+    case Leaf:
+      value: U24
+
+  def sum(tree):
+    fold tree:
+      case Tree/Node:
+        return tree.left + tree.right
+      case Tree/Leaf:
+        return tree.value
+
+-- Parallel map using bend
+example parallel_map =
+  def map(tree, f):
+    bend t = tree:
+      when t is Tree/Node:
+        return Tree/Node { left: fork(t.left), right: fork(t.right) }
+      else:
+        return Tree/Leaf { value: f(t.value) }
+
+-- Superposition example
+example superposition =
+  def choose():
+    return {1 2}  -- Returns superposition of 1 and 2
+  
+  def double(x):
+    return x + x
+  
+  -- double(choose()) evaluates to {2 4} in parallel
+
+-- ============================================================================
+-- Syntax Reference
+-- ============================================================================
+
+-- Function definition:
+--   def name(arg1: Type1, arg2) -> RetType:
+--     body
+--
+-- Type definition:
+--   type Name:
+--     case Variant1:
+--       field1: Type
+--       ~recursive_field: Name  
+--     case Variant2:
+--       ...
+--
+-- Object definition (single-constructor):
+--   object Name { field1: Type, field2: Type }
+--
+-- Match expression:
+--   match expr:
+--     case Constructor:
+--       body  # access fields as expr.field
+--     case _:
+--       default
+--
+-- Fold expression (auto-recursive match):
+--   fold expr:
+--     case Constructor:
+--       body  # recursive fields auto-folded
+--     case _:
+--       default
+--
+-- Bend expression (manual recursion):
+--   bend var = initial:
+--     when condition:
+--       step  # use fork(var) to recurse
+--     else:
+--       base
+--
+-- Switch expression (numeric):
+--   switch n:
+--     case 0:
+--       zero_case
+--     case _:
+--       successor_case  # n-1 available as n.pred
+--
+-- Lambda:
+--   lambda x, y: body
+--   λx: body
+--
+-- Let binding:
+--   let (a, b) = tuple
+--   body
+--
+-- Superposition:
+--   {a b}  -- parallel values
+--
+-- List literal:
+--   [1, 2, 3]
+--
+-- Tuple:
+--   (a, b, c)
+--
+-- Era (erased):
+--   *
