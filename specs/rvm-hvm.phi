@@ -1,0 +1,623 @@
+-- =============================================================================
+-- RVM Implementation in HVM
+-- =============================================================================
+-- A complete implementation of RosettaVM using HVM's Interaction Calculus.
+-- This demonstrates how a stack-based bytecode interpreter can be expressed
+-- as pure lambda calculus with optimal sharing.
+--
+-- Key insight: The RVM state (stack, environment, code) becomes a lambda term.
+-- Instruction execution is function application. The interaction net handles
+-- sharing and parallelism automatically.
+--
+-- Compilation: rvm-hvm.phi + hvm2rvm.phi → RVM bytecode that runs on RVM!
+--              (A meta-circular implementation)
+
+import "hvm.phi"
+import "rvm.phi"
+
+-- =============================================================================
+-- Runtime Values as HVM Terms
+-- =============================================================================
+
+-- HVM representation of RVM values:
+--   VInt n      → Num(n)
+--   VBool b     → Num(0) or Num(1)
+--   VUnit       → Era
+--   VNil        → Ctr("Nil", [])
+--   VList       → Ctr("Cons", [head, tail])
+--   VTuple      → Ctr("Tup", [fields...])
+--   VClosure    → Lam with captured environment
+--   VCon        → Ctr(tag, fields)
+
+-- Encoding for RVM value tags
+def V_INT     : HVM.Term = HVM.Num(0)
+def V_BOOL    : HVM.Term = HVM.Num(1)
+def V_UNIT    : HVM.Term = HVM.Num(2)
+def V_NIL     : HVM.Term = HVM.Num(3)
+def V_CONS    : HVM.Term = HVM.Num(4)
+def V_TUPLE   : HVM.Term = HVM.Num(5)
+def V_CLOSURE : HVM.Term = HVM.Num(6)
+def V_CON     : HVM.Term = HVM.Num(7)
+def V_STRING  : HVM.Term = HVM.Num(8)
+def V_RECORD  : HVM.Term = HVM.Num(9)
+
+-- =============================================================================
+-- Stack Operations
+-- =============================================================================
+
+-- Stack is a list of values: Ctr("Cons", [head, tail]) or Ctr("Nil", [])
+
+-- Empty stack
+def emptyStack : HVM.Term = HVM.Ctr("Nil", [])
+
+-- Push value onto stack
+def push : HVM.Term → HVM.Term → HVM.Term
+push val stack = HVM.Ctr("Cons", [val, stack])
+
+-- Pop value from stack (returns pair: (value, new_stack))
+def pop : HVM.Term → HVM.Term
+pop stack = HVM.App(
+  HVM.Mat("Cons",
+    HVM.Lam("head", HVM.Lam("tail",
+      HVM.Ctr("Pair", [HVM.Var("head"), HVM.Var("tail")]))),
+    HVM.Ctr("Error", [HVM.Ctr("StackUnderflow", [])])),
+  stack)
+
+-- Peek at top of stack (doesn't remove)
+def peek : HVM.Term → HVM.Term
+peek stack = HVM.App(
+  HVM.Mat("Cons",
+    HVM.Lam("head", HVM.Lam("tail", HVM.Var("head"))),
+    HVM.Ctr("Error", [HVM.Ctr("EmptyStack", [])])),
+  stack)
+
+-- Duplicate top of stack
+def dupStack : HVM.Term → HVM.Term
+dupStack stack = HVM.App(
+  HVM.Mat("Cons",
+    HVM.Lam("head", HVM.Lam("tail",
+      HVM.Ctr("Cons", [HVM.Var("head"),
+        HVM.Ctr("Cons", [HVM.Var("head"), HVM.Var("tail")])]))),
+    HVM.Ctr("Error", [HVM.Ctr("StackUnderflow", [])])),
+  stack)
+
+-- Swap top two elements
+def swapStack : HVM.Term → HVM.Term
+swapStack stack =
+  HVM.App(
+    HVM.Mat("Cons",
+      HVM.Lam("a", HVM.Lam("rest1",
+        HVM.App(
+          HVM.Mat("Cons",
+            HVM.Lam("b", HVM.Lam("rest2",
+              HVM.Ctr("Cons", [HVM.Var("b"),
+                HVM.Ctr("Cons", [HVM.Var("a"), HVM.Var("rest2")])]))),
+            HVM.Ctr("Error", [HVM.Ctr("StackUnderflow", [])])),
+          HVM.Var("rest1")))),
+      HVM.Ctr("Error", [HVM.Ctr("StackUnderflow", [])])),
+    stack)
+
+-- =============================================================================
+-- Environment Operations
+-- =============================================================================
+
+-- Environment is an array of values (indexed access)
+-- Represented as: Ctr("Env", [v0, v1, v2, ...])
+
+def emptyEnv : HVM.Term = HVM.Ctr("Env", [])
+
+-- Load from environment slot
+def envLoad : HVM.Term → HVM.Term → HVM.Term
+envLoad idx env =
+  -- Index into environment tuple
+  HVM.App(HVM.App(HVM.Ref("nth"), idx), env)
+
+-- Store to environment slot
+def envStore : HVM.Term → HVM.Term → HVM.Term → HVM.Term
+envStore idx val env =
+  HVM.App(HVM.App(HVM.App(HVM.Ref("setNth"), idx), val), env)
+
+-- Extend environment with new binding
+def envExtend : HVM.Term → HVM.Term → HVM.Term
+envExtend val env =
+  HVM.App(HVM.App(HVM.Ref("cons"), val), env)
+
+-- =============================================================================
+-- VM State
+-- =============================================================================
+
+-- VM State: Ctr("VM", [stack, env, code, pc, globals])
+--   stack   - current operand stack
+--   env     - local environment (lexical scope)
+--   code    - instruction sequence being executed
+--   pc      - program counter (index into code)
+--   globals - global store (hash → value)
+
+def mkState : HVM.Term → HVM.Term → HVM.Term → HVM.Term → HVM.Term → HVM.Term
+mkState stack env code pc globals =
+  HVM.Ctr("VM", [stack, env, code, pc, globals])
+
+def getStack   : HVM.Term → HVM.Term = λs → HVM.App(HVM.Ref("field0"), s)
+def getEnv     : HVM.Term → HVM.Term = λs → HVM.App(HVM.Ref("field1"), s)
+def getCode    : HVM.Term → HVM.Term = λs → HVM.App(HVM.Ref("field2"), s)
+def getPC      : HVM.Term → HVM.Term = λs → HVM.App(HVM.Ref("field3"), s)
+def getGlobals : HVM.Term → HVM.Term = λs → HVM.App(HVM.Ref("field4"), s)
+
+-- Update state with new stack
+def withStack : HVM.Term → HVM.Term → HVM.Term
+withStack newStack state =
+  HVM.Ctr("VM", [
+    newStack,
+    getEnv(state),
+    getCode(state),
+    getPC(state),
+    getGlobals(state)
+  ])
+
+-- Increment program counter
+def incPC : HVM.Term → HVM.Term
+incPC state =
+  HVM.Ctr("VM", [
+    getStack(state),
+    getEnv(state),
+    getCode(state),
+    HVM.Op2(HVM.OpAdd, getPC(state), HVM.Num(1)),
+    getGlobals(state)
+  ])
+
+-- =============================================================================
+-- Arithmetic Operations
+-- =============================================================================
+
+-- Binary arithmetic: pop two, compute, push result
+def binOp : HVM.Op → HVM.Term → HVM.Term
+binOp op state =
+  let stack = getStack(state) in
+  let (a, stack1) = pop(stack) in
+  let (b, stack2) = pop(stack1) in
+  let result = HVM.Op2(op, b, a) in  -- Note: b op a (stack order)
+  incPC(withStack(push(result, stack2), state))
+
+def execAdd : HVM.Term → HVM.Term = binOp(HVM.OpAdd)
+def execSub : HVM.Term → HVM.Term = binOp(HVM.OpSub)
+def execMul : HVM.Term → HVM.Term = binOp(HVM.OpMul)
+def execDiv : HVM.Term → HVM.Term = binOp(HVM.OpDiv)
+def execMod : HVM.Term → HVM.Term = binOp(HVM.OpMod)
+
+-- Comparison operations
+def execEq : HVM.Term → HVM.Term = binOp(HVM.OpEq)
+def execNe : HVM.Term → HVM.Term = binOp(HVM.OpNe)
+def execLt : HVM.Term → HVM.Term = binOp(HVM.OpLt)
+def execLe : HVM.Term → HVM.Term = binOp(HVM.OpLe)
+def execGt : HVM.Term → HVM.Term = binOp(HVM.OpGt)
+def execGe : HVM.Term → HVM.Term = binOp(HVM.OpGe)
+
+-- Boolean operations
+def execAnd : HVM.Term → HVM.Term = binOp(HVM.OpAnd)
+def execOr  : HVM.Term → HVM.Term = binOp(HVM.OpOr)
+def execXor : HVM.Term → HVM.Term = binOp(HVM.OpXor)
+
+-- Unary negation
+def execNeg : HVM.Term → HVM.Term
+execNeg state =
+  let stack = getStack(state) in
+  let (a, stack1) = pop(stack) in
+  let result = HVM.Op2(HVM.OpSub, HVM.Num(0), a) in
+  incPC(withStack(push(result, stack1), state))
+
+-- Boolean not
+def execNot : HVM.Term → HVM.Term
+execNot state =
+  let stack = getStack(state) in
+  let (a, stack1) = pop(stack) in
+  let result = HVM.Swi(0, HVM.Num(1), HVM.Lam("_", HVM.Num(0))) in
+  incPC(withStack(push(HVM.App(result, a), stack1), state))
+
+-- =============================================================================
+-- Stack Operations
+-- =============================================================================
+
+def execPush : HVM.Term → HVM.Term → HVM.Term
+execPush lit state =
+  incPC(withStack(push(lit, getStack(state)), state))
+
+def execPop : HVM.Term → HVM.Term
+execPop state =
+  let (_, stack1) = pop(getStack(state)) in
+  incPC(withStack(stack1, state))
+
+def execDup : HVM.Term → HVM.Term
+execDup state =
+  incPC(withStack(dupStack(getStack(state)), state))
+
+def execSwap : HVM.Term → HVM.Term
+execSwap state =
+  incPC(withStack(swapStack(getStack(state)), state))
+
+def execOver : HVM.Term → HVM.Term
+execOver state =
+  let stack = getStack(state) in
+  let (a, stack1) = pop(stack) in
+  let (b, stack2) = pop(stack1) in
+  let newStack = push(a, push(b, push(b, stack2))) in
+  incPC(withStack(newStack, state))
+
+def execRot : HVM.Term → HVM.Term
+execRot state =
+  let stack = getStack(state) in
+  let (a, stack1) = pop(stack) in
+  let (b, stack2) = pop(stack1) in
+  let (c, stack3) = pop(stack2) in
+  let newStack = push(c, push(a, push(b, stack3))) in
+  incPC(withStack(newStack, state))
+
+-- =============================================================================
+-- Environment Access
+-- =============================================================================
+
+def execLoad : HVM.Term → HVM.Term → HVM.Term
+execLoad slot state =
+  let val = envLoad(slot, getEnv(state)) in
+  incPC(withStack(push(val, getStack(state)), state))
+
+def execStore : HVM.Term → HVM.Term → HVM.Term
+execStore slot state =
+  let (val, stack1) = pop(getStack(state)) in
+  let newEnv = envStore(slot, val, getEnv(state)) in
+  HVM.Ctr("VM", [
+    stack1,
+    newEnv,
+    getCode(state),
+    HVM.Op2(HVM.OpAdd, getPC(state), HVM.Num(1)),
+    getGlobals(state)
+  ])
+
+-- =============================================================================
+-- Control Flow
+-- =============================================================================
+
+def execJump : HVM.Term → HVM.Term → HVM.Term
+execJump offset state =
+  HVM.Ctr("VM", [
+    getStack(state),
+    getEnv(state),
+    getCode(state),
+    HVM.Op2(HVM.OpAdd, getPC(state), offset),
+    getGlobals(state)
+  ])
+
+def execJumpIf : HVM.Term → HVM.Term → HVM.Term
+execJumpIf offset state =
+  let (cond, stack1) = pop(getStack(state)) in
+  let newPC = HVM.App(
+    HVM.Swi(0,
+      HVM.Op2(HVM.OpAdd, getPC(state), HVM.Num(1)),  -- false: next instr
+      HVM.Lam("_", HVM.Op2(HVM.OpAdd, getPC(state), offset))),  -- true: jump
+    cond) in
+  HVM.Ctr("VM", [stack1, getEnv(state), getCode(state), newPC, getGlobals(state)])
+
+def execJumpIfNot : HVM.Term → HVM.Term → HVM.Term
+execJumpIfNot offset state =
+  let (cond, stack1) = pop(getStack(state)) in
+  let newPC = HVM.App(
+    HVM.Swi(0,
+      HVM.Op2(HVM.OpAdd, getPC(state), offset),  -- false: jump
+      HVM.Lam("_", HVM.Op2(HVM.OpAdd, getPC(state), HVM.Num(1)))),  -- true: next
+    cond) in
+  HVM.Ctr("VM", [stack1, getEnv(state), getCode(state), newPC, getGlobals(state)])
+
+-- =============================================================================
+-- Closures and Function Calls
+-- =============================================================================
+
+-- Create closure: captures environment slots
+def execClosure : HVM.Term → HVM.Term → HVM.Term → HVM.Term
+execClosure codeHash numCaptures state =
+  let stack = getStack(state) in
+  let env = getEnv(state) in
+  -- Capture values from stack
+  let (captures, stack') = takeN(numCaptures, stack) in
+  let closure = HVM.Ctr("Closure", [codeHash, captures]) in
+  incPC(withStack(push(closure, stack'), state))
+
+-- Apply closure to argument
+def execApply : HVM.Term → HVM.Term
+execApply state =
+  let stack = getStack(state) in
+  let (arg, stack1) = pop(stack) in
+  let (closure, stack2) = pop(stack1) in
+  -- Extract code hash and captures from closure
+  HVM.App(
+    HVM.Mat("Closure",
+      HVM.Lam("codeHash", HVM.Lam("captures",
+        -- Look up code, create new frame
+        let code = HVM.App(HVM.Ref("lookupCode"), HVM.Var("codeHash")) in
+        let newEnv = envExtend(arg, HVM.Var("captures")) in
+        mkState(stack2, newEnv, code, HVM.Num(0), getGlobals(state)))),
+      HVM.Ctr("Error", [HVM.Ctr("NotAClosure", [])])),
+    closure)
+
+-- Call function by hash (no closure, direct)
+def execCall : HVM.Term → HVM.Term → HVM.Term
+execCall hash state =
+  let code = HVM.App(HVM.Ref("lookupCode"), hash) in
+  -- Save return address on call stack (implicit in continuation)
+  -- For simplicity, use continuation-passing style
+  let returnAddr = HVM.Op2(HVM.OpAdd, getPC(state), HVM.Num(1)) in
+  let callFrame = HVM.Ctr("Frame", [returnAddr, getEnv(state), getCode(state)]) in
+  let newStack = push(callFrame, getStack(state)) in
+  mkState(newStack, emptyEnv, code, HVM.Num(0), getGlobals(state))
+
+-- Return from function
+def execReturn : HVM.Term → HVM.Term
+execReturn state =
+  let stack = getStack(state) in
+  let (retVal, stack1) = pop(stack) in
+  let (frame, stack2) = pop(stack1) in
+  HVM.App(
+    HVM.Mat("Frame",
+      HVM.Lam("retAddr", HVM.Lam("savedEnv", HVM.Lam("savedCode",
+        mkState(
+          push(retVal, stack2),
+          HVM.Var("savedEnv"),
+          HVM.Var("savedCode"),
+          HVM.Var("retAddr"),
+          getGlobals(state))))),
+      HVM.Ctr("Error", [HVM.Ctr("InvalidFrame", [])])),
+    frame)
+
+-- =============================================================================
+-- Data Construction
+-- =============================================================================
+
+def execMkTuple : HVM.Term → HVM.Term → HVM.Term
+execMkTuple n state =
+  let (elems, stack') = takeN(n, getStack(state)) in
+  let tuple = HVM.Ctr("Tuple", elems) in
+  incPC(withStack(push(tuple, stack'), state))
+
+def execMkList : HVM.Term → HVM.Term → HVM.Term
+execMkList n state =
+  let (elems, stack') = takeN(n, getStack(state)) in
+  let list = foldr(λx acc → HVM.Ctr("Cons", [x, acc]), HVM.Ctr("Nil", []), elems) in
+  incPC(withStack(push(list, stack'), state))
+
+def execMkCon : HVM.Term → HVM.Term → HVM.Term → HVM.Term
+execMkCon tag numFields state =
+  let (fields, stack') = takeN(numFields, getStack(state)) in
+  let con = HVM.Ctr("Con", [tag, HVM.Ctr("Fields", fields)]) in
+  incPC(withStack(push(con, stack'), state))
+
+def execGetField : HVM.Term → HVM.Term → HVM.Term
+execGetField idx state =
+  let (val, stack') = pop(getStack(state)) in
+  let field = HVM.App(HVM.App(HVM.Ref("nth"), idx), val) in
+  incPC(withStack(push(field, stack'), state))
+
+-- =============================================================================
+-- Pattern Matching
+-- =============================================================================
+
+def execTestTag : HVM.Term → HVM.Term → HVM.Term
+execTestTag expectedTag state =
+  let (val, stack') = pop(getStack(state)) in
+  let actualTag = HVM.App(HVM.Ref("getTag"), val) in
+  let result = HVM.Op2(HVM.OpEq, actualTag, expectedTag) in
+  incPC(withStack(push(result, stack'), state))
+
+def execUnpack : HVM.Term → HVM.Term → HVM.Term
+execUnpack numFields state =
+  let (con, stack') = pop(getStack(state)) in
+  let fields = HVM.App(HVM.Ref("getFields"), con) in
+  -- Push all fields onto stack
+  let newStack = HVM.App(HVM.App(HVM.Ref("pushAll"), fields), stack') in
+  incPC(withStack(newStack, state))
+
+-- =============================================================================
+-- List Operations
+-- =============================================================================
+
+def execCons : HVM.Term → HVM.Term
+execCons state =
+  let (head, stack1) = pop(getStack(state)) in
+  let (tail, stack2) = pop(stack1) in
+  let list = HVM.Ctr("Cons", [head, tail]) in
+  incPC(withStack(push(list, stack2), state))
+
+def execHead : HVM.Term → HVM.Term
+execHead state =
+  let (list, stack') = pop(getStack(state)) in
+  let head = HVM.App(
+    HVM.Mat("Cons",
+      HVM.Lam("h", HVM.Lam("t", HVM.Var("h"))),
+      HVM.Ctr("Error", [HVM.Ctr("HeadOfNil", [])])),
+    list) in
+  incPC(withStack(push(head, stack'), state))
+
+def execTail : HVM.Term → HVM.Term
+execTail state =
+  let (list, stack') = pop(getStack(state)) in
+  let tail = HVM.App(
+    HVM.Mat("Cons",
+      HVM.Lam("h", HVM.Lam("t", HVM.Var("t"))),
+      HVM.Ctr("Error", [HVM.Ctr("TailOfNil", [])])),
+    list) in
+  incPC(withStack(push(tail, stack'), state))
+
+def execIsNil : HVM.Term → HVM.Term
+execIsNil state =
+  let (list, stack') = pop(getStack(state)) in
+  let result = HVM.App(
+    HVM.Mat("Nil",
+      HVM.Num(1),
+      HVM.Lam("_", HVM.Lam("_", HVM.Num(0)))),
+    list) in
+  incPC(withStack(push(result, stack'), state))
+
+-- =============================================================================
+-- Main Interpreter Loop
+-- =============================================================================
+
+-- Execute single instruction
+def execInstr : HVM.Term → HVM.Term → HVM.Term
+execInstr instr state =
+  HVM.App(
+    HVM.Mat("Push", HVM.Lam("lit", execPush(HVM.Var("lit"), state)),
+    HVM.Mat("Pop", execPop(state),
+    HVM.Mat("Dup", execDup(state),
+    HVM.Mat("Swap", execSwap(state),
+    HVM.Mat("Add", execAdd(state),
+    HVM.Mat("Sub", execSub(state),
+    HVM.Mat("Mul", execMul(state),
+    HVM.Mat("Div", execDiv(state),
+    HVM.Mat("Eq", execEq(state),
+    HVM.Mat("Lt", execLt(state),
+    HVM.Mat("Jump", HVM.Lam("offset", execJump(HVM.Var("offset"), state)),
+    HVM.Mat("JumpIf", HVM.Lam("offset", execJumpIf(HVM.Var("offset"), state)),
+    HVM.Mat("Call", HVM.Lam("hash", execCall(HVM.Var("hash"), state)),
+    HVM.Mat("Return", execReturn(state),
+    HVM.Mat("Closure", HVM.Lam("hash", HVM.Lam("n", execClosure(HVM.Var("hash"), HVM.Var("n"), state))),
+    HVM.Mat("Apply", execApply(state),
+    HVM.Mat("MkTuple", HVM.Lam("n", execMkTuple(HVM.Var("n"), state)),
+    HVM.Mat("Cons", execCons(state),
+    HVM.Mat("Head", execHead(state),
+    HVM.Mat("Tail", execTail(state),
+    HVM.Mat("Halt", state,  -- Halt: return current state
+    HVM.Ctr("Error", [HVM.Ctr("UnknownInstr", [instr])])
+    )))))))))))))))))))))
+    , instr)
+
+-- Run until halt
+def run : HVM.Term → HVM.Term
+run state =
+  let pc = getPC(state) in
+  let code = getCode(state) in
+  let instr = HVM.App(HVM.App(HVM.Ref("nth"), pc), code) in
+  HVM.App(
+    HVM.Mat("Halt", state,  -- If halt, return state
+    HVM.Lam("_",
+      -- Otherwise, execute and continue
+      let state' = execInstr(instr, state) in
+      run(state'))),
+    instr)
+
+-- =============================================================================
+-- Helper Functions (as HVM definitions)
+-- =============================================================================
+
+-- nth: get nth element of list
+def nth : HVM.Term
+nth = HVM.Lam("n", HVM.Lam("list",
+  HVM.App(
+    HVM.Swi(0,
+      -- n=0: return head
+      HVM.App(
+        HVM.Mat("Cons",
+          HVM.Lam("h", HVM.Lam("t", HVM.Var("h"))),
+          HVM.Ctr("Error", [HVM.Ctr("IndexOutOfBounds", [])])),
+        HVM.Var("list")),
+      -- n>0: recurse on tail
+      HVM.Lam("pred",
+        HVM.App(HVM.App(HVM.Ref("nth"), HVM.Var("pred")),
+          HVM.App(
+            HVM.Mat("Cons",
+              HVM.Lam("h", HVM.Lam("t", HVM.Var("t"))),
+              HVM.Ctr("Error", [HVM.Ctr("IndexOutOfBounds", [])])),
+            HVM.Var("list"))))),
+    HVM.Var("n"))))
+
+-- takeN: take first n elements from stack
+def takeN : HVM.Term
+takeN = HVM.Lam("n", HVM.Lam("stack",
+  HVM.App(
+    HVM.Swi(0,
+      HVM.Ctr("Pair", [HVM.Ctr("Nil", []), HVM.Var("stack")]),
+      HVM.Lam("pred",
+        let (head, stack') = pop(HVM.Var("stack")) in
+        let (rest, stack'') = HVM.App(HVM.App(HVM.Ref("takeN"), HVM.Var("pred")), stack') in
+        HVM.Ctr("Pair", [HVM.Ctr("Cons", [head, rest]), stack'']))),
+    HVM.Var("n"))))
+
+-- foldr: right fold over list
+def foldr : HVM.Term
+foldr = HVM.Lam("f", HVM.Lam("z", HVM.Lam("list",
+  HVM.App(
+    HVM.Mat("Nil", HVM.Var("z"),
+    HVM.Lam("h", HVM.Lam("t",
+      HVM.App(HVM.App(HVM.Var("f"), HVM.Var("h")),
+        HVM.App(HVM.App(HVM.App(HVM.Ref("foldr"), HVM.Var("f")), HVM.Var("z")), HVM.Var("t")))))),
+    HVM.Var("list")))))
+
+-- =============================================================================
+-- Entry Point
+-- =============================================================================
+
+-- Initialize VM and run program
+def runProgram : HVM.Term → HVM.Term
+runProgram code =
+  let initialState = mkState(emptyStack, emptyEnv, code, HVM.Num(0), HVM.Ctr("Globals", [])) in
+  run(initialState)
+
+-- Extract result from final state
+def getResult : HVM.Term → HVM.Term
+getResult finalState = peek(getStack(finalState))
+
+-- Main: load program and execute
+def main : HVM.Term → HVM.Term
+main program =
+  getResult(runProgram(program))
+
+-- =============================================================================
+-- Example Programs (as HVM term encoding of RVM code)
+-- =============================================================================
+
+-- Example: compute 3 + 4
+example_add : HVM.Term
+example_add = HVM.Ctr("Code", [
+  HVM.Ctr("Push", [HVM.Num(3)]),
+  HVM.Ctr("Push", [HVM.Num(4)]),
+  HVM.Ctr("Add", []),
+  HVM.Ctr("Halt", [])
+])
+
+-- Example: factorial(5)
+example_factorial : HVM.Term
+example_factorial = HVM.Ctr("Code", [
+  -- push 5
+  HVM.Ctr("Push", [HVM.Num(5)]),
+  -- push 1 (accumulator)
+  HVM.Ctr("Push", [HVM.Num(1)]),
+  -- loop: if n == 0, jump to end
+  HVM.Ctr("Over", []),
+  HVM.Ctr("Push", [HVM.Num(0)]),
+  HVM.Ctr("Eq", []),
+  HVM.Ctr("JumpIf", [HVM.Num(6)]),
+  -- acc = acc * n
+  HVM.Ctr("Swap", []),
+  HVM.Ctr("Over", []),
+  HVM.Ctr("Mul", []),
+  HVM.Ctr("Swap", []),
+  -- n = n - 1
+  HVM.Ctr("Push", [HVM.Num(1)]),
+  HVM.Ctr("Sub", []),
+  -- jump to loop
+  HVM.Ctr("Jump", [HVM.Num(-10)]),
+  -- end: pop n, result is acc
+  HVM.Ctr("Pop", []),
+  HVM.Ctr("Halt", [])
+])
+
+-- =============================================================================
+-- Parallel Execution (leveraging HVM's superpositions)
+-- =============================================================================
+
+-- Run two programs in parallel, returning superposition of results
+def runParallel : HVM.Term → HVM.Term → HVM.Term
+runParallel prog1 prog2 =
+  HVM.Sup(HVM.Lab(0), main(prog1), main(prog2))
+
+-- Map a function over a superposition of programs
+def mapParallel : HVM.Term → HVM.Term → HVM.Term
+mapParallel f progs =
+  -- When progs is a superposition, HVM automatically parallelizes
+  HVM.App(f, progs)
