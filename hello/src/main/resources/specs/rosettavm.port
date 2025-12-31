@@ -1,0 +1,816 @@
+// =============================================================================
+// RosettaVM: A Content-Addressed Virtual Machine
+// =============================================================================
+// A stack-based VM where code and data are identified by cryptographic hash.
+// Inspired by Unison's content-addressed approach:
+//
+//   "Code is immutable and identified by hash, not by name.
+//    Names are just human-friendly aliases for hashes.
+//    Dependencies are exact - no version conflicts possible."
+//
+// Key principles:
+// 1. Every definition (function, type, value) has a unique Hash
+// 2. References are by Hash, not by name - names are metadata
+// 3. Code is immutable once hashed - edits create new hashes
+// 4. The codebase is a content-addressed store: Hash → Definition
+// 5. Sharing code = sharing hashes (like Git commits)
+
+port RosettaVM {
+
+  // ==========================================================================
+  // MODULE: Hash
+  // Content-addressed identifiers
+  // ==========================================================================
+  module Hash {
+    export *
+
+    // A Hash is a 256-bit content identifier (like SHA-256 or BLAKE3)
+    // Represented as base32 string for human readability
+    newtype Hash = String
+
+    // Short hash for display (first 8 chars)
+    xform shortHash : Hash ⇄ String {
+      Hash(h) ⇔ take(8, h)
+    }
+
+    // Hash computation (abstract - implemented by host)
+    xform hashOf : Term ⇄ Hash {
+      term ⇔ Hash(computeHash(serialize(term)))
+    }
+
+    // Special hashes
+    val hashUnit : Hash = Hash("11111111111111111111111111111111")
+    val hashNil  : Hash = Hash("00000000000000000000000000000000")
+  }
+
+  // ==========================================================================
+  // MODULE: Core
+  // Core types for the VM - all references are by Hash
+  // ==========================================================================
+  module Core {
+    export *
+    import Hash
+
+    // ------------------------------------------------------------------------
+    // Terms (the universal representation)
+    // Every term can be hashed, stored, and retrieved
+    // ------------------------------------------------------------------------
+    type Term =
+      // Primitives
+      | TInt(n: Int)
+      | TStr(s: String)
+      | TBool(b: Bool)
+      | TFloat(f: Float)
+      | TBytes(bs: [Byte])
+
+      // Structural
+      | TList(elems: [Hash])              // List of hashes
+      | TTuple(elems: [Hash])             // Tuple of hashes
+      | TRecord(fields: [(String, Hash)]) // Named fields
+
+      // Constructors (algebraic data)
+      | TCon(typeHash: Hash, tag: Int, fields: [Hash])
+
+      // Code
+      | TLam(params: [String], bodyHash: Hash, envHash: Hash)  // Lambda
+      | TApp(funcHash: Hash, argHashes: [Hash])                // Application
+      | TRef(hash: Hash)                                       // Reference to another term
+      | TVar(name: String, index: Int)                         // Variable (de Bruijn or named)
+
+      // Definitions
+      | TDef(name: String, typeHash: Hash, bodyHash: Hash)     // Named definition
+      | TType(name: String, kind: Kind, ctors: [Hash])         // Type definition
+
+      // Effects (Unison-style abilities)
+      | TRequest(abilityHash: Hash, op: Int, args: [Hash], k: Hash)
+      | THandle(handlerHash: Hash, bodyHash: Hash)
+
+      // Thunks for laziness
+      | TThunk(bodyHash: Hash, envHash: Hash)
+      | TForce(thunkHash: Hash)
+
+    // ------------------------------------------------------------------------
+    // Kinds
+    // ------------------------------------------------------------------------
+    type Kind =
+      | KType                          // *
+      | KArrow(from: Kind, to: Kind)   // * → *
+      | KEffect                        // Effect kind
+
+    // ------------------------------------------------------------------------
+    // Values (evaluated terms)
+    // ------------------------------------------------------------------------
+    type Val =
+      | VInt(n: Int)
+      | VStr(s: String)
+      | VBool(b: Bool)
+      | VFloat(f: Float)
+      | VBytes(bs: [Byte])
+      | VList(elems: [Val])
+      | VTuple(elems: [Val])
+      | VRecord(fields: [(String, Val)])
+      | VCon(typeHash: Hash, tag: Int, fields: [Val])
+      | VClosure(codeHash: Hash, env: Env)
+      | VThunk(codeHash: Hash, env: Env, cached: Option[Val])
+      | VBuiltin(name: String)
+      | VContinuation(k: Continuation)
+
+    // ------------------------------------------------------------------------
+    // Environment (maps de Bruijn indices to values)
+    // Also content-addressed!
+    // ------------------------------------------------------------------------
+    type Env =
+      | EnvEmpty
+      | EnvBind(val: Val, rest: Env)
+      | EnvRef(hash: Hash)            // Reference to stored environment
+
+    // ------------------------------------------------------------------------
+    // Continuations (for effects and call/cc)
+    // ------------------------------------------------------------------------
+    type Continuation =
+      | KDone
+      | KArg(argHash: Hash, env: Env, k: Continuation)
+      | KApp(closure: Val, k: Continuation)
+      | KLet(name: String, bodyHash: Hash, env: Env, k: Continuation)
+      | KHandle(handlerHash: Hash, k: Continuation)
+      | KMatch(cases: [Hash], env: Env, k: Continuation)
+
+    // ------------------------------------------------------------------------
+    // Instructions (compiled form)
+    // ------------------------------------------------------------------------
+    type Instr =
+      // Stack
+      | IPush(hash: Hash)             // Push term by hash
+      | IPushLit(val: Val)            // Push literal value
+      | IPop
+      | IDup
+      | ISwap
+
+      // Variables
+      | IVar(index: Int)              // Push env[index]
+      | IVarName(name: String)        // Push by name (debug)
+
+      // Functions
+      | IClosure(codeHash: Hash, arity: Int)
+      | IApply(arity: Int)
+      | ITailApply(arity: Int)
+      | IReturn
+
+      // Constructors
+      | ICon(typeHash: Hash, tag: Int, arity: Int)
+      | IMatch(branches: [(Int, Hash)])   // tag → code hash
+      | IGetField(index: Int)
+
+      // Arithmetic
+      | IAdd | ISub | IMul | IDiv | IMod | INeg
+      | IEq | ILt | IGt | ILe | IGe | INe
+
+      // Logic
+      | IAnd | IOr | INot
+
+      // Control
+      | IJump(offset: Int)
+      | IJumpIf(offset: Int)
+      | IJumpIfNot(offset: Int)
+      | IHalt
+
+      // Effects
+      | IRequest(abilityHash: Hash, op: Int)
+      | IHandle(handlerHash: Hash)
+      | IResume
+
+      // Thunks
+      | IThunk(codeHash: Hash)
+      | IForce
+
+      // Meta
+      | IHash                         // Hash top of stack, push hash
+      | ILookup                       // Pop hash, push term
+      | IStore                        // Pop term, store, push hash
+
+    // ------------------------------------------------------------------------
+    // Code Block (compiled function)
+    // ------------------------------------------------------------------------
+    record CodeBlock {
+      hash: Hash,                     // Self-reference
+      name: Option[String],           // Human-readable name (metadata)
+      arity: Int,
+      instrs: [Instr],
+      sourceHash: Option[Hash]        // Link to source term
+    }
+  }
+
+  // ==========================================================================
+  // MODULE: Store
+  // The content-addressed codebase
+  // ==========================================================================
+  module Store {
+    import Core
+    import Hash
+
+    // The codebase: Hash → Term
+    // This is the "database" of all code
+    type Codebase = Codebase(
+      terms: Map[Hash, Term],
+      code: Map[Hash, CodeBlock],
+      names: Map[String, Hash],       // Name → Hash (aliases)
+      hashes: Map[Hash, [String]]     // Hash → Names (reverse lookup)
+    )
+
+    // Store a term, return its hash
+    xform store : (Term, Codebase) ⇄ (Hash, Codebase) {
+      (term, Codebase(terms, code, names, hashes))
+        ⇔ let h = hashOf(term) in
+          let terms' = insert(terms, h, term) in
+          (h, Codebase(terms', code, names, hashes))
+    }
+
+    // Lookup a term by hash
+    xform lookup : (Hash, Codebase) ⇄ Option[Term] {
+      (h, Codebase(terms, _, _, _))
+        ⇔ get(terms, h)
+    }
+
+    // Store compiled code
+    xform storeCode : (CodeBlock, Codebase) ⇄ (Hash, Codebase) {
+      (block, Codebase(terms, code, names, hashes))
+        ⇔ let h = block.hash in
+          let code' = insert(code, h, block) in
+          (h, Codebase(terms, code', names, hashes))
+    }
+
+    // Add a name alias for a hash
+    xform addName : (String, Hash, Codebase) ⇄ Codebase {
+      (name, h, Codebase(terms, code, names, hashes))
+        ⇔ let names' = insert(names, name, h) in
+          let existing = getOr(hashes, h, []) in
+          let hashes' = insert(hashes, h, [name | existing]) in
+          Codebase(terms, code, names', hashes')
+    }
+
+    // Resolve name to hash
+    xform resolve : (String, Codebase) ⇄ Option[Hash] {
+      (name, Codebase(_, _, names, _))
+        ⇔ get(names, name)
+    }
+
+    // Get all names for a hash
+    xform namesOf : (Hash, Codebase) ⇄ [String] {
+      (h, Codebase(_, _, _, hashes))
+        ⇔ getOr(hashes, h, [])
+    }
+
+    // Merge two codebases (like git merge - trivial since content-addressed)
+    xform merge : (Codebase, Codebase) ⇄ Codebase {
+      (Codebase(t1, c1, n1, h1), Codebase(t2, c2, n2, h2))
+        ⇔ Codebase(
+            union(t1, t2),      // No conflicts! Same hash = same content
+            union(c1, c2),
+            union(n1, n2),      // Name conflicts possible - last wins
+            mergeMulti(h1, h2)  // Collect all names
+          )
+    }
+  }
+
+  // ==========================================================================
+  // MODULE: VM
+  // The execution engine
+  // ==========================================================================
+  module VM {
+    import Core
+    import Hash
+    import Store
+
+    // VM State
+    record VMState {
+      stack: [Val],                   // Operand stack
+      env: Env,                       // Current environment
+      code: CodeBlock,                // Current code block
+      pc: Int,                        // Program counter
+      callStack: [Frame],             // Return stack
+      codebase: Codebase,             // The content-addressed store
+      status: Status
+    }
+
+    record Frame {
+      returnCode: Hash,               // Code to return to (by hash!)
+      returnPC: Int,
+      savedEnv: Env
+    }
+
+    type Status =
+      | Running
+      | Halted(result: Val)
+      | Blocked(request: Request)     // Waiting for effect handler
+      | Error(msg: String)
+
+    record Request {
+      abilityHash: Hash,
+      operation: Int,
+      args: [Val],
+      continuation: Continuation
+    }
+
+    // Initialize VM with main function hash
+    xform init : (Hash, Codebase) ⇄ VMState {
+      (mainHash, codebase)
+        ⇔ let code = lookupCode(mainHash, codebase) in
+          VMState(
+            stack: [],
+            env: EnvEmpty,
+            code: code,
+            pc: 0,
+            callStack: [],
+            codebase: codebase,
+            status: Running
+          )
+    }
+
+    // Execute one instruction
+    xform step : VMState ⇄ VMState {
+      (state @ VMState(stack, env, code, pc, cs, cb, Running))
+        ⇔ let instr = nth(code.instrs, pc) in
+          exec(instr, state)
+
+      (state) ⇔ state  // Halted/blocked - no change
+    }
+
+    // Run until halt or block
+    xform run : VMState ⇄ VMState {
+      (state @ VMState(_, _, _, _, _, _, Running))
+        ⇔ run(step(state))
+      (state) ⇔ state
+    }
+
+    // Execute single instruction
+    xform exec : (Instr, VMState) ⇄ VMState {
+
+      // === Stack ===
+
+      (IPush(h), VMState(stack, env, code, pc, cs, cb, Running))
+        ⇔ let term = lookup(h, cb) in
+          let val = termToVal(term, cb) in
+          VMState([val | stack], env, code, pc + 1, cs, cb, Running)
+
+      (IPushLit(val), VMState(stack, env, code, pc, cs, cb, Running))
+        ⇔ VMState([val | stack], env, code, pc + 1, cs, cb, Running)
+
+      (IPop, VMState([_ | stack], env, code, pc, cs, cb, Running))
+        ⇔ VMState(stack, env, code, pc + 1, cs, cb, Running)
+
+      (IDup, VMState([v | stack], env, code, pc, cs, cb, Running))
+        ⇔ VMState([v, v | stack], env, code, pc + 1, cs, cb, Running)
+
+      (ISwap, VMState([a, b | stack], env, code, pc, cs, cb, Running))
+        ⇔ VMState([b, a | stack], env, code, pc + 1, cs, cb, Running)
+
+      // === Variables ===
+
+      (IVar(idx), VMState(stack, env, code, pc, cs, cb, Running))
+        ⇔ let val = envLookup(env, idx, cb) in
+          VMState([val | stack], env, code, pc + 1, cs, cb, Running)
+
+      // === Functions ===
+
+      (IClosure(codeHash, _), VMState(stack, env, code, pc, cs, cb, Running))
+        ⇔ let closure = VClosure(codeHash, env) in
+          VMState([closure | stack], env, code, pc + 1, cs, cb, Running)
+
+      (IApply(arity), VMState(stack, env, code, pc, cs, cb, Running))
+        ⇔ let (args, [VClosure(codeHash, closureEnv) | rest]) = splitAt(arity, stack) in
+          let newEnv = extendEnv(closureEnv, reverse(args)) in
+          let newCode = lookupCode(codeHash, cb) in
+          let frame = Frame(code.hash, pc + 1, env) in
+          VMState(rest, newEnv, newCode, 0, [frame | cs], cb, Running)
+
+      (ITailApply(arity), VMState(stack, env, code, pc, cs, cb, Running))
+        ⇔ let (args, [VClosure(codeHash, closureEnv) | rest]) = splitAt(arity, stack) in
+          let newEnv = extendEnv(closureEnv, reverse(args)) in
+          let newCode = lookupCode(codeHash, cb) in
+          VMState(rest, newEnv, newCode, 0, cs, cb, Running)  // Reuse frame!
+
+      (IReturn, VMState([result | _], _, _, _, [Frame(retHash, retPC, savedEnv) | cs], cb, Running))
+        ⇔ let retCode = lookupCode(retHash, cb) in
+          VMState([result], savedEnv, retCode, retPC, cs, cb, Running)
+
+      (IReturn, VMState([result | _], _, _, _, [], cb, Running))
+        ⇔ VMState([result], EnvEmpty, emptyCode, 0, [], cb, Halted(result))
+
+      // === Constructors ===
+
+      (ICon(typeHash, tag, arity), VMState(stack, env, code, pc, cs, cb, Running))
+        ⇔ let (fields, rest) = splitAt(arity, stack) in
+          let con = VCon(typeHash, tag, reverse(fields)) in
+          VMState([con | rest], env, code, pc + 1, cs, cb, Running)
+
+      (IMatch(branches), VMState([VCon(_, tag, _) | _], env, code, pc, cs, cb, Running))
+        ⇔ let codeHash = lookupBranch(branches, tag) in
+          let newCode = lookupCode(codeHash, cb) in
+          VMState(stack, env, newCode, 0, cs, cb, Running)
+
+      (IGetField(idx), VMState([VCon(_, _, fields) | stack], env, code, pc, cs, cb, Running))
+        ⇔ let field = nth(fields, idx) in
+          VMState([field | stack], env, code, pc + 1, cs, cb, Running)
+
+      // === Arithmetic ===
+
+      (IAdd, VMState([VInt(b), VInt(a) | stack], env, code, pc, cs, cb, Running))
+        ⇔ VMState([VInt(a + b) | stack], env, code, pc + 1, cs, cb, Running)
+
+      (ISub, VMState([VInt(b), VInt(a) | stack], env, code, pc, cs, cb, Running))
+        ⇔ VMState([VInt(a - b) | stack], env, code, pc + 1, cs, cb, Running)
+
+      (IMul, VMState([VInt(b), VInt(a) | stack], env, code, pc, cs, cb, Running))
+        ⇔ VMState([VInt(a * b) | stack], env, code, pc + 1, cs, cb, Running)
+
+      (IEq, VMState([b, a | stack], env, code, pc, cs, cb, Running))
+        ⇔ VMState([VBool(valEq(a, b)) | stack], env, code, pc + 1, cs, cb, Running)
+
+      (ILt, VMState([VInt(b), VInt(a) | stack], env, code, pc, cs, cb, Running))
+        ⇔ VMState([VBool(a < b) | stack], env, code, pc + 1, cs, cb, Running)
+
+      // === Control ===
+
+      (IJump(offset), VMState(stack, env, code, pc, cs, cb, Running))
+        ⇔ VMState(stack, env, code, pc + offset, cs, cb, Running)
+
+      (IJumpIf(offset), VMState([VBool(true) | stack], env, code, pc, cs, cb, Running))
+        ⇔ VMState(stack, env, code, pc + offset, cs, cb, Running)
+
+      (IJumpIf(_), VMState([VBool(false) | stack], env, code, pc, cs, cb, Running))
+        ⇔ VMState(stack, env, code, pc + 1, cs, cb, Running)
+
+      (IHalt, VMState([result | _], _, _, _, _, cb, Running))
+        ⇔ VMState([result], EnvEmpty, emptyCode, 0, [], cb, Halted(result))
+
+      // === Effects (Unison-style) ===
+
+      (IRequest(abilityHash, op), VMState(stack, env, code, pc, cs, cb, Running))
+        ⇔ let (args, rest) = splitAt(opArity(abilityHash, op, cb), stack) in
+          let k = captureK(env, code, pc + 1, cs) in
+          let req = Request(abilityHash, op, reverse(args), k) in
+          VMState(rest, EnvEmpty, emptyCode, 0, [], cb, Blocked(req))
+
+      (IHandle(handlerHash), VMState(stack, env, code, pc, cs, cb, Running))
+        ⇔ // Install handler, continue with body
+          let handler = lookupCode(handlerHash, cb) in
+          VMState(stack, env, code, pc + 1, cs, cb, Running)  // Simplified
+
+      (IResume, VMState([val, VContinuation(k) | stack], env, code, pc, cs, cb, Running))
+        ⇔ resumeK(k, val, cb)
+
+      // === Meta (content-addressing at runtime) ===
+
+      (IHash, VMState([val | stack], env, code, pc, cs, cb, Running))
+        ⇔ let term = valToTerm(val) in
+          let h = hashOf(term) in
+          let (_, cb') = store(term, cb) in
+          VMState([VStr(h.value) | stack], env, code, pc + 1, cs, cb', Running)
+
+      (ILookup, VMState([VStr(h) | stack], env, code, pc, cs, cb, Running))
+        ⇔ match lookup(Hash(h), cb) {
+            Some(term) => 
+              let val = termToVal(term, cb) in
+              VMState([val | stack], env, code, pc + 1, cs, cb, Running)
+            None =>
+              VMState([], env, code, pc, cs, cb, Error(concat("Unknown hash: ", h)))
+          }
+
+      (IStore, VMState([val | stack], env, code, pc, cs, cb, Running))
+        ⇔ let term = valToTerm(val) in
+          let (h, cb') = store(term, cb) in
+          VMState([VStr(h.value) | stack], env, code, pc + 1, cs, cb', Running)
+    }
+
+    // Helper: lookup code by hash
+    xform lookupCode : (Hash, Codebase) ⇄ CodeBlock {
+      (h, Codebase(_, code, _, _))
+        ⇔ match get(code, h) {
+            Some(block) => block
+            None => error(concat("Code not found: ", shortHash(h)))
+          }
+    }
+
+    // Helper: extend environment
+    xform extendEnv : (Env, [Val]) ⇄ Env {
+      (env, [])         ⇔ env
+      (env, [v | vs])   ⇔ extendEnv(EnvBind(v, env), vs)
+    }
+
+    // Helper: environment lookup
+    xform envLookup : (Env, Int, Codebase) ⇄ Val {
+      (EnvBind(v, _), 0, _)         ⇔ v
+      (EnvBind(_, rest), n, cb)     ⇔ envLookup(rest, n - 1, cb)
+      (EnvRef(h), n, cb)            ⇔ 
+        let env = termToEnv(lookup(h, cb), cb) in
+        envLookup(env, n, cb)
+      (EnvEmpty, _, _)              ⇔ error("Variable index out of bounds")
+    }
+  }
+
+  // ==========================================================================
+  // MODULE: Syntax
+  // Assembly language with hash references
+  // ==========================================================================
+  module Syntax {
+    import Core
+    import Hash
+
+    attr indent : Int = 0
+
+    // ------------------------------------------------------------------------
+    // Program with definitions
+    // ------------------------------------------------------------------------
+    grammar program {
+      defs:definition*
+        ⇔ defs
+    }
+
+    grammar definition {
+      @newline "def" name:IDENT "=" hash:HASH
+        ⇔ Alias(name, hash)
+
+      @newline "def" name:IDENT "{" @indent(+2) instrs:instr* @indent(-2) "}"
+        ⇔ Def(name, instrs)
+
+      @newline "type" name:IDENT "=" ctors:ctor|+
+        ⇔ TypeDef(name, ctors)
+    }
+
+    grammar ctor {
+      name:IDENT                          ⇔ Ctor(name, 0)
+      name:IDENT "/" arity:INT            ⇔ Ctor(name, arity)
+    }
+
+    // ------------------------------------------------------------------------
+    // Instructions
+    // ------------------------------------------------------------------------
+    grammar instr {
+      @newline "push" hash:HASH           ⇔ IPush(hash)
+      @newline "push" val:literal         ⇔ IPushLit(val)
+      @newline "pop"                      ⇔ IPop
+      @newline "dup"                      ⇔ IDup
+      @newline "swap"                     ⇔ ISwap
+
+      @newline "var" idx:INT              ⇔ IVar(idx)
+      @newline "var" name:IDENT           ⇔ IVarName(name)
+
+      @newline "closure" hash:HASH "/" arity:INT
+        ⇔ IClosure(hash, arity)
+      @newline "apply" arity:INT          ⇔ IApply(arity)
+      @newline "tailapply" arity:INT      ⇔ ITailApply(arity)
+      @newline "ret"                      ⇔ IReturn
+
+      @newline "con" hash:HASH "/" tag:INT "/" arity:INT
+        ⇔ ICon(hash, tag, arity)
+      @newline "match" "{" branches:branch,* "}"
+        ⇔ IMatch(branches)
+      @newline "getfield" idx:INT         ⇔ IGetField(idx)
+
+      @newline "add"                      ⇔ IAdd
+      @newline "sub"                      ⇔ ISub
+      @newline "mul"                      ⇔ IMul
+      @newline "div"                      ⇔ IDiv
+      @newline "eq"                       ⇔ IEq
+      @newline "lt"                       ⇔ ILt
+      @newline "gt"                       ⇔ IGt
+
+      @newline "and"                      ⇔ IAnd
+      @newline "or"                       ⇔ IOr
+      @newline "not"                      ⇔ INot
+
+      @newline "jump" offset:INT          ⇔ IJump(offset)
+      @newline "jumpif" offset:INT        ⇔ IJumpIf(offset)
+      @newline "jumpifnot" offset:INT     ⇔ IJumpIfNot(offset)
+      @newline "halt"                     ⇔ IHalt
+
+      @newline "request" hash:HASH "/" op:INT
+        ⇔ IRequest(hash, op)
+      @newline "handle" hash:HASH         ⇔ IHandle(hash)
+      @newline "resume"                   ⇔ IResume
+
+      @newline "thunk" hash:HASH          ⇔ IThunk(hash)
+      @newline "force"                    ⇔ IForce
+
+      @newline "hash"                     ⇔ IHash
+      @newline "lookup"                   ⇔ ILookup
+      @newline "store"                    ⇔ IStore
+    }
+
+    grammar branch {
+      tag:INT "=>" hash:HASH
+        ⇔ (tag, hash)
+    }
+
+    grammar literal {
+      n:INT                               ⇔ VInt(n)
+      s:STRING                            ⇔ VStr(s)
+      "true"                              ⇔ VBool(true)
+      "false"                             ⇔ VBool(false)
+      f:FLOAT                             ⇔ VFloat(f)
+    }
+
+    // Hash literal: #abc123def456...
+    grammar HASH {
+      "#" chars:HASHCHARS                 ⇔ Hash(chars)
+    }
+  }
+
+  // ==========================================================================
+  // MODULE: Compile
+  // Compile Port/Phi terms to RosettaVM, computing hashes
+  // ==========================================================================
+  module Compile {
+    import Core
+    import Hash
+    import Store
+
+    // Compile a term, store it, return hash and updated codebase
+    xform compile : (Term, Codebase) ⇄ (Hash, CodeBlock, Codebase) {
+
+      // Lambda: compile body, create code block
+      (TLam(params, bodyHash, _), cb)
+        ⇔ let bodyCode = compileBody(bodyHash, length(params), cb) in
+          let block = CodeBlock(
+            hash: hashOf(TLam(params, bodyHash, hashNil)),
+            name: None,
+            arity: length(params),
+            instrs: bodyCode ++ [IReturn],
+            sourceHash: Some(hashOf(TLam(params, bodyHash, hashNil)))
+          ) in
+          let (h, cb') = storeCode(block, cb) in
+          (h, block, cb')
+
+      // Application
+      (TApp(funcHash, argHashes), cb)
+        ⇔ let argInstrs = concat(map(\h -> [IPush(h)], argHashes)) in
+          let instrs = argInstrs ++ [IPush(funcHash), IApply(length(argHashes))] in
+          let block = makeBlock(instrs) in
+          let (h, cb') = storeCode(block, cb) in
+          (h, block, cb')
+
+      // Variable reference
+      (TVar(_, index), cb)
+        ⇔ let instrs = [IVar(index)] in
+          let block = makeBlock(instrs) in
+          let (h, cb') = storeCode(block, cb) in
+          (h, block, cb')
+
+      // Constructor
+      (TCon(typeHash, tag, fieldHashes), cb)
+        ⇔ let fieldInstrs = concat(map(\h -> [IPush(h)], fieldHashes)) in
+          let instrs = fieldInstrs ++ [ICon(typeHash, tag, length(fieldHashes))] in
+          let block = makeBlock(instrs) in
+          let (h, cb') = storeCode(block, cb) in
+          (h, block, cb')
+
+      // Literals - just push
+      (TInt(n), cb)
+        ⇔ let instrs = [IPushLit(VInt(n))] in
+          let block = makeBlock(instrs) in
+          let (h, cb') = storeCode(block, cb) in
+          (h, block, cb')
+
+      (TStr(s), cb)
+        ⇔ let instrs = [IPushLit(VStr(s))] in
+          let block = makeBlock(instrs) in
+          let (h, cb') = storeCode(block, cb) in
+          (h, block, cb')
+
+      (TBool(b), cb)
+        ⇔ let instrs = [IPushLit(VBool(b))] in
+          let block = makeBlock(instrs) in
+          let (h, cb') = storeCode(block, cb) in
+          (h, block, cb')
+
+      // Reference - just the hash
+      (TRef(h), cb)
+        ⇔ let instrs = [IPush(h)] in
+          let block = makeBlock(instrs) in
+          let (h', cb') = storeCode(block, cb) in
+          (h', block, cb')
+    }
+
+    xform makeBlock : [Instr] ⇄ CodeBlock {
+      instrs ⇔ CodeBlock(
+        hash: hashOf(instrs),
+        name: None,
+        arity: 0,
+        instrs: instrs,
+        sourceHash: None
+      )
+    }
+  }
+
+  // ==========================================================================
+  // MODULE: Examples
+  // Example programs showing content-addressed references
+  // ==========================================================================
+  module Examples {
+    import Core
+    import Hash
+    import Syntax
+
+    // -------------------------------------------------------------------------
+    // Example 1: Identity function
+    // -------------------------------------------------------------------------
+    //
+    // Source:  λx. x
+    // Term:    TLam(["x"], #var0, #empty)
+    // Hash:    #a1b2c3d4e5f6...
+    //
+    // def identity {
+    //   var 0
+    //   ret
+    // }
+    // ; Hash: #a1b2c3d4...
+    //
+    // Names are aliases:
+    //   def id = #a1b2c3d4...
+    //   def identity = #a1b2c3d4...
+    // Both names point to the SAME hash!
+
+    // -------------------------------------------------------------------------
+    // Example 2: Factorial with hash references
+    // -------------------------------------------------------------------------
+    //
+    // Source:  fact = λn. if n <= 1 then 1 else n * fact(n - 1)
+    //
+    // ; The compiled code references itself by hash
+    // def fact {           ; Hash: #f4c70r14l...
+    //   var 0              ; n
+    //   push 1
+    //   le
+    //   jumpifnot 3
+    //   push 1
+    //   ret
+    //   var 0              ; n
+    //   var 0              ; n  
+    //   push 1
+    //   sub                ; n - 1
+    //   push #f4c70r14l... ; Reference to fact BY HASH
+    //   apply 1
+    //   mul
+    //   ret
+    // }
+
+    // -------------------------------------------------------------------------
+    // Example 3: Sharing via hash
+    // -------------------------------------------------------------------------
+    //
+    // If two people write the same function, they get the SAME hash.
+    // No duplication in the codebase!
+    //
+    // Person A writes:  double = λx. x + x
+    // Person B writes:  twice  = λx. x + x
+    //
+    // Both compile to the same bytecode, same hash: #d0ub13...
+    // The codebase stores it ONCE.
+    // Names "double" and "twice" are both aliases for #d0ub13...
+
+    // -------------------------------------------------------------------------
+    // Example 4: Dependencies are exact
+    // -------------------------------------------------------------------------
+    //
+    // ; Library function (version 1)
+    // def listMap {        ; Hash: #m4p001...
+    //   ...
+    // }
+    //
+    // ; My code depends on it BY HASH
+    // def myFunc {
+    //   ...
+    //   push #m4p001...    ; Exact reference - cannot change!
+    //   apply 2
+    //   ...
+    // }
+    //
+    // ; If library updates listMap, it gets a NEW hash: #m4p002...
+    // ; My code still references #m4p001... (the old version)
+    // ; No "dependency hell" - both versions coexist!
+
+    // -------------------------------------------------------------------------
+    // Example 5: Effects with hash-referenced handlers
+    // -------------------------------------------------------------------------
+    //
+    // ; Define an ability (interface)
+    // type Console = 
+    //   | Print/1    ; tag 0
+    //   | Read/0     ; tag 1
+    // ; Hash: #c0ns013...
+    //
+    // ; Handler implementation  
+    // def consoleHandler {  ; Hash: #h4nd13r...
+    //   ; match on (tag, args, continuation)
+    //   ...
+    // }
+    //
+    // ; Using the effect
+    // def greet {
+    //   push "Hello!"
+    //   request #c0ns013.../0  ; Print operation
+    //   resume                  ; Continue after handler
+    //   halt
+    // }
+  }
+}
