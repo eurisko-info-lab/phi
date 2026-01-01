@@ -6,9 +6,9 @@ A meta-language where programs manipulate programs.
 
 ## What Is It?
 
-Phi is a self-describing language for defining languages. Write a grammar, get a parser, typechecker, and compiler — all derived from the same specification.
+Phi is a self-describing language for defining languages. Write a grammar, get a parser, type checker, and compiler — all derived from the same specification.
 
-**The trick:** Everything is a tree with annotations. Parsers, transformers, type systems — they're all the same thing viewed differently.
+**The trick:** Everything is a tree with annotations. Parsers, transformers, and type systems — they're all the same thing viewed differently.
 
 ## Quick Start
 
