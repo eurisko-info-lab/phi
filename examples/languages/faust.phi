@@ -1,0 +1,510 @@
+// =============================================================================
+// Faust: Functional Audio Stream Specification
+// =============================================================================
+// A Phi spec for GRAME's Faust DSP language.
+// Faust is a functional, synchronous dataflow language for real-time audio.
+//
+// Core insight: Audio DSPs are block diagrams. Five composition operators
+// (parallel, sequential, split, merge, recursive) compose signal processors.
+// Everything is a signal: numbers, UI elements, even silence.
+//
+// The algebra:
+//   ,   parallel    A,B     puts A and B side by side
+//   :   sequential  A:B     pipes A's outputs to B's inputs
+//   <:  split       A<:B    distributes A's outputs across B's inputs
+//   :>  merge       A:>B    sums A's outputs into B's inputs  
+//   ~   recursive   A~B     feedback: B's output → A's input (with delay)
+//
+// References:
+//   - https://faust.grame.fr/
+//   - https://faustdoc.grame.fr/manual/syntax/
+
+language Faust {
+
+  // ===========================================================================
+  // Core Sorts  
+  // ===========================================================================
+  
+  sort Signal       // Discrete-time signal: ℕ → ℝ
+  sort Block        // Block diagram: Signal^n → Signal^m
+  sort Label        // UI element label/path
+  sort Metadata     // Key-value metadata pairs
+
+  // ===========================================================================
+  // Signal Types (for compile-time checking)
+  // ===========================================================================
+
+  sort SigType      // Signal type annotation
+  
+  constructor
+    // Type signatures: S^n → S^m (n inputs, m outputs)
+    SigT   : Int → Int → SigType            // inputs → outputs
+    
+  // Common types:
+  // S⁰→S¹  constant/generator (no input, one output)
+  // S¹→S¹  effect/processor  
+  // S²→S¹  combiner (mixer, operator)
+  // S¹→S⁰  sink (analysis, cut)
+
+  // ===========================================================================
+  // Primitives - Signal Generators
+  // ===========================================================================
+  
+  constructor
+    // Constants - type: S⁰→S¹
+    Num      : Float → Block                 // y(t) = n
+    Int      : Int → Block                   // y(t) = n (integer)
+    
+    // Identity and Cut - the routing primitives
+    Wire     : Block                         // _ : y(t) = x(t)
+    Cut      : Block                         // ! : terminates signal
+
+  // ===========================================================================
+  // Block Diagram Composition - THE CORE ALGEBRA
+  // ===========================================================================
+  
+  constructor
+    // Parallel: A,B - stack vertically, no connection
+    // inputs(A,B) = inputs(A) + inputs(B)
+    // outputs(A,B) = outputs(A) + outputs(B)
+    Par      : Block → Block → Block
+    
+    // Sequential: A:B - pipe outputs to inputs
+    // Requires: outputs(A) = inputs(B)
+    // inputs(A:B) = inputs(A), outputs(A:B) = outputs(B)
+    Seq      : Block → Block → Block
+    
+    // Split: A<:B - distribute outputs across inputs
+    // Requires: inputs(B) = k * outputs(A) for some k
+    // Each output i of A connects to input (i mod k) of B
+    Split    : Block → Block → Block
+    
+    // Merge: A:>B - sum outputs into inputs
+    // Requires: outputs(A) = k * inputs(B) for some k
+    // Signals merge by addition at each input
+    Merge    : Block → Block → Block
+    
+    // Recursive: A~B - feedback with implicit delay
+    // Creates cycle: B[i] → z⁻¹ → A[i]
+    // The delay prevents infinite instantaneous loops
+    Rec      : Block → Block → Block
+
+  // ===========================================================================
+  // Arithmetic Operators
+  // ===========================================================================
+  
+  constructor
+    Add      : Block                         // + : S²→S¹, y(t) = x₁(t) + x₂(t)
+    Sub      : Block                         // - : S²→S¹, y(t) = x₁(t) - x₂(t)  
+    Mul      : Block                         // * : S²→S¹, y(t) = x₁(t) * x₂(t)
+    Div      : Block                         // / : S²→S¹, y(t) = x₁(t) / x₂(t)
+    Mod      : Block                         // % : S²→S¹, y(t) = x₁(t) % x₂(t)
+    Pow      : Block                         // ^ : S²→S¹, y(t) = x₁(t) ^ x₂(t)
+    Neg      : Block                         // 0-_ : S¹→S¹, y(t) = -x(t)
+
+  // ===========================================================================
+  // Comparison Operators
+  // ===========================================================================
+  
+  constructor
+    Lt       : Block                         // < : S²→S¹, y(t) = x₁(t) < x₂(t) ? 1 : 0
+    Le       : Block                         // <=
+    Gt       : Block                         // >
+    Ge       : Block                         // >=
+    Eq       : Block                         // ==
+    Ne       : Block                         // !=
+
+  // ===========================================================================
+  // Bitwise Operators
+  // ===========================================================================
+  
+  constructor
+    And      : Block                         // & : bitwise and
+    Or       : Block                         // | : bitwise or
+    Xor      : Block                         // xor
+    Shl      : Block                         // << : left shift
+    Shr      : Block                         // >> : right shift
+
+  // ===========================================================================
+  // Math Functions (from math.h)
+  // ===========================================================================
+  
+  constructor
+    Sin      : Block                         // sin : S¹→S¹
+    Cos      : Block                         // cos
+    Tan      : Block                         // tan
+    Asin     : Block                         // asin
+    Acos     : Block                         // acos
+    Atan     : Block                         // atan
+    Atan2    : Block                         // atan2 : S²→S¹
+    Exp      : Block                         // exp
+    Log      : Block                         // log (natural)
+    Log10    : Block                         // log10
+    Sqrt     : Block                         // sqrt
+    Abs      : Block                         // abs
+    Floor    : Block                         // floor
+    Ceil     : Block                         // ceil
+    Rint     : Block                         // rint (round to nearest int)
+    Min      : Block                         // min : S²→S¹
+    Max      : Block                         // max : S²→S¹
+    Fmod     : Block                         // fmod : S²→S¹
+
+  // ===========================================================================
+  // Delay Primitives - Time Domain
+  // ===========================================================================
+  
+  constructor
+    // One sample delay: y(t) = x(t-1), y(0) = 0
+    Mem      : Block                         // mem or '
+    
+    // N sample delay: y(t) = x(t-n)
+    // Second input is delay amount (bounded)
+    Delay    : Block                         // @ : S²→S¹
+
+  // ===========================================================================
+  // Tables - Lookup and Storage
+  // ===========================================================================
+  
+  constructor
+    // Read-only table (initialized at compile time)
+    // rdtable(size, init, index) 
+    RdTable  : Int → Block → Block           // rdtable : S³→S¹
+    
+    // Read-write table
+    // rwtable(size, init, windex, input, rindex)
+    RwTable  : Int → Block → Block           // rwtable : S⁵→S¹
+    
+    // Waveform literal: compile-time constant table
+    Waveform : List[Float] → Block           // waveform{0,1,2,...} : S⁰→S²
+
+  // ===========================================================================
+  // Selectors - Control Flow
+  // ===========================================================================
+  
+  constructor
+    // Two-way selector: y(t) = s(t)==0 ? x₀(t) : x₁(t)
+    Select2  : Block                         // select2 : S³→S¹
+    
+    // Three-way selector
+    Select3  : Block                         // select3 : S⁴→S¹
+
+  // ===========================================================================
+  // Type Coercion
+  // ===========================================================================
+  
+  constructor
+    IntCast   : Block                        // int : S¹→S¹
+    FloatCast : Block                        // float : S¹→S¹
+
+  // ===========================================================================
+  // Iterations - Structural Recursion
+  // ===========================================================================
+  
+  constructor
+    // Parallel iteration: par(i,n,expr) = expr[i=0], expr[i=1], ..., expr[i=n-1]
+    ParIter  : String → Int → Block → Block
+    
+    // Sequential iteration: seq(i,n,expr) = expr[i=0] : expr[i=1] : ... : expr[i=n-1]
+    SeqIter  : String → Int → Block → Block
+    
+    // Sum iteration: sum(i,n,expr) = expr[i=0] + expr[i=1] + ... + expr[i=n-1]
+    SumIter  : String → Int → Block → Block
+    
+    // Product iteration: prod(i,n,expr) = expr[i=0] * expr[i=1] * ... * expr[i=n-1]
+    ProdIter : String → Int → Block → Block
+
+  // ===========================================================================
+  // User Interface Primitives
+  // ===========================================================================
+  
+  constructor
+    // Discrete UI (output 0 or 1)
+    Button   : Label → Block                 // button("label") : S⁰→S¹
+    Checkbox : Label → Block                 // checkbox("label") : S⁰→S¹
+    
+    // Continuous UI (output in [min,max])
+    HSlider  : Label → Float → Float → Float → Float → Block  // (label,init,min,max,step)
+    VSlider  : Label → Float → Float → Float → Float → Block
+    NEntry   : Label → Float → Float → Float → Float → Block
+    
+    // Output meters
+    HBargraph : Label → Float → Float → Block  // hbargraph : S¹→S¹
+    VBargraph : Label → Float → Float → Block
+    
+    // Grouping (for UI layout, not signal processing)
+    HGroup   : Label → Block → Block
+    VGroup   : Label → Block → Block
+    TGroup   : Label → Block → Block
+
+  // ===========================================================================
+  // Definitions and Abstractions
+  // ===========================================================================
+  
+  constructor
+    // Named definition: name = expr
+    Def      : String → Block → Block → Block
+    
+    // Lambda abstraction: \(x).(body)
+    Lam      : String → Block → Block
+    
+    // Application: f(arg)
+    App      : Block → Block → Block
+    
+    // Variable reference
+    Var      : String → Block
+    
+    // With environment: expr with { defs }
+    With     : Block → List[Block] → Block
+    
+    // Letrec: expr letrec { 'x = e1; 'y = e2; }
+    Letrec   : Block → List[Block] → Block
+
+  // ===========================================================================
+  // Pattern Matching
+  // ===========================================================================
+  
+  constructor
+    // case { (pat1) => e1; (pat2) => e2; }
+    Case     : List[PatCase] → Block
+    
+  sort PatCase
+  constructor
+    PatC     : Block → Block → PatCase       // pattern => result
+
+  // ===========================================================================
+  // Route Primitive
+  // ===========================================================================
+  
+  constructor
+    // route(A,B,pairs) - explicit signal routing
+    // A inputs, B outputs, pairs specify connections
+    Route    : Int → Int → List[RoutePair] → Block
+    
+  sort RoutePair  
+  constructor
+    RPair    : Int → Int → RoutePair         // (from, to)
+
+  // ===========================================================================
+  // Foreign Functions
+  // ===========================================================================
+  
+  constructor
+    // ffunction(sig, header, lib) - call external C function
+    FFunction : String → String → String → Block
+    
+    // fconstant(type name, header) - external constant
+    FConstant : String → String → Block
+    
+    // fvariable(type name, header) - external variable  
+    FVariable : String → String → Block
+
+  // ===========================================================================
+  // Soundfiles
+  // ===========================================================================
+  
+  constructor
+    // soundfile("label[url:...]", channels) : S²→S^(2+channels)
+    // inputs: sound index, read index
+    // outputs: length, sample rate, channels...
+    Soundfile : Label → Int → Block
+
+  // ===========================================================================
+  // Metadata
+  // ===========================================================================
+  
+  constructor
+    // Declare metadata: declare key "value"
+    Declare  : String → String → Metadata
+    
+    // Import file: import("file.lib")
+    Import   : String → Block
+    
+    // Library: library("file.lib")
+    Library  : String → Block
+    
+    // Component: component("file.dsp")
+    Component : String → Block
+
+  // ===========================================================================
+  // Program Structure
+  // ===========================================================================
+  
+  sort Program
+  
+  constructor
+    // A Faust program: metadata + definitions + process
+    Prog     : List[Metadata] → List[Block] → Block → Program
+
+  // ===========================================================================
+  // Reflection / Introspection
+  // ===========================================================================
+  
+  constructor
+    // inputs(expr) - number of inputs of block
+    Inputs   : Block → Block
+    
+    // outputs(expr) - number of outputs of block  
+    Outputs  : Block → Block
+
+  // ===========================================================================
+  // SUGAR: Common patterns as derived forms
+  // ===========================================================================
+  
+  // Stereo wire: _,_
+  // stereo = Par Wire Wire
+  
+  // Mono to stereo: _ <: _,_
+  // mono2stereo = Split Wire (Par Wire Wire)
+  
+  // Stereo to mono (sum): _,_ :> _  
+  // stereo2mono = Merge (Par Wire Wire) Wire
+  
+  // Feedback loop: +~*(0.99)
+  // feedback(g) = Rec Add (Seq Wire (Seq (Par Wire (Num g)) Mul))
+  
+  // One pole lowpass: +(1-p)*_ ~ *(p)
+  // onepole(p) = Rec (Seq (Par (Seq (Par (Num (1-p)) Wire) Mul) Wire) Add) 
+  //                  (Seq Wire (Seq (Par Wire (Num p)) Mul))
+
+}
+
+// =============================================================================
+// Grammar: Faust Concrete Syntax
+// =============================================================================
+
+grammar FaustGrammar {
+
+  // Composition operators (by precedence, low to high)
+  // ~  : recursive     (4, left)
+  // ,  : parallel      (3, right)
+  // :  : sequential    (2, right)
+  // <: : split         (1, right)
+  // :> : merge         (1, right)
+
+  program    := metadata* definition* "process" "=" expr ";"
+  
+  metadata   := "declare" IDENT STRING ";"
+              | "import" "(" STRING ")" ";"
+  
+  definition := IDENT "=" expr ";"
+              | IDENT "(" params ")" "=" expr ";"
+  
+  params     := IDENT ("," IDENT)*
+  
+  expr       := expr "~" expr                   → Rec($1, $3)
+              | expr "," expr                   → Par($1, $3)
+              | expr ":" expr                   → Seq($1, $3)
+              | expr "<:" expr                  → Split($1, $3)
+              | expr ":>" expr                  → Merge($1, $3)
+              | term
+  
+  term       := term "+" term                   → Seq(Par($1,$3), Add)
+              | term "-" term                   → Seq(Par($1,$3), Sub)
+              | term "*" term                   → Seq(Par($1,$3), Mul)
+              | term "/" term                   → Seq(Par($1,$3), Div)
+              | term "%" term                   → Seq(Par($1,$3), Mod)
+              | term "^" term                   → Seq(Par($1,$3), Pow)
+              | term "@" term                   → Seq(Par($1,$3), Delay)
+              | term "'"                        → Seq($1, Mem)
+              | primary
+  
+  primary    := NUMBER                          → Num($1)
+              | "_"                             → Wire
+              | "!"                             → Cut
+              | "mem"                           → Mem
+              | "sin" | "cos" | "tan" | ...     → Sin | Cos | Tan | ...
+              | "+" | "-" | "*" | "/"           → Add | Sub | Mul | Div
+              | IDENT                           → Var($1)
+              | IDENT "(" args ")"              → App(Var($1), $3)
+              | "par" "(" IDENT "," expr "," expr ")"   → ParIter($3,$5,$7)
+              | "seq" "(" IDENT "," expr "," expr ")"   → SeqIter($3,$5,$7)
+              | "sum" "(" IDENT "," expr "," expr ")"   → SumIter($3,$5,$7)
+              | "prod" "(" IDENT "," expr "," expr ")"  → ProdIter($3,$5,$7)
+              | "\\" "(" params ")" "." "(" expr ")"    → Lam($3, $7)
+              | "(" expr ")"                    → $2
+              | ui_element
+  
+  ui_element := "button" "(" label ")"          → Button($3)
+              | "checkbox" "(" label ")"        → Checkbox($3)
+              | "hslider" "(" label "," NUMBER "," NUMBER "," NUMBER "," NUMBER ")"
+                                                → HSlider($3,$5,$7,$9,$11)
+              | "vslider" "(" label "," NUMBER "," NUMBER "," NUMBER "," NUMBER ")"
+                                                → VSlider($3,$5,$7,$9,$11)
+              | "nentry" "(" label "," NUMBER "," NUMBER "," NUMBER "," NUMBER ")"
+                                                → NEntry($3,$5,$7,$9,$11)
+              | "hgroup" "(" label "," expr ")" → HGroup($3,$5)
+              | "vgroup" "(" label "," expr ")" → VGroup($3,$5)
+  
+  label      := STRING
+  args       := expr ("," expr)*
+  
+}
+
+// =============================================================================
+// Semantic Rules: Block Diagram Algebra Laws
+// =============================================================================
+
+// The five compositions form a well-typed algebra.
+// Type checking ensures signal routing is valid.
+
+// Parallel composition: no constraints
+// typeOf(Par A B) = (inputs(A) + inputs(B)) → (outputs(A) + outputs(B))
+
+// Sequential composition: wire matching
+// REQUIRE outputs(A) = inputs(B)
+// typeOf(Seq A B) = inputs(A) → outputs(B)
+
+// Split composition: multiple distribution
+// REQUIRE inputs(B) % outputs(A) = 0
+// typeOf(Split A B) = inputs(A) → outputs(B)
+
+// Merge composition: summation
+// REQUIRE outputs(A) % inputs(B) = 0  
+// typeOf(Merge A B) = inputs(A) → outputs(B)
+
+// Recursive composition: feedback
+// REQUIRE outputs(A) >= inputs(B) AND inputs(A) >= outputs(B)
+// typeOf(Rec A B) = (inputs(A) - outputs(B)) → outputs(A)
+
+// =============================================================================
+// Example: Simple Noise Gate
+// =============================================================================
+//
+// Faust:
+//   gate = button("gate");
+//   process = _ * gate;
+//
+// Phi AST:
+//   Prog [] 
+//     [Def "gate" (Button "gate")]
+//     (Seq (Par Wire (Var "gate")) Mul)
+//
+// =============================================================================
+
+// =============================================================================
+// Example: Feedback Delay
+// =============================================================================
+//
+// Faust:
+//   process = + ~ @(ma.SR/2);
+//
+// Phi AST:  
+//   Rec Add (Seq Wire (Seq (Par Wire (Div (Var "ma.SR") (Num 2))) Delay))
+//
+// =============================================================================
+
+// =============================================================================
+// Example: Parallel Oscillators
+// =============================================================================
+//
+// Faust:
+//   import("stdfaust.lib");
+//   process = par(i, 4, os.osc(440 * (i+1))) :> /(4);
+//
+// Phi AST:
+//   Prog [Import "stdfaust.lib"] []
+//     (Seq 
+//       (ParIter "i" 4 (App (Var "os.osc") (Mul (Num 440) (Add (Var "i") (Num 1)))))
+//       (Merge Wire (Seq (Par Wire (Num 4)) Div)))
+//
+// =============================================================================
