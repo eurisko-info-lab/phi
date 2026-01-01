@@ -1,0 +1,3 @@
+[submodule "autonomous"]
+	path = autonomous
+	url = https://github.com/eurisko-info-lab/phi-autonomous.git
