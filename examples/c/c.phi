@@ -1,1063 +1,441 @@
 // =============================================================================
-// HVM C Implementation Specification
+// C Language Specification
 // =============================================================================
-// A phi spec describing how HVM's Interaction Calculus maps to C.
-// Based on HigherOrderCO/hvm4's clang runtime.
-//
-// Key ideas:
-// - Terms are 64-bit packed words (tag + metadata + value)
-// - Heap is a flat array of terms
-// - Evaluation uses explicit stack (no recursion)
-// - Interaction rules dispatch on (frame_tag, whnf_tag) pairs
+// A phi spec describing the C programming language.
+// This enables parsing, analysis, and transformation of C code.
 
 language C {
 
   // ===========================================================================
-  // Type Aliases
+  // Translation Unit (top-level)
   // ===========================================================================
-
-  typedef u8  = uint8_t
-  typedef u16 = uint16_t
-  typedef u32 = uint32_t
-  typedef u64 = uint64_t
-  typedef Term = u64
-
-  // ===========================================================================
-  // Term Bit Layout (64-bit word)
-  // ===========================================================================
-  //
-  // +-----+--------+----------+------------+
-  // | SUB |  TAG   |   EXT    |    VAL     |
-  // +-----+--------+----------+------------+
-  //  1 bit  7 bits   24 bits    32 bits
-  //
-  // SUB: Substitution marker (for lazy substitution)
-  // TAG: Term constructor (APP, LAM, SUP, etc.)
-  // EXT: Extended metadata (dup label, ctor name, op code)
-  // VAL: Payload (heap location, immediate value)
-
-  def SUB_BITS : u32 = 1
-  def TAG_BITS : u32 = 7
-  def EXT_BITS : u32 = 24
-  def VAL_BITS : u32 = 32
-
-  def SUB_SHIFT : u32 = 63
-  def TAG_SHIFT : u32 = 56
-  def EXT_SHIFT : u32 = 32
-  def VAL_SHIFT : u32 = 0
-
-  def SUB_MASK : u64 = 0x1
-  def TAG_MASK : u64 = 0x7F
-  def EXT_MASK : u64 = 0xFFFFFF
-  def VAL_MASK : u64 = 0xFFFFFFFF
+  
+  sort TranslationUnit
+  sort ExternalDecl
+  
+  TranslationUnit = Unit(decls: List[ExternalDecl])
+  
+  ExternalDecl = FunctionDef(spec: DeclSpec, decl: Declarator, body: Stmt)
+               | Declaration(spec: DeclSpec, decls: List[InitDeclarator])
+               | TypedefDecl(spec: DeclSpec, decls: List[Declarator])
+               | StructDef(name: String, fields: List[StructField])
+               | UnionDef(name: String, fields: List[StructField])
+               | EnumDef(name: String, values: List[EnumValue])
 
   // ===========================================================================
-  // Tags (Term Constructors)
+  // Types
   // ===========================================================================
-  // Hot tags (0-7) placed first for branch prediction
-
-  def APP : u8 = 0    // Application: (f x)
-  def VAR : u8 = 1    // Variable: bound reference
-  def LAM : u8 = 2    // Lambda: λx.body
-  def DP0 : u8 = 3    // Dup projection 0: x₀
-  def DP1 : u8 = 4    // Dup projection 1: x₁
-  def SUP : u8 = 5    // Superposition: &L{a, b}
-  def DUP : u8 = 6    // Duplication: !x &L= val; body
-  def ALO : u8 = 7    // Allocation (book → heap)
-
-  def REF : u8 = 8    // Reference: @name
-  def NAM : u8 = 9    // Name literal: ^name
-  def DRY : u8 = 10   // Stuck app: ^(f x)
-  def ERA : u8 = 11   // Erasure: &{}
-
-  def MAT : u8 = 12   // Pattern match: λ{#K: h; m}
-  def SWI : u8 = 31   // Number switch (same as MAT, different syntax)
-
-  // Constructors (C00-C16 for arity 0-16)
-  def C00 : u8 = 13
-  def C01 : u8 = 14
-  def C02 : u8 = 15
-  def C03 : u8 = 16
-  def C04 : u8 = 17
-  def C05 : u8 = 18
-  def C06 : u8 = 19
-  def C07 : u8 = 20
-  def C08 : u8 = 21
-  def C09 : u8 = 22
-  def C10 : u8 = 23
-  def C11 : u8 = 24
-  def C12 : u8 = 25
-  def C13 : u8 = 26
-  def C14 : u8 = 27
-  def C15 : u8 = 28
-  def C16 : u8 = 29
-
-  def NUM : u8 = 30   // Number literal
-  def USE : u8 = 32   // Use (unbox): λ{f}
-  def OP2 : u8 = 33   // Binary op: (a op b)
-  def RED : u8 = 34   // Reduction: (f ~> g)
-  def INC : u8 = 35   // Priority wrapper: ↑term
-  def MOV : u8 = 47   // Move binding: %x= val; body
-  def GOT : u8 = 48   // Move variable
+  
+  sort Type
+  sort DeclSpec
+  sort StorageClass
+  sort TypeQualifier
+  sort TypeSpecifier
+  
+  Type = TVoid
+       | TChar | TShort | TInt | TLong | TLongLong
+       | TFloat | TDouble | TLongDouble
+       | TSigned(inner: Type)
+       | TUnsigned(inner: Type)
+       | TPointer(inner: Type, quals: List[TypeQualifier])
+       | TArray(inner: Type, size: Option[Expr])
+       | TFunction(ret: Type, params: List[Param], variadic: Bool)
+       | TStruct(name: String)
+       | TUnion(name: String)
+       | TEnum(name: String)
+       | TTypedef(name: String)
+       | TConst(inner: Type)
+       | TVolatile(inner: Type)
+       | TRestrict(inner: Type)
+       | TAtomic(inner: Type)
+  
+  DeclSpec = DeclSpec(storage: Option[StorageClass], 
+                      quals: List[TypeQualifier],
+                      typeSpec: TypeSpecifier)
+  
+  StorageClass = SAuto | SRegister | SStatic | SExtern | SThreadLocal
+  
+  TypeQualifier = QConst | QVolatile | QRestrict | QAtomic
+  
+  TypeSpecifier = TSpecVoid
+                | TSpecChar | TSpecShort | TSpecInt | TSpecLong
+                | TSpecFloat | TSpecDouble
+                | TSpecSigned | TSpecUnsigned
+                | TSpecBool | TSpecComplex
+                | TSpecStruct(name: Option[String], fields: Option[List[StructField]])
+                | TSpecUnion(name: Option[String], fields: Option[List[StructField]])
+                | TSpecEnum(name: Option[String], values: Option[List[EnumValue]])
+                | TSpecTypedef(name: String)
 
   // ===========================================================================
-  // Operation Codes (stored in EXT field of OP2)
+  // Declarations
   // ===========================================================================
-
-  def OP_ADD : u8 = 0
-  def OP_SUB : u8 = 1
-  def OP_MUL : u8 = 2
-  def OP_DIV : u8 = 3
-  def OP_MOD : u8 = 4
-  def OP_AND : u8 = 5
-  def OP_OR  : u8 = 6
-  def OP_XOR : u8 = 7
-  def OP_LSH : u8 = 8
-  def OP_RSH : u8 = 9
-  def OP_NOT : u8 = 10
-  def OP_EQ  : u8 = 11
-  def OP_NE  : u8 = 12
-  def OP_LT  : u8 = 13
-  def OP_LE  : u8 = 14
-  def OP_GT  : u8 = 15
-  def OP_GE  : u8 = 16
-
-  // ===========================================================================
-  // Stack Frame Tags (for explicit stack evaluation)
-  // ===========================================================================
-
-  def F_APP_RED : u8 = 0x40   // ((f ~> □) x): reducing guarded function
-  def F_RED_MAT : u8 = 0x41   // ((f ~> mat) □): guarded match
-  def F_RED_USE : u8 = 0x42   // ((f ~> use) □): guarded use
-  def F_OP2_NUM : u8 = 0x43   // (x op □): binary op with first arg reduced
-
-  // ===========================================================================
-  // Term Accessors
-  // ===========================================================================
-
-  // Extract fields from packed term
-  fn term_sub(t: Term) -> u8 {
-    return (u8)((t >> SUB_SHIFT) & SUB_MASK);
-  }
-
-  fn term_tag(t: Term) -> u8 {
-    return (u8)((t >> TAG_SHIFT) & TAG_MASK);
-  }
-
-  fn term_ext(t: Term) -> u32 {
-    return (u32)((t >> EXT_SHIFT) & EXT_MASK);
-  }
-
-  fn term_val(t: Term) -> u32 {
-    return (u32)(t & VAL_MASK);
-  }
-
-  // Pack fields into term
-  fn term_new(sub: u8, tag: u8, ext: u32, val: u32) -> Term {
-    return ((u64)sub << SUB_SHIFT) |
-           ((u64)tag << TAG_SHIFT) |
-           ((u64)ext << EXT_SHIFT) |
-           ((u64)val);
-  }
-
-  // Get arity from constructor tag
-  fn term_arity(t: Term) -> u32 {
-    u8 tag = term_tag(t);
-    switch (tag) {
-      case APP: return 2;
-      case LAM: return 1;
-      case SUP: return 2;
-      case DUP: return 2;
-      case MAT: return 2;
-      case SWI: return 2;
-      case USE: return 1;
-      case OP2: return 2;
-      case RED: return 2;
-      case DRY: return 2;
-      case MOV: return 2;
-      case INC: return 1;
-      case C00 ... C16: return tag - C00;
-      default: return 0;
-    }
-  }
+  
+  sort Declarator
+  sort InitDeclarator
+  sort Initializer
+  sort Param
+  sort StructField
+  sort EnumValue
+  
+  Declarator = DIdent(name: String)
+             | DPointer(quals: List[TypeQualifier], inner: Declarator)
+             | DArray(inner: Declarator, size: Option[Expr])
+             | DFunction(inner: Declarator, params: List[Param])
+             | DAbstract(type: Type)
+  
+  InitDeclarator = InitDecl(decl: Declarator, init: Option[Initializer])
+  
+  Initializer = InitExpr(expr: Expr)
+              | InitList(inits: List[Initializer])
+              | InitDesig(desig: List[Designator], init: Initializer)
+  
+  Param = Param(spec: DeclSpec, decl: Option[Declarator])
+        | ParamVoid
+        | ParamEllipsis
+  
+  StructField = Field(spec: DeclSpec, decls: List[Declarator], bitfield: Option[Expr])
+  
+  EnumValue = EnumVal(name: String, value: Option[Expr])
+  
+  sort Designator
+  Designator = DesigIndex(index: Expr)
+             | DesigField(name: String)
 
   // ===========================================================================
-  // Heap Management
+  // Statements
   // ===========================================================================
-
-  // Global heap array
-  static Term* HEAP;
-  static u64 HEAP_NEXT;
-  static u64 HEAP_CAP = (1ULL << 32);
-
-  fn heap_alloc(size: u64) -> u64 {
-    u64 at = HEAP_NEXT;
-    HEAP_NEXT = at + size;
-    if (HEAP_NEXT > HEAP_CAP) {
-      fprintf(stderr, "Out of heap memory\n");
-      exit(1);
-    }
-    return at;
-  }
-
-  fn heap_read(loc: u32) -> Term {
-    return HEAP[loc];
-  }
-
-  fn heap_write(loc: u32, term: Term) -> void {
-    HEAP[loc] = term;
-  }
-
-  fn heap_set(loc: u32, term: Term) -> void {
-    HEAP[loc] = term;
-  }
-
-  fn heap_init() -> void {
-    HEAP = (Term*)calloc(HEAP_CAP, sizeof(Term));
-    HEAP_NEXT = 1;  // Reserve 0 as null
-  }
+  
+  sort Stmt
+  
+  Stmt = SEmpty
+       | SExpr(expr: Expr)
+       | SBlock(items: List[BlockItem])
+       | SIf(cond: Expr, then: Stmt, else: Option[Stmt])
+       | SSwitch(expr: Expr, body: Stmt)
+       | SWhile(cond: Expr, body: Stmt)
+       | SDoWhile(body: Stmt, cond: Expr)
+       | SFor(init: Option[ForInit], cond: Option[Expr], step: Option[Expr], body: Stmt)
+       | SGoto(label: String)
+       | SContinue
+       | SBreak
+       | SReturn(expr: Option[Expr])
+       | SLabeled(label: String, stmt: Stmt)
+       | SCase(expr: Expr, stmt: Stmt)
+       | SDefault(stmt: Stmt)
+  
+  sort BlockItem
+  BlockItem = BDecl(decl: ExternalDecl)
+            | BStmt(stmt: Stmt)
+  
+  sort ForInit
+  ForInit = ForInitExpr(expr: Expr)
+          | ForInitDecl(decl: ExternalDecl)
 
   // ===========================================================================
-  // Term Constructors
+  // Expressions
   // ===========================================================================
-
-  fn term_new_var(loc: u32) -> Term {
-    return term_new(0, VAR, 0, loc);
-  }
-
-  fn term_new_lam(body_loc: u32) -> Term {
-    return term_new(0, LAM, 0, body_loc);
-  }
-
-  fn term_new_lam_at(loc: u32, body: Term) -> Term {
-    heap_write(loc, body);
-    return term_new(0, LAM, 0, loc);
-  }
-
-  fn term_new_app(fun: Term, arg: Term) -> Term {
-    u32 loc = (u32)heap_alloc(2);
-    heap_write(loc + 0, fun);
-    heap_write(loc + 1, arg);
-    return term_new(0, APP, 0, loc);
-  }
-
-  fn term_new_app_at(loc: u32, fun: Term, arg: Term) -> Term {
-    heap_write(loc + 0, fun);
-    heap_write(loc + 1, arg);
-    return term_new(0, APP, 0, loc);
-  }
-
-  fn term_new_sup(lab: u32, a: Term, b: Term) -> Term {
-    u32 loc = (u32)heap_alloc(2);
-    heap_write(loc + 0, a);
-    heap_write(loc + 1, b);
-    return term_new(0, SUP, lab, loc);
-  }
-
-  fn term_new_sup_at(loc: u32, lab: u32, a: Term, b: Term) -> Term {
-    heap_write(loc + 0, a);
-    heap_write(loc + 1, b);
-    return term_new(0, SUP, lab, loc);
-  }
-
-  fn term_new_dup(lab: u32, val: Term, body: Term) -> Term {
-    u32 loc = (u32)heap_alloc(2);
-    heap_write(loc + 0, val);
-    heap_write(loc + 1, body);
-    return term_new(0, DUP, lab, loc);
-  }
-
-  fn term_new_dp0(lab: u32, loc: u32) -> Term {
-    return term_new(0, DP0, lab, loc);
-  }
-
-  fn term_new_dp1(lab: u32, loc: u32) -> Term {
-    return term_new(0, DP1, lab, loc);
-  }
-
-  fn term_new_era() -> Term {
-    return term_new(0, ERA, 0, 0);
-  }
-
-  fn term_new_num(val: u32) -> Term {
-    return term_new(0, NUM, 0, val);
-  }
-
-  fn term_new_op2(op: u8, a: Term, b: Term) -> Term {
-    u32 loc = (u32)heap_alloc(2);
-    heap_write(loc + 0, a);
-    heap_write(loc + 1, b);
-    return term_new(0, OP2, op, loc);
-  }
-
-  fn term_new_mat(name: u32, hit: Term, miss: Term) -> Term {
-    u32 loc = (u32)heap_alloc(2);
-    heap_write(loc + 0, hit);
-    heap_write(loc + 1, miss);
-    return term_new(0, MAT, name, loc);
-  }
-
-  fn term_new_swi(num: u32, zero: Term, succ: Term) -> Term {
-    u32 loc = (u32)heap_alloc(2);
-    heap_write(loc + 0, zero);
-    heap_write(loc + 1, succ);
-    return term_new(0, SWI, num, loc);
-  }
-
-  fn term_new_ctr(name: u32, arity: u32, fields: Term*) -> Term {
-    u32 loc = (u32)heap_alloc(arity);
-    for (u32 i = 0; i < arity; i++) {
-      heap_write(loc + i, fields[i]);
-    }
-    return term_new(0, C00 + arity, name, loc);
-  }
-
-  fn term_new_ref(name: u32) -> Term {
-    return term_new(0, REF, name, 0);
-  }
-
-  fn term_new_red(f: Term, g: Term) -> Term {
-    u32 loc = (u32)heap_alloc(2);
-    heap_write(loc + 0, f);
-    heap_write(loc + 1, g);
-    return term_new(0, RED, 0, loc);
-  }
-
-  fn term_new_dry(fun: Term, arg: Term) -> Term {
-    u32 loc = (u32)heap_alloc(2);
-    heap_write(loc + 0, fun);
-    heap_write(loc + 1, arg);
-    return term_new(0, DRY, 0, loc);
-  }
-
-  fn term_new_use(f: Term) -> Term {
-    u32 loc = (u32)heap_alloc(1);
-    heap_write(loc, f);
-    return term_new(0, USE, 0, loc);
-  }
-
-  fn term_new_got(loc: u32) -> Term {
-    return term_new(0, GOT, 0, loc);
-  }
-
-  fn term_new_mov(val: Term, body: Term) -> Term {
-    u32 loc = (u32)heap_alloc(2);
-    heap_write(loc + 0, val);
-    heap_write(loc + 1, body);
-    return term_new(0, MOV, 0, loc);
-  }
-
-  fn term_new_inc(t: Term) -> Term {
-    u32 loc = (u32)heap_alloc(1);
-    heap_write(loc, t);
-    return term_new(0, INC, 0, loc);
-  }
+  
+  sort Expr
+  sort UnaryOp
+  sort BinaryOp
+  sort AssignOp
+  
+  Expr = EIdent(name: String)
+       | EIntLit(value: Int, suffix: String)
+       | EFloatLit(value: String, suffix: String)
+       | ECharLit(value: String)
+       | EStringLit(value: String)
+       | ECompoundLit(type: Type, init: Initializer)
+       
+       // Postfix
+       | EIndex(array: Expr, index: Expr)
+       | ECall(func: Expr, args: List[Expr])
+       | EField(obj: Expr, field: String)
+       | EArrow(ptr: Expr, field: String)
+       | EPostInc(expr: Expr)
+       | EPostDec(expr: Expr)
+       
+       // Unary
+       | EPreInc(expr: Expr)
+       | EPreDec(expr: Expr)
+       | EUnary(op: UnaryOp, expr: Expr)
+       | ESizeof(expr: Expr)
+       | ESizeofType(type: Type)
+       | EAlignof(type: Type)
+       | ECast(type: Type, expr: Expr)
+       
+       // Binary
+       | EBinary(left: Expr, op: BinaryOp, right: Expr)
+       
+       // Ternary
+       | ECond(cond: Expr, then: Expr, else: Expr)
+       
+       // Assignment
+       | EAssign(left: Expr, op: AssignOp, right: Expr)
+       
+       // Comma
+       | EComma(left: Expr, right: Expr)
+       
+       // GNU extensions
+       | EStmtExpr(stmt: Stmt)
+       | EBuiltin(name: String, args: List[Expr])
+  
+  UnaryOp = UAddr     // &
+          | UDeref    // *
+          | UPlus     // +
+          | UNeg      // -
+          | UBitNot   // ~
+          | ULogNot   // !
+  
+  BinaryOp = BMul | BDiv | BMod
+           | BAdd | BSub
+           | BShL | BShR
+           | BLT | BGT | BLE | BGE
+           | BEq | BNE
+           | BAnd
+           | BXor
+           | BOr
+           | BLAnd
+           | BLOr
+  
+  AssignOp = AAssign
+           | AMul | ADiv | AMod
+           | AAdd | ASub
+           | AShL | AShR
+           | AAnd | AXor | AOr
 
   // ===========================================================================
-  // Substitution (heap mutation)
+  // Preprocessor (for completeness)
   // ===========================================================================
-
-  fn heap_subst_var(loc: u32, val: Term) -> void {
-    // Set substitution bit and write value
-    heap_set(loc, term_sub_set(val, 1));
-  }
-
-  fn term_sub_set(t: Term, sub: u8) -> Term {
-    return (t & ~(SUB_MASK << SUB_SHIFT)) | ((u64)sub << SUB_SHIFT);
-  }
-
-  fn term_sub_get(t: Term) -> u8 {
-    return (u8)((t >> SUB_SHIFT) & SUB_MASK);
-  }
+  
+  sort PPDirective
+  
+  PPDirective = PPInclude(path: String, system: Bool)
+              | PPDefine(name: String, params: Option[List[String]], body: String)
+              | PPUndef(name: String)
+              | PPIf(cond: String)
+              | PPIfdef(name: String)
+              | PPIfndef(name: String)
+              | PPElif(cond: String)
+              | PPElse
+              | PPEndif
+              | PPError(msg: String)
+              | PPWarning(msg: String)
+              | PPPragma(content: String)
+              | PPLine(line: Int, file: Option[String])
 
   // ===========================================================================
-  // Book (global definitions)
+  // Grammar: C Syntax
   // ===========================================================================
-
-  static u32* BOOK;
-  static u32 BOOK_CAP = (1 << 24);
-
-  fn book_init() -> void {
-    BOOK = (u32*)calloc(BOOK_CAP, sizeof(u32));
+  
+  grammar TranslationUnit {
+    translation_unit ::= external_decl*
   }
-
-  fn book_set(name: u32, loc: u32) -> void {
-    BOOK[name] = loc;
+  
+  grammar ExternalDecl {
+    external_decl ::= function_def | declaration
+    
+    function_def ::= decl_spec declarator compound_stmt
+    
+    declaration ::= decl_spec init_declarator_list? ";"
   }
-
-  fn book_get(name: u32) -> u32 {
-    return BOOK[name];
+  
+  grammar Stmt {
+    stmt ::= labeled_stmt
+           | compound_stmt
+           | expr_stmt
+           | selection_stmt
+           | iteration_stmt
+           | jump_stmt
+    
+    labeled_stmt ::= IDENT ":" stmt
+                   | "case" const_expr ":" stmt
+                   | "default" ":" stmt
+    
+    compound_stmt ::= "{" block_item* "}"
+    
+    block_item ::= declaration | stmt
+    
+    expr_stmt ::= expr? ";"
+    
+    selection_stmt ::= "if" "(" expr ")" stmt ("else" stmt)?
+                     | "switch" "(" expr ")" stmt
+    
+    iteration_stmt ::= "while" "(" expr ")" stmt
+                     | "do" stmt "while" "(" expr ")" ";"
+                     | "for" "(" for_init? ";" expr? ";" expr? ")" stmt
+    
+    jump_stmt ::= "goto" IDENT ";"
+                | "continue" ";"
+                | "break" ";"
+                | "return" expr? ";"
+  }
+  
+  grammar Expr {
+    expr ::= assignment_expr ("," assignment_expr)*
+    
+    assignment_expr ::= conditional_expr
+                      | unary_expr assign_op assignment_expr
+    
+    conditional_expr ::= logical_or_expr ("?" expr ":" conditional_expr)?
+    
+    logical_or_expr ::= logical_and_expr ("||" logical_and_expr)*
+    logical_and_expr ::= inclusive_or_expr ("&&" inclusive_or_expr)*
+    inclusive_or_expr ::= exclusive_or_expr ("|" exclusive_or_expr)*
+    exclusive_or_expr ::= and_expr ("^" and_expr)*
+    and_expr ::= equality_expr ("&" equality_expr)*
+    equality_expr ::= relational_expr (("==" | "!=") relational_expr)*
+    relational_expr ::= shift_expr (("<" | ">" | "<=" | ">=") shift_expr)*
+    shift_expr ::= additive_expr (("<<" | ">>") additive_expr)*
+    additive_expr ::= mult_expr (("+" | "-") mult_expr)*
+    mult_expr ::= cast_expr (("*" | "/" | "%") cast_expr)*
+    
+    cast_expr ::= "(" type_name ")" cast_expr
+                | unary_expr
+    
+    unary_expr ::= postfix_expr
+                 | "++" unary_expr
+                 | "--" unary_expr
+                 | unary_op cast_expr
+                 | "sizeof" unary_expr
+                 | "sizeof" "(" type_name ")"
+                 | "_Alignof" "(" type_name ")"
+    
+    unary_op ::= "&" | "*" | "+" | "-" | "~" | "!"
+    
+    postfix_expr ::= primary_expr postfix_op*
+    
+    postfix_op ::= "[" expr "]"
+                 | "(" argument_list? ")"
+                 | "." IDENT
+                 | "->" IDENT
+                 | "++"
+                 | "--"
+    
+    primary_expr ::= IDENT
+                   | INT_LIT
+                   | FLOAT_LIT
+                   | CHAR_LIT
+                   | STRING_LIT+
+                   | "(" expr ")"
+                   | generic_selection
+    
+    argument_list ::= assignment_expr ("," assignment_expr)*
+    
+    assign_op ::= "=" | "*=" | "/=" | "%=" | "+=" | "-=" 
+                | "<<=" | ">>=" | "&=" | "^=" | "|="
+  }
+  
+  grammar Type {
+    type_name ::= specifier_qualifier_list abstract_declarator?
+    
+    specifier_qualifier_list ::= (type_specifier | type_qualifier)+
+    
+    type_specifier ::= "void" | "char" | "short" | "int" | "long"
+                     | "float" | "double" | "signed" | "unsigned"
+                     | "_Bool" | "_Complex"
+                     | struct_or_union_specifier
+                     | enum_specifier
+                     | typedef_name
+    
+    type_qualifier ::= "const" | "volatile" | "restrict" | "_Atomic"
+    
+    struct_or_union_specifier ::= ("struct" | "union") (IDENT | IDENT? "{" struct_declaration+ "}")
+    
+    enum_specifier ::= "enum" (IDENT | IDENT? "{" enumerator_list ","? "}")
+    
+    enumerator_list ::= enumerator ("," enumerator)*
+    
+    enumerator ::= IDENT ("=" const_expr)?
+  }
+  
+  grammar Declarator {
+    declarator ::= pointer? direct_declarator
+    
+    pointer ::= ("*" type_qualifier*)+
+    
+    direct_declarator ::= IDENT
+                        | "(" declarator ")"
+                        | direct_declarator "[" array_size? "]"
+                        | direct_declarator "(" parameter_list ")"
+                        | direct_declarator "(" identifier_list? ")"
+    
+    array_size ::= type_qualifier* assignment_expr?
+                 | "static" type_qualifier* assignment_expr
+                 | type_qualifier+ "static" assignment_expr
+                 | type_qualifier* "*"
+    
+    parameter_list ::= parameter_decl ("," parameter_decl)* ("," "...")?
+                     | "..."
+    
+    parameter_decl ::= decl_spec (declarator | abstract_declarator?)
+    
+    abstract_declarator ::= pointer
+                          | pointer? direct_abstract_declarator
+    
+    direct_abstract_declarator ::= "(" abstract_declarator ")"
+                                 | direct_abstract_declarator? "[" array_size? "]"
+                                 | direct_abstract_declarator? "(" parameter_list? ")"
   }
 
   // ===========================================================================
-  // WNF Evaluation (Weak Normal Form)
+  // Lexical Tokens
   // ===========================================================================
-  // Stack-based evaluator using explicit continuation frames.
-  // Enter phase: descend into strict positions, pushing frames.
-  // Apply phase: pop frames and dispatch interactions.
-
-  static Term* WNF_STACK;
-  static u32 WNF_S_POS;
-  static u64 ITRS;  // Interaction counter
-
-  fn wnf_init() -> void {
-    WNF_STACK = (Term*)malloc((1ULL << 20) * sizeof(Term));
-    WNF_S_POS = 0;
-    ITRS = 0;
-  }
-
-  // Main WNF function
-  fn wnf(term: Term) -> Term {
-    Term* stack = WNF_STACK;
-    u32 s_pos = WNF_S_POS;
-    u32 base = s_pos;
-    Term next = term;
-    Term whnf;
-
-  enter:
-    switch (term_tag(next)) {
-      // Already in WHNF
-      case ERA:
-      case NUM:
-      case LAM:
-      case SUP:
-      case NAM:
-      case DRY:
-      case MAT:
-      case SWI:
-      case USE:
-      case C00 ... C16: {
-        whnf = next;
-        goto apply;
-      }
-
-      // Variable: follow substitution
-      case VAR: {
-        u32 loc = term_val(next);
-        Term cell = heap_read(loc);
-        if (term_sub_get(cell)) {
-          next = cell;
-          goto enter;
-        }
-        whnf = next;
-        goto apply;
-      }
-
-      // Application: push frame, descend into function
-      case APP: {
-        u32 loc = term_val(next);
-        Term fun = heap_read(loc);
-        stack[s_pos++] = next;
-        next = fun;
-        goto enter;
-      }
-
-      // Duplication: descend into body
-      case DUP: {
-        u32 loc = term_val(next);
-        Term body = heap_read(loc + 1);
-        next = body;
-        goto enter;
-      }
-
-      // DP0/DP1: push frame, descend into shared expr
-      case DP0:
-      case DP1: {
-        u32 loc = term_val(next);
-        Term val = heap_read(loc);
-        if (term_sub_get(val)) {
-          // Already substituted
-          next = val;
-          goto enter;
-        }
-        stack[s_pos++] = next;
-        next = val;
-        goto enter;
-      }
-
-      // Op2: push frame, descend into left operand
-      case OP2: {
-        u32 loc = term_val(next);
-        Term x = heap_read(loc);
-        stack[s_pos++] = next;
-        next = x;
-        goto enter;
-      }
-
-      // Reference: look up in book
-      case REF: {
-        u32 name = term_ext(next);
-        u32 loc = book_get(name);
-        if (loc != 0) {
-          next = heap_read(loc);
-          goto enter;
-        }
-        whnf = next;
-        goto apply;
-      }
-
-      // Move: descend into body
-      case MOV: {
-        u32 loc = term_val(next);
-        Term body = heap_read(loc + 1);
-        next = body;
-        goto enter;
-      }
-
-      default: {
-        whnf = next;
-        goto apply;
-      }
-    }
-
-  apply:
-    // Pop frames and dispatch interactions
-    while (s_pos > base) {
-      Term frame = stack[--s_pos];
-
-      switch (term_tag(frame)) {
-        // APP frame: (□ arg) - we have function in whnf
-        case APP: {
-          u32 app_loc = term_val(frame);
-          Term arg = heap_read(app_loc + 1);
-
-          switch (term_tag(whnf)) {
-            // APP-LAM: beta reduction
-            case LAM: {
-              ITRS++;
-              u32 lam_loc = term_val(whnf);
-              heap_subst_var(lam_loc, arg);
-              Term body = heap_read(lam_loc);
-              next = body;
-              goto enter;
-            }
-
-            // APP-ERA: erasure absorbs
-            case ERA: {
-              ITRS++;
-              whnf = term_new_era();
-              continue;
-            }
-
-            // APP-SUP: clone argument, distribute application
-            case SUP: {
-              ITRS++;
-              u32 sup_loc = term_val(whnf);
-              u32 lab = term_ext(whnf);
-              Term f = heap_read(sup_loc + 0);
-              Term g = heap_read(sup_loc + 1);
-              // !A &L= arg; &L{(f A₀), (g A₁)}
-              u32 dup_loc = (u32)heap_alloc(4);
-              heap_write(dup_loc + 0, arg);
-              Term dp0 = term_new_dp0(lab, dup_loc);
-              Term dp1 = term_new_dp1(lab, dup_loc);
-              Term app0 = term_new_app(f, dp0);
-              Term app1 = term_new_app(g, dp1);
-              whnf = term_new_sup(lab, app0, app1);
-              continue;
-            }
-
-            // APP-RED: guarded application
-            case RED: {
-              u32 red_loc = term_val(whnf);
-              Term g = heap_read(red_loc + 1);
-              heap_set(app_loc + 0, whnf);
-              stack[s_pos++] = term_new(0, F_APP_RED, 0, app_loc);
-              next = g;
-              goto enter;
-            }
-
-            // APP-MAT/SWI: apply match to argument
-            case MAT:
-            case SWI: {
-              stack[s_pos++] = whnf;
-              next = arg;
-              goto enter;
-            }
-
-            // APP-USE: force and apply
-            case USE: {
-              stack[s_pos++] = whnf;
-              next = arg;
-              goto enter;
-            }
-
-            default: {
-              whnf = term_new_app(whnf, arg);
-              continue;
-            }
-          }
-        }
-
-        // DP0/DP1 frame: duplication projection
-        case DP0:
-        case DP1: {
-          u8 side = (term_tag(frame) == DP0) ? 0 : 1;
-          u32 loc = term_val(frame);
-          u32 lab = term_ext(frame);
-
-          switch (term_tag(whnf)) {
-            // DUP-SUP same label: extract values
-            case SUP: {
-              u32 sup_lab = term_ext(whnf);
-              if (lab == sup_lab) {
-                ITRS++;
-                u32 sup_loc = term_val(whnf);
-                Term a = heap_read(sup_loc + 0);
-                Term b = heap_read(sup_loc + 1);
-                heap_subst_var(loc, side == 0 ? b : a);
-                whnf = side == 0 ? a : b;
-                continue;
-              }
-              // DUP-SUP different label: commute
-              ITRS++;
-              u32 sup_loc = term_val(whnf);
-              Term a = heap_read(sup_loc + 0);
-              Term b = heap_read(sup_loc + 1);
-              // Create nested dups
-              u32 base = (u32)heap_alloc(6);
-              u32 dupA_loc = base;
-              u32 dupB_loc = base + 2;
-              heap_write(dupA_loc, a);
-              heap_write(dupB_loc, b);
-              Term a0 = term_new_dp0(lab, dupA_loc);
-              Term a1 = term_new_dp1(lab, dupA_loc);
-              Term b0 = term_new_dp0(lab, dupB_loc);
-              Term b1 = term_new_dp1(lab, dupB_loc);
-              Term sup0 = term_new_sup(sup_lab, a0, b0);
-              Term sup1 = term_new_sup(sup_lab, a1, b1);
-              heap_subst_var(loc, side == 0 ? sup1 : sup0);
-              whnf = side == 0 ? sup0 : sup1;
-              continue;
-            }
-
-            // DUP-ERA: duplicate erasure
-            case ERA: {
-              ITRS++;
-              heap_subst_var(loc, term_new_era());
-              whnf = term_new_era();
-              continue;
-            }
-
-            // DUP-NUM: duplicate number
-            case NUM: {
-              ITRS++;
-              heap_subst_var(loc, whnf);
-              continue;
-            }
-
-            // DUP-LAM: duplicate lambda
-            case LAM: {
-              ITRS++;
-              u32 lam_loc = term_val(whnf);
-              u32 lam_ext = term_ext(whnf);
-              Term body = heap_read(lam_loc);
-              // Create two new lambdas with cloned bodies
-              u32 base = (u32)heap_alloc(5);
-              u32 lam0_loc = base;
-              u32 lam1_loc = base + 1;
-              u32 dup_body_loc = base + 2;
-              // x ← &L{x0, x1}
-              Term x0 = term_new_var(lam0_loc);
-              Term x1 = term_new_var(lam1_loc);
-              Term x_sup = term_new_sup(lab, x0, x1);
-              heap_subst_var(lam_loc, x_sup);
-              // !B &L= body
-              heap_write(dup_body_loc, body);
-              Term b0 = term_new_dp0(lab, dup_body_loc);
-              Term b1 = term_new_dp1(lab, dup_body_loc);
-              heap_write(lam0_loc, b0);
-              heap_write(lam1_loc, b1);
-              Term new_lam0 = term_new(0, LAM, lam_ext, lam0_loc);
-              Term new_lam1 = term_new(0, LAM, lam_ext, lam1_loc);
-              heap_subst_var(loc, side == 0 ? new_lam1 : new_lam0);
-              whnf = side == 0 ? new_lam0 : new_lam1;
-              continue;
-            }
-
-            default: {
-              // Stuck: create dup node
-              u32 new_loc = (u32)heap_alloc(1);
-              heap_set(new_loc, whnf);
-              heap_subst_var(loc, term_new(0, side == 0 ? DP1 : DP0, lab, new_loc));
-              whnf = term_new(0, side == 0 ? DP0 : DP1, lab, new_loc);
-              continue;
-            }
-          }
-        }
-
-        // MAT/SWI frame: pattern match
-        case MAT:
-        case SWI: {
-          Term mat = frame;
-          u32 mat_loc = term_val(mat);
-          u32 mat_name = term_ext(mat);
-
-          switch (term_tag(whnf)) {
-            // MAT-CTR: match constructor
-            case C00 ... C16: {
-              ITRS++;
-              u32 ctr_name = term_ext(whnf);
-              u32 ctr_loc = term_val(whnf);
-              u32 ctr_arity = term_tag(whnf) - C00;
-              if (mat_name == ctr_name) {
-                // Hit: apply hit branch to constructor fields
-                Term hit = heap_read(mat_loc + 0);
-                for (u32 i = 0; i < ctr_arity; i++) {
-                  Term field = heap_read(ctr_loc + i);
-                  hit = term_new_app(hit, field);
-                }
-                next = hit;
-                goto enter;
-              } else {
-                // Miss: apply miss branch to scrutinee
-                Term miss = heap_read(mat_loc + 1);
-                next = term_new_app(miss, whnf);
-                goto enter;
-              }
-            }
-
-            // SWI-NUM: switch on number
-            case NUM: {
-              ITRS++;
-              u32 num_val = term_val(whnf);
-              u32 swi_val = mat_name;
-              if (num_val == swi_val) {
-                next = heap_read(mat_loc + 0);  // zero case
-                goto enter;
-              } else {
-                Term succ = heap_read(mat_loc + 1);
-                next = term_new_app(succ, term_new_num(num_val - 1));
-                goto enter;
-              }
-            }
-
-            // MAT-ERA: match erasure
-            case ERA: {
-              ITRS++;
-              whnf = term_new_era();
-              continue;
-            }
-
-            // MAT-SUP: distribute match
-            case SUP: {
-              ITRS++;
-              u32 sup_loc = term_val(whnf);
-              u32 lab = term_ext(whnf);
-              Term a = heap_read(sup_loc + 0);
-              Term b = heap_read(sup_loc + 1);
-              Term hit = heap_read(mat_loc + 0);
-              Term miss = heap_read(mat_loc + 1);
-              // Clone match and apply to both branches
-              u32 base = (u32)heap_alloc(4);
-              Term mat0 = term_new_mat(mat_name, hit, miss);
-              Term mat1 = term_new_mat(mat_name, hit, miss);
-              Term app0 = term_new_app(mat0, a);
-              Term app1 = term_new_app(mat1, b);
-              whnf = term_new_sup(lab, app0, app1);
-              continue;
-            }
-
-            default: {
-              whnf = term_new_app(mat, whnf);
-              continue;
-            }
-          }
-        }
-
-        // OP2 frame: binary operation
-        case OP2: {
-          u32 op2_loc = term_val(frame);
-          u8 op = (u8)term_ext(frame);
-          Term y = heap_read(op2_loc + 1);
-
-          switch (term_tag(whnf)) {
-            // First operand is number
-            case NUM: {
-              u32 x_val = term_val(whnf);
-              // Push frame for second operand
-              stack[s_pos++] = term_new(0, F_OP2_NUM, op, x_val);
-              next = y;
-              goto enter;
-            }
-
-            // OP2-SUP: distribute over superposition
-            case SUP: {
-              ITRS++;
-              u32 sup_loc = term_val(whnf);
-              u32 lab = term_ext(whnf);
-              Term a = heap_read(sup_loc + 0);
-              Term b = heap_read(sup_loc + 1);
-              Term op2_a = term_new_op2(op, a, y);
-              Term op2_b = term_new_op2(op, b, y);
-              whnf = term_new_sup(lab, op2_a, op2_b);
-              continue;
-            }
-
-            default: {
-              whnf = term_new_op2(op, whnf, y);
-              continue;
-            }
-          }
-        }
-
-        // F_OP2_NUM frame: second operand of binary op
-        case F_OP2_NUM: {
-          u32 x_val = term_val(frame);
-          u8 op = (u8)term_ext(frame);
-
-          switch (term_tag(whnf)) {
-            // Both operands are numbers: compute
-            case NUM: {
-              ITRS++;
-              u32 y_val = term_val(whnf);
-              u32 result;
-              switch (op) {
-                case OP_ADD: result = x_val + y_val; break;
-                case OP_SUB: result = x_val - y_val; break;
-                case OP_MUL: result = x_val * y_val; break;
-                case OP_DIV: result = y_val ? x_val / y_val : 0; break;
-                case OP_MOD: result = y_val ? x_val % y_val : 0; break;
-                case OP_AND: result = x_val & y_val; break;
-                case OP_OR:  result = x_val | y_val; break;
-                case OP_XOR: result = x_val ^ y_val; break;
-                case OP_LSH: result = x_val << (y_val & 31); break;
-                case OP_RSH: result = x_val >> (y_val & 31); break;
-                case OP_EQ:  result = x_val == y_val ? 1 : 0; break;
-                case OP_NE:  result = x_val != y_val ? 1 : 0; break;
-                case OP_LT:  result = x_val < y_val ? 1 : 0; break;
-                case OP_LE:  result = x_val <= y_val ? 1 : 0; break;
-                case OP_GT:  result = x_val > y_val ? 1 : 0; break;
-                case OP_GE:  result = x_val >= y_val ? 1 : 0; break;
-                default: result = 0;
-              }
-              whnf = term_new_num(result);
-              continue;
-            }
-
-            // Second operand is SUP: distribute
-            case SUP: {
-              ITRS++;
-              u32 sup_loc = term_val(whnf);
-              u32 lab = term_ext(whnf);
-              Term a = heap_read(sup_loc + 0);
-              Term b = heap_read(sup_loc + 1);
-              Term x = term_new_num(x_val);
-              Term op2_a = term_new_op2(op, x, a);
-              Term op2_b = term_new_op2(op, x, b);
-              whnf = term_new_sup(lab, op2_a, op2_b);
-              continue;
-            }
-
-            default: {
-              whnf = term_new_op2(op, term_new_num(x_val), whnf);
-              continue;
-            }
-          }
-        }
-
-        // USE frame: force and apply
-        case USE: {
-          u32 use_loc = term_val(frame);
-          Term f = heap_read(use_loc);
-
-          switch (term_tag(whnf)) {
-            case ERA: {
-              ITRS++;
-              whnf = term_new_era();
-              continue;
-            }
-
-            case SUP: {
-              ITRS++;
-              u32 sup_loc = term_val(whnf);
-              u32 lab = term_ext(whnf);
-              Term a = heap_read(sup_loc + 0);
-              Term b = heap_read(sup_loc + 1);
-              // !F &L= f; &L{(use F₀ a), (use F₁ b)}
-              u32 base = (u32)heap_alloc(2);
-              heap_write(base, f);
-              Term f0 = term_new_dp0(lab, base);
-              Term f1 = term_new_dp1(lab, base);
-              Term use0 = term_new_app(term_new_use(f0), a);
-              Term use1 = term_new_app(term_new_use(f1), b);
-              whnf = term_new_sup(lab, use0, use1);
-              continue;
-            }
-
-            default: {
-              next = term_new_app(f, whnf);
-              goto enter;
-            }
-          }
-        }
-
-        // GOT frame: move interaction
-        case GOT: {
-          u32 loc = term_val(frame);
-
-          switch (term_tag(whnf)) {
-            case ERA:
-            case NUM: {
-              ITRS++;
-              heap_subst_var(loc, whnf);
-              continue;
-            }
-
-            case LAM: {
-              ITRS++;
-              u32 lam_loc = term_val(whnf);
-              u32 lam_ext = term_ext(whnf);
-              u32 new_loc = (u32)heap_alloc(2);
-              heap_write(new_loc, heap_read(lam_loc));
-              heap_write(new_loc + 1, term_new_got(new_loc));
-              Term new_lam = term_new(0, LAM, lam_ext, new_loc);
-              heap_subst_var(loc, new_lam);
-              whnf = new_lam;
-              continue;
-            }
-
-            case SUP: {
-              ITRS++;
-              u32 sup_loc = term_val(whnf);
-              u32 lab = term_ext(whnf);
-              Term a = heap_read(sup_loc + 0);
-              Term b = heap_read(sup_loc + 1);
-              u32 base = (u32)heap_alloc(4);
-              heap_write(base + 0, a);
-              heap_write(base + 1, b);
-              Term got_a = term_new_got(base + 0);
-              Term got_b = term_new_got(base + 1);
-              Term new_sup = term_new_sup_at(base + 2, lab, got_a, got_b);
-              heap_subst_var(loc, new_sup);
-              whnf = new_sup;
-              continue;
-            }
-
-            default: {
-              u32 new_loc = (u32)heap_alloc(1);
-              heap_set(new_loc, whnf);
-              Term got = term_new_got(new_loc);
-              heap_subst_var(loc, got);
-              whnf = got;
-              continue;
-            }
-          }
-        }
-
-        default: {
-          continue;
-        }
-      }
-    }
-
-    WNF_S_POS = s_pos;
-    return whnf;
+  
+  grammar Tokens {
+    IDENT      ::= [a-zA-Z_][a-zA-Z0-9_]*
+    INT_LIT    ::= [0-9]+ [uUlL]*
+                 | 0[xX][0-9a-fA-F]+ [uUlL]*
+                 | 0[bB][01]+ [uUlL]*
+                 | 0[0-7]+ [uUlL]*
+    FLOAT_LIT  ::= [0-9]+ "." [0-9]* ([eE] [+-]? [0-9]+)? [fFlL]?
+                 | [0-9]* "." [0-9]+ ([eE] [+-]? [0-9]+)? [fFlL]?
+                 | [0-9]+ [eE] [+-]? [0-9]+ [fFlL]?
+    CHAR_LIT   ::= "'" char_char+ "'"
+    STRING_LIT ::= "\"" string_char* "\""
   }
 
   // ===========================================================================
-  // Normalize (Strong Normal Form)
+  // C11 Features
   // ===========================================================================
-
-  fn normalize(term: Term) -> Term {
-    term = wnf(term);
-
-    switch (term_tag(term)) {
-      case LAM: {
-        u32 loc = term_val(term);
-        Term body = normalize(heap_read(loc));
-        heap_write(loc, body);
-        return term;
-      }
-
-      case APP: {
-        u32 loc = term_val(term);
-        Term fun = normalize(heap_read(loc + 0));
-        Term arg = normalize(heap_read(loc + 1));
-        heap_write(loc + 0, fun);
-        heap_write(loc + 1, arg);
-        return term;
-      }
-
-      case SUP: {
-        u32 loc = term_val(term);
-        Term a = normalize(heap_read(loc + 0));
-        Term b = normalize(heap_read(loc + 1));
-        heap_write(loc + 0, a);
-        heap_write(loc + 1, b);
-        return term;
-      }
-
-      case C00 ... C16: {
-        u32 loc = term_val(term);
-        u32 arity = term_tag(term) - C00;
-        for (u32 i = 0; i < arity; i++) {
-          Term field = normalize(heap_read(loc + i));
-          heap_write(loc + i, field);
-        }
-        return term;
-      }
-
-      default: {
-        return term;
-      }
-    }
-  }
+  
+  sort C11Feature
+  
+  C11Feature = Generic(selector: Expr, assocs: List[GenericAssoc])
+             | StaticAssert(cond: Expr, msg: String)
+             | Alignas(spec: Either[Type, Expr])
+             | Noreturn
+             | ThreadLocal
+             | Atomic(type: Type)
+  
+  sort GenericAssoc
+  GenericAssoc = GenericType(type: Type, expr: Expr)
+               | GenericDefault(expr: Expr)
 
   // ===========================================================================
-  // Runtime Entry Points
+  // Attributes (C23 / GNU)
   // ===========================================================================
-
-  fn hvm_init() -> void {
-    heap_init();
-    book_init();
-    wnf_init();
-  }
-
-  fn hvm_run(name: u32) -> Term {
-    u32 loc = book_get(name);
-    if (loc == 0) {
-      fprintf(stderr, "Unknown definition: %u\n", name);
-      exit(1);
-    }
-    Term term = heap_read(loc);
-    return normalize(term);
-  }
-
-  fn hvm_stats() -> void {
-    printf("Interactions: %llu\n", ITRS);
-    printf("Heap used: %llu words\n", HEAP_NEXT);
-  }
+  
+  sort Attribute
+  
+  Attribute = Attr(name: String, args: List[Expr])
+            | AttrDeprecated(msg: Option[String])
+            | AttrNodiscard(msg: Option[String])
+            | AttrMaybe_unused
+            | AttrFallthrough
+            | AttrNoreturn
+            | AttrPacked
+            | AttrAligned(align: Option[Expr])
+            | AttrSection(name: String)
+            | AttrVisibility(vis: String)
+            | AttrWeak
+            | AttrAlias(target: String)
+            | AttrFormat(archetype: String, fmt_idx: Int, first_arg: Int)
+            | AttrNonnull(args: List[Int])
+            | AttrPure
+            | AttrConst
+            | AttrMalloc
+            | AttrWarnUnusedResult
 
 }
-
-// =============================================================================
-// Example: Main function
-// =============================================================================
-
-/*
-int main(int argc, char** argv) {
-  hvm_init();
-
-  // Build: @main = ((λx.x) 42)
-  u32 lam_loc = heap_alloc(1);
-  heap_write(lam_loc, term_new_var(lam_loc));  // identity body
-  Term id = term_new(0, LAM, 0, lam_loc);
-  Term num = term_new_num(42);
-  Term app = term_new_app(id, num);
-
-  // Store in book
-  u32 main_loc = heap_alloc(1);
-  heap_write(main_loc, app);
-  book_set(hash("main"), main_loc);
-
-  // Run
-  Term result = hvm_run(hash("main"));
-
-  // Print result
-  printf("Result: %u\n", term_val(result));
-  hvm_stats();
-
-  return 0;
-}
-*/
