@@ -1,0 +1,267 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// harp.phi - The Celtic Harp, Reborn
+// ═══════════════════════════════════════════════════════════════════════════════
+// In honor of Alan Stivell, who brought the Celtic harp back from the edge
+// of extinction and electrified a tradition.
+//
+// "The harp is the soul of Brittany made audible."
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// === THE CELTIC MODES ===
+// Before major/minor, there were the old modes
+
+Mode := ADT {
+    Ionian : Mode,      // Major scale (C-C)
+    Dorian : Mode,      // Minor with raised 6th (D-D) - Scottish/Irish
+    Phrygian : Mode,    // Spanish/Breton dark (E-E)
+    Lydian : Mode,      // Raised 4th, dreamy (F-F)
+    Mixolydian : Mode,  // Dominant, Celtic dance (G-G) - STIVELL'S FAVORITE
+    Aeolian : Mode,     // Natural minor (A-A)
+    Locrian : Mode      // Diminished, rare (B-B)
+}
+
+// Intervals in semitones from root
+Def mode_intervals : Mode -> List Int
+    mode_intervals Ionian     := [0, 2, 4, 5, 7, 9, 11]
+    mode_intervals Dorian     := [0, 2, 3, 5, 7, 9, 10]
+    mode_intervals Phrygian   := [0, 1, 3, 5, 7, 8, 10]
+    mode_intervals Lydian     := [0, 2, 4, 6, 7, 9, 11]
+    mode_intervals Mixolydian := [0, 2, 4, 5, 7, 9, 10]  // The Celtic sound
+    mode_intervals Aeolian    := [0, 2, 3, 5, 7, 8, 10]
+    mode_intervals Locrian    := [0, 1, 3, 5, 6, 8, 10]
+
+// === THE PHYSICS OF HARP STRINGS ===
+// Unlike piano hammers, harp strings are plucked and ring freely
+
+Type StringLength := Real    // Meters
+Type Tension := Real         // Newtons
+Type LinearDensity := Real   // kg/m
+
+// The fundamental frequency of a vibrating string
+// f = (1/2L) * sqrt(T/μ)
+Def string_frequency : StringLength -> Tension -> LinearDensity -> Frequency
+    string_frequency L T μ := (1.0 / (2.0 * L)) * sqrt(T / μ)
+
+// === HARP STRING MATERIALS ===
+StringMaterial := ADT {
+    Gut : StringMaterial,        // Traditional sheep gut - warm, organic
+    Bronze : StringMaterial,     // Ancient Celtic - bright, bell-like
+    Nylon : StringMaterial,      // Modern - clear, sustained
+    Wire : StringMaterial        // Irish wire-strung - brilliant, long decay
+}
+
+Def material_decay : StringMaterial -> Real
+    material_decay Gut    := 2.0    // Quick, warm decay
+    material_decay Bronze := 4.0    // Long, bright ring
+    material_decay Nylon  := 3.0    // Medium sustain
+    material_decay Wire   := 6.0    // Very long sustain (Stivell's choice)
+
+Def material_brightness : StringMaterial -> Real
+    material_brightness Gut    := 0.3   // Mellow
+    material_brightness Bronze := 0.8   // Bright
+    material_brightness Nylon  := 0.5   // Neutral
+    material_brightness Wire   := 0.9   // Brilliant
+
+// === THE CELTIC HARP ===
+Record CelticHarp := {
+    strings : Int,               // 34 for traditional, up to 47 for concert
+    lowest_note : Note,          // Usually C2 or G1
+    material : StringMaterial,
+    levers : Bool                // Lever harp vs pedal harp
+}
+
+// Stivell's Telenn - the Breton harp he revived
+Const telenn : CelticHarp := {
+    strings = 34,
+    lowest_note = G 1,
+    material = Wire,
+    levers = True
+}
+
+// === PLUCKED STRING SYNTHESIS ===
+// Karplus-Strong with Celtic character
+
+Type DelayLine := List Sample
+
+// The pluck: initial noise burst shaped by finger position
+Def pluck_excitation : Real -> Int -> List Sample
+    pluck_excitation brightness n_samples :=
+        let noise = [random() * 2 - 1 | _ <- [1..n_samples]] in
+        let filter_coef = brightness in
+        -- Low-pass filter the noise based on pluck position
+        lpf filter_coef noise
+
+// Karplus-Strong string model
+Def ks_string : Frequency -> Real -> Duration -> Time -> Sample
+    ks_string freq decay dur t :=
+        let period = floor(44100.0 / freq) in
+        let damping = 0.996 + (decay / 100.0) in  -- Material affects damping
+        -- Feedback comb filter with averaging
+        ks_iterate period damping t
+
+// === CELTIC ORNAMENTATION ===
+// The soul of Celtic music lies in the ornaments
+
+Ornament := ADT {
+    Cut : Ornament,              -- Quick grace note from above
+    Tap : Ornament,              -- Grace note from below  
+    Roll : Ornament,             -- Rapid alternation (like a trill)
+    Slide : Ornament,            -- Glissando between notes
+    Triplet : Ornament,          -- Three notes in the time of two
+    Bisbigliando : Ornament      -- Harp-specific: rapid alternation same pitch
+}
+
+Def apply_ornament : Ornament -> Note -> Duration -> List (Note, Duration)
+    apply_ornament Cut note dur := 
+        [(raise_semitone note, dur * 0.1), (note, dur * 0.9)]
+    apply_ornament Tap note dur := 
+        [(lower_semitone note, dur * 0.1), (note, dur * 0.9)]
+    apply_ornament Roll note dur :=
+        let n = 5 in
+        [(if even i then note else raise_semitone note, dur / n) | i <- [1..n]]
+    apply_ornament Slide note dur :=
+        -- Glissando: all notes between
+        let steps = 7 in
+        [(transpose note i, dur / steps) | i <- [0..steps-1]]
+    apply_ornament Triplet note dur :=
+        [(note, dur / 3), (note, dur / 3), (note, dur / 3)]
+    apply_ornament Bisbigliando note dur :=
+        -- Rapid re-plucking on same string
+        [(note, dur / 8) | _ <- [1..8]]
+
+// === CELTIC RHYTHM PATTERNS ===
+// Traditional dance rhythms
+
+Rhythm := ADT {
+    Jig : Rhythm,        -- 6/8, bouncy (Irish)
+    Reel : Rhythm,       -- 4/4, driving (Scottish)
+    Strathspey : Rhythm, -- 4/4, dotted "Scotch snap"
+    AnDro : Rhythm,      -- Breton circle dance (Stivell!)
+    Gavotte : Rhythm,    -- Breton, 4/4 with pickup
+    Plinn : Rhythm       -- Breton, hypnotic repetition
+}
+
+Def rhythm_pattern : Rhythm -> List (Beat, Velocity)
+    rhythm_pattern Jig := 
+        [(0, 0.9), (0.33, 0.5), (0.67, 0.6), 
+         (1, 0.8), (1.33, 0.5), (1.67, 0.6)]  -- ONE-and-a TWO-and-a
+    rhythm_pattern Reel := 
+        [(0, 0.9), (0.5, 0.6), (1, 0.8), (1.5, 0.6)]
+    rhythm_pattern AnDro :=
+        -- The hypnotic Breton an dro rhythm
+        [(0, 0.9), (0.75, 0.7), (1.5, 0.8), (2.25, 0.6)]
+    rhythm_pattern Gavotte :=
+        [(0, 0.7), (1, 0.9), (2, 0.7), (3, 0.8)]  -- Pickup on beat 4
+    rhythm_pattern Plinn :=
+        -- Repetitive, trance-inducing
+        [(0, 0.9), (1, 0.7), (2, 0.9), (3, 0.7)]
+
+// === ELECTRIC HARP (STIVELL'S INNOVATION) ===
+// Alan Stivell electrified the Celtic harp
+
+Record ElectricHarp := {
+    acoustic : CelticHarp,
+    pickup : PickupType,
+    effects : List Effect
+}
+
+PickupType := ADT {
+    Piezo : PickupType,          -- Under-saddle, bright
+    Magnetic : PickupType,       -- Like guitar, warm
+    Microphone : PickupType      -- Natural but feedback-prone
+}
+
+Effect := ADT {
+    Reverb : Real -> Effect,     -- Space (0-1)
+    Delay : Real -> Real -> Effect,  -- Time, feedback
+    Chorus : Real -> Effect,     -- Width
+    Distortion : Real -> Effect, -- Gain (Stivell went there!)
+    Flanger : Real -> Effect     -- Rate (psychedelic Celtic)
+}
+
+// Stivell's live rig circa 1972
+Const stivell_electric : ElectricHarp := {
+    acoustic = telenn,
+    pickup = Piezo,
+    effects = [
+        Reverb 0.6,
+        Delay 0.3 0.4,
+        Chorus 0.3
+    ]
+}
+
+// === RENDER CELTIC HARP ===
+Def harp_tone : CelticHarp -> Note -> Velocity -> Duration -> Time -> Sample
+    harp_tone harp note vel dur t :=
+        let f = freq note in
+        let decay = material_decay harp.material in
+        let bright = material_brightness harp.material in
+        -- Karplus-Strong with material characteristics
+        let fundamental = ks_string f decay dur t in
+        -- Add sympathetic resonance (strings ring together)
+        let sympathetic = 0.1 * ks_string (f * 2) decay dur t in
+        -- Brightness controls harmonic content
+        let harmonics = bright * 0.2 * sin(τ * f * 3 * t) * exp(-t * 4) in
+        vel * (fundamental + sympathetic + harmonics) * exp(-t / decay)
+
+// === BRETON TUNE STRUCTURE ===
+// Traditional Breton music forms
+
+Form := ADT {
+    Kan_ha_diskan : Form,    -- Call and response singing
+    Suite : Form,            -- Multiple dances in sequence
+    Gwerz : Form,            -- Ballad (slow, sad)
+    Ton_simpl : Form         -- Simple tune for dancing
+}
+
+// A complete Breton suite
+Record BretonSuite := {
+    name : String,
+    form : Form,
+    mode : Mode,
+    root : Note,
+    tempo : BPM,
+    parts : List Part
+}
+
+Record Part := {
+    rhythm : Rhythm,
+    melody : List (Note, Duration, Maybe Ornament),
+    repeats : Int
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// "Tri Martolod" - The Three Sailors (Stivell's breakthrough)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+Def tri_martolod : BretonSuite
+    tri_martolod := {
+        name = "Tri Martolod",
+        form = Kan_ha_diskan,
+        mode = Mixolydian,      -- G Mixolydian (F natural)
+        root = G 4,
+        tempo = 112,
+        parts = [
+            { rhythm = AnDro,
+              melody = [
+                -- "Tri mar-to-lod yaouank..."
+                (G 4, Quarter, Nothing),
+                (A 4, Quarter, Just Cut),
+                (B 4, Quarter, Nothing),
+                (A 4, Quarter, Nothing),
+                (G 4, Half, Just Bisbigliando),
+                -- Response
+                (D 5, Quarter, Nothing),
+                (C 5, Quarter, Just Cut),
+                (B 4, Quarter, Nothing),
+                (A 4, Quarter, Nothing),
+                (G 4, Half, Nothing)
+              ],
+              repeats = 4 }
+        ]
+    }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// "The harp was dying. I didn't save it - I just reminded people it was alive."
+//                                                        — Alan Stivell
+// ═══════════════════════════════════════════════════════════════════════════════
