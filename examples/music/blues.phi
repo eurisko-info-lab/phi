@@ -1,0 +1,308 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// blues.phi - The Blues, From the Delta to the Soul
+// ═══════════════════════════════════════════════════════════════════════════════
+// The blues isn't just a scale or a chord progression.
+// It's a conversation between pain and hope, expressed through bent notes
+// and the spaces between the beats.
+//
+// "The blues is the roots. Everything else is the fruits."
+//                                          — Willie Dixon
+// ═══════════════════════════════════════════════════════════════════════════════
+
+Import "piano.phi"
+
+// === THE BLUE NOTES ===
+// The blues scale contains "blue notes" - pitches that exist between
+// the cracks of the Western 12-tone system
+
+Type Cents := Real  // 1/100 of a semitone
+
+// The blues doesn't use equal temperament - it bends
+BlueNote := ADT {
+    Root : BlueNote,
+    FlatThird : Cents -> BlueNote,    // Bent between minor and major 3rd
+    Fourth : BlueNote,
+    FlatFifth : Cents -> BlueNote,    // The "devil's interval", bent
+    Fifth : BlueNote,
+    FlatSeventh : Cents -> BlueNote,  // Dominant 7th, but flexible
+    Octave : BlueNote
+}
+
+// Standard blues scale intervals (but remember: they BEND)
+Def blues_intervals : List (Int, Cents)
+    blues_intervals := [
+        (0, 0),      // Root
+        (3, -30),    // Flat 3rd, bent down ~30 cents (between Eb and E)
+        (5, 0),      // Perfect 4th
+        (6, +20),    // Flat 5th (tritone), bent up slightly
+        (7, 0),      // Perfect 5th
+        (10, -20)    // Flat 7th, bent down
+    ]
+
+// Microtonal pitch calculation
+Def blue_pitch : Frequency -> Int -> Cents -> Frequency
+    blue_pitch root semitones cents :=
+        root * 2^((semitones * 100 + cents) / 1200)
+
+// === THE 12-BAR BLUES ===
+// The fundamental structure - a conversation in three acts
+
+Type Bar := Int  // 1-12
+Type Chord := (Note, ChordQuality)
+
+ChordQuality := ADT {
+    Dom7 : ChordQuality,      // The blues chord: 1-3-5-b7
+    Dom9 : ChordQuality,      // More sophisticated: add 9th
+    Dim : ChordQuality,       // Passing chord
+    Min7 : ChordQuality       // Minor blues variation
+}
+
+// The I-IV-V progression, but it's all dominant 7ths
+// This "wrong" voice leading IS the blues sound
+Def twelve_bar : Note -> Bar -> Chord
+    twelve_bar root 1  := (root, Dom7)           // I7
+    twelve_bar root 2  := (root, Dom7)           // I7
+    twelve_bar root 3  := (root, Dom7)           // I7
+    twelve_bar root 4  := (root, Dom7)           // I7
+    twelve_bar root 5  := (transpose root 5, Dom7)   // IV7
+    twelve_bar root 6  := (transpose root 5, Dom7)   // IV7
+    twelve_bar root 7  := (root, Dom7)           // I7
+    twelve_bar root 8  := (root, Dom7)           // I7
+    twelve_bar root 9  := (transpose root 7, Dom7)   // V7
+    twelve_bar root 10 := (transpose root 5, Dom7)   // IV7 (the turnaround begins)
+    twelve_bar root 11 := (root, Dom7)           // I7
+    twelve_bar root 12 := (transpose root 7, Dom7)   // V7 (turnaround to repeat)
+
+// === BLUES VARIATIONS ===
+BluesForm := ADT {
+    DeltaBlues : BluesForm,       // Raw, acoustic, Robert Johnson
+    ChicagoBlues : BluesForm,     // Electric, Muddy Waters, amplified
+    TexasBlues : BluesForm,       // T-Bone Walker, jazzy, horn sections
+    WestCoastBlues : BluesForm,   // Smooth, B.B. King
+    JumpBlues : BluesForm,        // Upbeat, Louis Jordan, proto-rock
+    SoulBlues : BluesForm         // Bobby Blue Bland, deep feeling
+}
+
+// Quick-change blues (bar 2 goes to IV)
+Def quick_change : Note -> Bar -> Chord
+    quick_change root 2 := (transpose root 5, Dom7)  // IV7 in bar 2
+    quick_change root bar := twelve_bar root bar     // else standard
+
+// Minor blues
+Def minor_blues : Note -> Bar -> Chord
+    minor_blues root bar :=
+        let (note, _) = twelve_bar root bar in
+        (note, Min7)
+
+// === THE SHUFFLE ===
+// The rhythmic foundation - swung eighth notes
+
+Type Swing := Real  // 0.5 = straight, 0.67 = triplet swing
+
+Def shuffle_ratio : BluesForm -> Swing
+    shuffle_ratio DeltaBlues := 0.62      // Loose, human
+    shuffle_ratio ChicagoBlues := 0.67    // Tight triplet feel
+    shuffle_ratio TexasBlues := 0.58      // Laid back
+    shuffle_ratio WestCoastBlues := 0.60  // Smooth
+    shuffle_ratio JumpBlues := 0.55       // Almost straight, driving
+    shuffle_ratio SoulBlues := 0.63       // Deep pocket
+
+// The shuffle pattern
+Def shuffle : Swing -> Beat -> Duration -> List (Beat, Duration)
+    shuffle swing beat dur :=
+        let long = dur * swing in
+        let short = dur * (1 - swing) in
+        [(beat, long), (beat + long, short)]
+
+// === CALL AND RESPONSE ===
+// The blues is a conversation
+
+Structure := ADT {
+    Call : Structure,         // First statement (bars 1-2)
+    Response : Structure,     // Repeat/variation (bars 3-4)
+    Resolution : Structure    // Answer/conclusion (bars 5-6)
+}
+
+// AAB lyric structure
+// "Woke up this morning..."        (A - bars 1-4)
+// "Woke up this morning..."        (A - bars 5-8, repeat)
+// "And my baby was gone"           (B - bars 9-12, resolution)
+
+Record BluesVerse := {
+    call : List (Note, Duration),      // The question
+    response : List (Note, Duration),  // Echo or variation
+    resolution : List (Note, Duration) // The answer
+}
+
+// === BLUES EXPRESSION ===
+// The vocabulary of feeling
+
+Expression := ADT {
+    Bend : Cents -> Duration -> Expression,   // Pitch bend up/down
+    Vibrato : Real -> Real -> Expression,     -- Rate, depth
+    Slide : Note -> Note -> Expression,       -- Glissando
+    Hammer : Expression,                      -- Hammer-on
+    Pull : Expression,                        -- Pull-off  
+    Ghost : Expression,                       -- Barely there note
+    Choke : Expression,                       -- Cut short
+    Growl : Expression                        -- Vocal/guitar growl
+}
+
+// The bend is the heart of blues guitar
+Def bend_curve : Cents -> Duration -> Time -> Cents
+    bend_curve target dur t :=
+        -- Slow rise, slight overshoot, settle
+        let progress = t / dur in
+        if progress < 0.7 then
+            target * (progress / 0.7)^0.8        -- Slow rise
+        else if progress < 0.85 then
+            target * 1.05                        -- Overshoot
+        else
+            target                               -- Settle
+
+// === BLUES GUITAR VOICINGS ===
+// Open position dominant 7th chords
+
+Record GuitarVoicing := {
+    strings : List (Maybe Int),   -- Fret numbers (Nothing = muted)
+    root_string : Int             -- Which string has the root
+}
+
+Def open_E7 : GuitarVoicing
+    open_E7 := { strings = [Just 0, Just 2, Just 0, Just 1, Just 0, Just 0], root_string = 6 }
+
+Def open_A7 : GuitarVoicing  
+    open_A7 := { strings = [Nothing, Just 0, Just 2, Just 0, Just 2, Just 0], root_string = 5 }
+
+Def open_B7 : GuitarVoicing
+    open_B7 := { strings = [Nothing, Just 2, Just 1, Just 2, Just 0, Just 2], root_string = 5 }
+
+// === THE BLUES BOX ===
+// The pentatonic "box" position every guitarist learns
+
+Type Fret := Int
+Type String := Int  -- 1 = high E, 6 = low E
+
+Record BoxPosition := {
+    root_fret : Fret,
+    pattern : List (String, List Fret)  -- String -> playable frets
+}
+
+-- First position minor pentatonic (the "BB King box")
+Def blues_box_1 : Fret -> BoxPosition
+    blues_box_1 root := {
+        root_fret = root,
+        pattern = [
+            (6, [root, root + 3]),
+            (5, [root, root + 2]),
+            (4, [root, root + 2]),
+            (3, [root, root + 2]),
+            (2, [root, root + 3]),
+            (1, [root, root + 3])
+        ]
+    }
+
+// === BLUES PIANO ===
+// Left hand bass patterns
+
+BassPattern := ADT {
+    Walking : BassPattern,        -- Chromatic walk-up
+    Boogie : BassPattern,         -- The boogie-woogie pattern
+    Shuffle : BassPattern,        -- Shuffle bass
+    Stride : BassPattern          -- Jump between bass and chord
+}
+
+Def boogie_woogie : Note -> List (Note, Duration)
+    boogie_woogie root :=
+        -- The classic 8-to-the-bar pattern
+        let r = root in
+        let third = transpose root 4 in
+        let fifth = transpose root 7 in
+        let sixth = transpose root 9 in
+        [(r, Eighth), (third, Eighth), (fifth, Eighth), (sixth, Eighth),
+         (fifth, Eighth), (third, Eighth), (fifth, Eighth), (sixth, Eighth)]
+
+// === DYNAMICS OF SORROW AND JOY ===
+// The emotional arc
+
+Emotion := ADT {
+    Sorrow : Real -> Emotion,     -- 0 = melancholy, 1 = devastation  
+    Defiance : Real -> Emotion,   -- Standing up to pain
+    Longing : Real -> Emotion,    -- Missing what's gone
+    Humor : Real -> Emotion,      -- Laughing at trouble
+    Hope : Real -> Emotion,       -- Light at the end
+    Resignation : Real -> Emotion -- Accepting fate
+}
+
+-- Blues dynamics: quiet verses, loud choruses
+-- But also: the power of restraint
+Def emotional_velocity : Emotion -> Velocity
+    emotional_velocity (Sorrow level) := 0.3 + level * 0.2   -- Quiet suffering
+    emotional_velocity (Defiance level) := 0.7 + level * 0.25 -- Building power
+    emotional_velocity (Longing level) := 0.4 + level * 0.15  -- Aching
+    emotional_velocity (Humor level) := 0.6                   -- Light touch
+    emotional_velocity (Hope level) := 0.5 + level * 0.3      -- Rising
+    emotional_velocity (Resignation level) := 0.35            -- Fading
+
+// === THE TURNAROUND ===
+// Bars 11-12: the signature move that brings it back around
+
+Turnaround := ADT {
+    Standard : Turnaround,        -- I - V
+    Chromatic : Turnaround,       -- I - bVII - VI - V
+    WalkDown : Turnaround,        -- Bass walks down chromatically
+    StormyMonday : Turnaround     -- The T-Bone Walker turnaround
+}
+
+Def turnaround_chords : Turnaround -> Note -> List Chord
+    turnaround_chords Standard root := 
+        [(root, Dom7), (transpose root 7, Dom7)]
+    turnaround_chords Chromatic root := 
+        [(root, Dom7), (transpose root 10, Dom7), 
+         (transpose root 9, Dom7), (transpose root 7, Dom7)]
+    turnaround_chords WalkDown root :=
+        [(root, Dom7), (transpose root (-1), Dim),
+         (transpose root (-2), Dom7), (transpose root 7, Dom7)]
+
+// === RENDER BLUES ===
+
+Record BluesSong := {
+    key : Note,
+    form : BluesForm,
+    tempo : BPM,
+    verses : Int,
+    turnaround : Turnaround,
+    swing : Swing
+}
+
+Def delta_blues_in_E : BluesSong
+    delta_blues_in_E := {
+        key = E 2,
+        form = DeltaBlues,
+        tempo = 80,
+        verses = 3,
+        turnaround = WalkDown,
+        swing = 0.62
+    }
+
+Def chicago_shuffle : BluesSong
+    chicago_shuffle := {
+        key = A 2,
+        form = ChicagoBlues,
+        tempo = 120,
+        verses = 4,
+        turnaround = Standard,
+        swing = 0.67
+    }
+
+// === THE LESSON ===
+// "Everybody wants to know why I sing the blues..."
+
+// The blues is not a rigid form - it's a language.
+// These are the words. The grammar is feel.
+// The meaning? That's yours to discover.
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// "The blues is easy to play, but hard to feel."
+//                                      — Jimi Hendrix
+// ═══════════════════════════════════════════════════════════════════════════════
