@@ -1,0 +1,631 @@
+; ═══════════════════════════════════════════════════════════════════════════════
+; SHAMAN.PHI - The Doors of Perception: Rock Poetry From First Principles
+; ═══════════════════════════════════════════════════════════════════════════════
+;
+; "There are things known and things unknown and in between are the doors."
+;                                                        — Aldous Huxley
+;
+; This is not about one man. It's about the archetype:
+; The poet who becomes the shaman.
+; The performer who becomes possessed.
+; The voice that speaks from the other side.
+;
+; "Expose yourself to your deepest fear; after that, fear has no power."
+;
+; ═══════════════════════════════════════════════════════════════════════════════
+
+Import "piano.phi"   ; The keys, the organ sound
+Import "blues.phi"   ; The roots beneath the poetry
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION I: THE ARCHETYPE                                                    │
+; │ Every generation has one: the poet who channels the darkness.              │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Archetype
+  "The shamanic rock poet - a pattern that recurs"
+  (Dionysus         ; The god of wine, ecstasy, theater
+    "Tear me apart and I'll come back wilder")
+  (Orpheus          ; The singer who went to hell and returned
+    "I'll sing you back from the dead")
+  (Rimbaud          ; The boy who deranged all senses
+    "The poet makes himself a seer by a long, immense, and reasoned derangement")
+  (Blake            ; The visionary who saw angels in trees
+    "If the doors of perception were cleansed, everything would appear infinite")
+  (Shaman           ; The wounded healer
+    "I died so you don't have to"))
+
+(deftype Voice
+  "Not just singing - channeling"
+  (whisper          ; Intimate, dangerous, close to the ear
+    (breath . presence)
+    (secrets . told-only-to-you))
+  (croon            ; Seductive, hypnotic
+    (velvet . darkness)
+    (invitation . descent))
+  (speak            ; Poetry, not melody
+    (incantation . spell)
+    (rhythm . trance))
+  (howl             ; The primal scream
+    (release . everything)
+    (boundary . shattered))
+  (silence          ; The pause that terrifies
+    (void . staring-back)
+    (tension . unbearable)))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION II: THE MUSICAL ARCHITECTURE                                        │
+; │ Simple foundations for complex journeys.                                    │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Instrument
+  "The tools of the ritual"
+  (organ
+    "The church sound made profane"
+    (vox-continental . "Cheap, reedy, perfect")
+    (cathedral-reverb . "Sacred space, unholy content"))
+  (guitar
+    "Not virtuosic - atmospheric"
+    (sparse . "Space between notes")
+    (feedback . "The sound eating itself")
+    (flamenco . "Spanish ghosts"))
+  (drums
+    "Tribal, jazz, both"
+    (ride-cymbal . "The hiss of time")
+    (tom-rolls . "Approaching storm")
+    (primal-pulse . "The heartbeat underneath"))
+  (bass
+    "The anchor in chaos"
+    (walking . "Jazz DNA")
+    (drone . "Meditation foundation")))
+
+(deftype Form
+  "Song structures that break and rebuild"
+  (verse-chorus
+    "The familiar, subverted"
+    (verse . "The story, the seduction")
+    (chorus . "The hook, the release"))
+  (extended-jam
+    "Where the shaman does the real work"
+    (build . "Tension accumulates")
+    (peak . "The breakthrough moment")
+    (dissolution . "Coming back changed"))
+  (spoken-word
+    "Poetry over music, not sung"
+    (cinema-of-mind . "Images conjured")
+    (hypnotic-rhythm . "Words as drums"))
+  (suite
+    "Multiple movements, one journey"
+    (overture . "Statement of themes")
+    (development . "The exploration")
+    (recapitulation . "Return transformed")))
+
+; The Modal Palette
+; Not major/minor binary but ancient modes
+(deftype Mode
+  "Scales from before the tonal prison"
+  (dorian
+    "Minor but with light"
+    (melancholy . "But not defeated")
+    (jazzy . "Sophisticated darkness"))
+  (phrygian
+    "Spanish, Moorish, ancient"
+    (exotic . "The Orient of the mind")
+    (threatening . "The flattened second"))
+  (mixolydian
+    "The blues mode refined"
+    (earthy . "But elevated")
+    (psychedelic . "The trip mode"))
+  (locrian
+    "The forbidden mode"
+    (unstable . "No home")
+    (demonic . "The diminished root")))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION III: THE POETRY ENGINE                                              │
+; │ Words that burn.                                                            │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Image
+  "The lexicon of the shamanic poet"
+  (elemental
+    (fire . "Transformation, destruction, light")
+    (water . "The unconscious, drowning, birth")
+    (earth . "The grave, the body, the mother")
+    (air . "Breath, spirit, freedom"))
+  (threshold
+    (door . "The passage between states")
+    (window . "Seeing through")
+    (mirror . "The self confronted")
+    (road . "The journey, destination unknown"))
+  (animal
+    (snake . "Wisdom, danger, shedding skin")
+    (lizard . "Cold blood, ancient brain")
+    (horse . "Power, wildness, escape")
+    (bird . "The soul, transcendence"))
+  (body
+    (eye . "Perception, the third eye")
+    (blood . "Life, sacrifice, lineage")
+    (skin . "Boundary, touch, vulnerability")
+    (brain . "Prison or vehicle"))
+  (temporal
+    (night . "The time of truth")
+    (dawn . "After the ordeal")
+    (ancient . "Before this corrupt age")
+    (end . "The apocalypse, personal or cosmic")))
+
+(deftype Technique
+  "How to make words dangerous"
+  (juxtaposition
+    "Beauty and horror in one line"
+    (the-soft-parade . "Gentle words, violent meaning"))
+  (repetition
+    "Mantra, hypnosis, insistence"
+    (the-chant . "Until meaning dissolves"))
+  (surrealism
+    "Logic of dreams"
+    (impossible-images . "That feel more true than reality"))
+  (direct-address
+    "You. I'm talking to you."
+    (accusation . "What have you done?")
+    (seduction . "Come with me")
+    (command . "Wake up"))
+  (persona
+    "I am not me when I perform"
+    (the-lizard-king . "Reptile royalty")
+    (the-killer . "On the road")
+    (the-erotic-politician . "Sex and power merged")))
+
+(defun generate-image [archetype mood intensity]
+  "Create a poetic image from the lexicon"
+  (let* ([element (select-element mood)]
+         [threshold (if (> intensity 0.7) 'door 'window)]
+         [animal (case archetype
+                   ('Dionysus 'snake)
+                   ('Orpheus 'bird)
+                   ('Shaman 'lizard)
+                   (_ 'horse))]
+         [body (if (eq mood 'ecstatic) 'eye 'blood)]
+         [time (case intensity
+                 ((0.0 0.3) 'dawn)
+                 ((0.3 0.7) 'night)
+                 ((0.7 1.0) 'end))])
+    (weave element threshold animal body time)))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION IV: THE PERFORMANCE                                                 │
+; │ The stage as ritual space.                                                  │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Performance
+  "Not entertainment - transformation"
+  (theater-of-cruelty
+    "Artaud's vision realized"
+    (confront . "The audience cannot look away")
+    (implicate . "You are not innocent")
+    (transform . "Leave different than you came"))
+  (dionysian-ritual
+    "The ancient rite"
+    (intoxication . "Chemical or musical")
+    (ecstasy . "Standing outside oneself")
+    (sparagmos . "The tearing apart")
+    (rebirth . "Reassembled, renewed"))
+  (shamanistic-journey
+    "The trance voyage"
+    (descent . "Into the underworld")
+    (ordeal . "The battle with demons")
+    (return . "With the gift of vision")))
+
+(deftype Stage-State
+  "The performer's consciousness"
+  (possessed
+    "Something else is speaking through me")
+  (present
+    "Hyper-aware of everything")
+  (absent
+    "I've left, only the performance remains")
+  (ecstatic
+    "Boundary between self and other dissolves"))
+
+(defrecord Set
+  "The ritual structure"
+  (opening    . "The invocation")
+  (building   . "Accumulating energy")
+  (peak       . "The breakthrough")
+  (descent    . "Coming down")
+  (encore     . "The gift after the gift"))
+
+; The Dynamics of Danger
+(deftype Danger
+  "What makes performance alive"
+  (unpredictability
+    "They don't know what I'll do next"
+    "I don't know what I'll do next")
+  (transgression
+    "Crossing the line"
+    "Making them complicit")
+  (vulnerability
+    "Exposing the wound"
+    "Inviting destruction")
+  (silence
+    "The refusal to perform"
+    "Making them wait"
+    "Making them uncomfortable"))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION V: THE ORGAN SOUND                                                  │
+; │ The Vox Continental: sacred made profane.                                   │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype OrganVoice
+  "The cheap combo organ that defined a sound"
+  (drawbar-settings
+    "The recipe for that reedy tone"
+    (fundamental . 8)
+    (second . 4)
+    (third . 2)
+    (fourth . 1))
+  (vibrato
+    "The nervous shimmer"
+    (rate . 6.0)     ; Hz
+    (depth . 0.3))   ; semitones
+  (percussion
+    "The attack click"
+    (second-harmonic . true)
+    (decay . fast)))
+
+(defun organ-tone [freq duration]
+  "Generate the combo organ sound"
+  (let* ([t (linspace 0 duration (* sample-rate duration))]
+         [fundamental (sin (* 2 pi freq t))]
+         [second (sin (* 2 pi (* 2 freq) t) 0.5)]
+         [third (sin (* 2 pi (* 3 freq) t) 0.25)]
+         [combined (+ fundamental second third)]
+         [vibrato (* (sin (* 2 pi 6 t)) 0.02)]
+         [modulated (* combined (+ 1 vibrato))]
+         [percussion (* (exp (* -10 t)) (sin (* 2 pi (* 2 freq) t)) 0.3)]
+         [output (+ modulated percussion)]
+         [env (adsr t 0.01 0.1 0.7 0.3)])
+    (* output env)))
+
+; Classic organ riffs
+(deftype OrganFigure
+  "Recurring patterns"
+  (bass-line
+    "Left hand walking"
+    (root-fifth . "Simple power")
+    (chromatic-walk . "Tension builder"))
+  (chord-stab
+    "Punctuation"
+    (on-beat . "Driving")
+    (syncopated . "Pushing forward"))
+  (arpeggiated
+    "Circular motion"
+    (ascending . "Building")
+    (descending . "Releasing"))
+  (sustained
+    "The drone beneath"
+    (cluster . "Dissonant bed")
+    (fifth . "Open, ancient")))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION VI: THE EXTENDED COMPOSITION                                        │
+; │ Where the shaman does the real work.                                        │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Movement
+  "Sections of the longer work"
+  (overture
+    "Statement of intent"
+    (tempo . moderate)
+    (dynamic . building)
+    (mode . mixolydian))
+  (verse-section
+    "The poetry"
+    (tempo . flexible)
+    (dynamic . intimate-to-explosive)
+    (mode . dorian))
+  (instrumental-break
+    "The musicians speak"
+    (tempo . accelerating)
+    (dynamic . building)
+    (mode . phrygian))
+  (spoken-interlude
+    "The cinema of mind"
+    (tempo . rubato)
+    (dynamic . whisper)
+    (mode . none))
+  (climax
+    "The breakthrough"
+    (tempo . frantic)
+    (dynamic . maximum)
+    (mode . locrian))
+  (resolution
+    "Return transformed"
+    (tempo . slow)
+    (dynamic . quiet)
+    (mode . major)))
+
+(defun compose-suite [theme duration-minutes]
+  "Structure a shamanic journey"
+  (let* ([total-beats (* duration-minutes 60 tempo)]
+         [sections
+          (list
+           (overture       . 0.15)   ; 15% of piece
+           (verse-section  . 0.20)
+           (instrumental   . 0.15)
+           (spoken         . 0.10)
+           (verse-section  . 0.15)
+           (climax         . 0.15)
+           (resolution     . 0.10))])
+    (map (lambda (section)
+           (let* ([name (car section)]
+                  [proportion (cdr section)]
+                  [beats (* total-beats proportion)])
+             (generate-section name theme beats)))
+         sections)))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION VII: THE SPOKEN WORD                                                │
+; │ Poetry over music - the unique contribution.                                │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Delivery
+  "How to speak the poems"
+  (incantatory
+    "Spell-casting rhythm"
+    (cadence . regular)
+    (volume . building)
+    (effect . hypnotic))
+  (conversational
+    "As if to a lover or friend"
+    (cadence . natural)
+    (volume . intimate)
+    (effect . seductive))
+  (prophetic
+    "The voice of revelation"
+    (cadence . irregular)
+    (volume . sudden-shifts)
+    (effect . terrifying))
+  (stream-of-consciousness
+    "Unfiltered transmission"
+    (cadence . chaotic)
+    (volume . variable)
+    (effect . disorienting)))
+
+(deftype Backing
+  "What the band does during spoken sections"
+  (drone
+    "Sustained tones"
+    (organ . held-chord)
+    (guitar . feedback)
+    (bass . pedal-tone)
+    (drums . none))
+  (minimal-pulse
+    "Just enough rhythm"
+    (bass . quarter-notes)
+    (drums . kick-only)
+    (organ . sparse))
+  (building-storm
+    "Growing intensity"
+    (all . crescendo)
+    (direction . toward-explosion))
+  (silence
+    "Just the voice"
+    (nothing . everything)))
+
+(defun spoken-section [text delivery backing duration]
+  "Generate a spoken word passage"
+  (let* ([syllables (count-syllables text)]
+         [pace (/ syllables duration)]
+         [backing-track (generate-backing backing duration)]
+         [dynamics (delivery-envelope delivery duration)])
+    (mix voice-track backing-track dynamics)))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION VIII: THE DESCENT                                                   │
+; │ Going down to come back up.                                                 │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Underworld
+  "The place the shaman visits"
+  (personal-hell
+    "Your own demons"
+    (fear . "What you won't look at")
+    (shame . "What you've done")
+    (desire . "What you won't admit"))
+  (collective-unconscious
+    "The shared darkness"
+    (archetypes . "The patterns that possess us")
+    (ancestral-trauma . "What was done to us")
+    (shadow . "The rejected self"))
+  (cosmic-void
+    "Beyond the personal"
+    (meaninglessness . "The abyss")
+    (infinity . "Too much to bear")
+    (dissolution . "The ego melts")))
+
+(deftype Return
+  "What the shaman brings back"
+  (vision
+    "I saw something")
+  (wound
+    "I was changed by the ordeal")
+  (gift
+    "I have something for you")
+  (warning
+    "Don't follow me"
+    "Or do - if you dare"))
+
+(defun shamanic-journey [performer duration]
+  "The structure of the transformative performance"
+  (sequence
+    (invoke    ; Call the spirits
+      (organ-drone 'Am duration/8)
+      (voice 'incantatory "I am here"))
+    (descend   ; Go down
+      (tempo 'accelerating)
+      (dynamic 'building)
+      (mode 'phrygian->locrian))
+    (ordeal    ; Face the demons
+      (improvisation 'maximum)
+      (risk 'everything)
+      (duration 'until-breakthrough))
+    (return    ; Come back
+      (tempo 'decelerating)
+      (dynamic 'fading)
+      (mode 'locrian->major))
+    (gift      ; Share the vision
+      (voice 'prophetic)
+      (silence 'profound))))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION IX: THE IMPLEMENTATION                                              │
+; │ For phi-autonomous: how to generate shamanic rock.                          │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(defmodule ShamanicSynthesis
+  "Audio generation for the psychedelic"
+
+  (defun generate-organ [freq duration vibrato-depth]
+    "The combo organ sound"
+    (let* ([t (time-array duration)]
+           [vib (* vibrato-depth (sin (* 6 2 pi t)))]
+           [base-freq (* freq (+ 1 vib))]
+           [wave (+ (sin (* 2 pi base-freq t))
+                    (* 0.5 (sin (* 4 pi base-freq t)))
+                    (* 0.25 (sin (* 6 pi base-freq t))))]
+           [perc (* (exp (* -15 t)) (sin (* 4 pi freq t)))]
+           [env (adsr t 0.02 0.1 0.7 0.5)])
+      (* (+ wave perc) env)))
+
+  (defun generate-drone [root duration]
+    "The sustaining bed"
+    (let* ([t (time-array duration)]
+           [fifth (* root 1.5)]
+           [r (sin (* 2 pi root t))]
+           [f (sin (* 2 pi fifth t))]
+           [slow-pulse (* 0.1 (sin (* 0.2 2 pi t)))])
+      (* (+ r f) (+ 0.5 slow-pulse))))
+
+  (defun generate-guitar-feedback [freq duration intensity]
+    "Controlled chaos"
+    (let* ([t (time-array duration)]
+           [base (sin (* 2 pi freq t))]
+           [harmonics (sum (map (lambda (n)
+                                  (* (/ intensity n)
+                                     (sin (* 2 pi (* n freq) t))))
+                                (range 2 8)))]
+           [noise (* intensity (random-normal (length t)))]
+           [feedback (+ base harmonics (* 0.1 noise))])
+      (* feedback (envelope 'slow-build duration))))
+
+  (defun shamanic-composition [key tempo minutes]
+    "Generate a complete shamanic piece"
+    (let* ([duration (* minutes 60)]
+           [sections (compose-suite key duration)]
+           [audio (reduce append-audio '() sections)])
+      (normalize audio)))
+
+  (defun ritual-performance [seed-theme]
+    "Generate a unique performance"
+    (let* ([archetype (random-select Archetype)]
+           [mode (random-select Mode)]
+           [form (random-select Form)]
+           [danger-level (random 0.5 1.0)])
+      (compose
+        (set-archetype archetype)
+        (set-mode mode)
+        (set-form form)
+        (set-danger danger-level)
+        (generate-performance)))))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION X: THE LEGACY                                                       │
+; │ What survives the flame.                                                    │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Legacy
+  "What the shamanic poet leaves behind"
+  (the-recordings
+    "Captured lightning"
+    (imperfect . "But alive")
+    (eternal . "Because temporary"))
+  (the-poems
+    "Words on the page"
+    (surviving . "The voice that spoke them")
+    (transformed . "New meanings in new mouths"))
+  (the-archetype
+    "The pattern that recurs"
+    (every-generation . "Has their own")
+    (same-fire . "Different vessel"))
+  (the-door
+    "The opening made"
+    (still-open . "For those who dare")
+    (invitation . "Step through")))
+
+(defconst THE-TEACHING
+  "What the shaman knows:
+
+   1. The door is real.
+      Between the known and unknown, there is a passage.
+      Most people walk past it every day.
+      The poet's job is to point.
+
+   2. Darkness is necessary.
+      You cannot have light without shadow.
+      The descent is required for the return.
+      Going down is going through.
+
+   3. The performance is the ritual.
+      Not entertainment but transformation.
+      The audience is not watching - they are participating.
+      Everyone leaves changed or no one does.
+
+   4. The body is the instrument.
+      Voice, breath, movement, presence.
+      The ego dies so something else can speak.
+      Possession is permission.
+
+   5. Beauty and terror are one.
+      The sublime includes both.
+      The ecstatic moment is also the moment of dissolution.
+      This is why we fear what we most desire.
+
+   6. Death is the teacher.
+      Not the enemy but the advisor.
+      The awareness of ending creates meaning.
+      Live as though you were already dead.
+
+   7. The work destroys the worker.
+      The flame consumes the candle.
+      Some burn out, some fade away.
+      Choose your destruction wisely.
+
+   To be a shaman is not a career choice.
+   It is a calling that may kill you.
+   But what is the alternative?
+   To live without ever having been alive?
+
+   The door is open.
+   The night is waiting.
+   The only question:
+   Are you coming?")
+
+; ═══════════════════════════════════════════════════════════════════════════════
+; "People are afraid of themselves, of their own reality;
+;  their feelings most of all. People talk about how great love is,
+;  but that's bullshit. Love hurts. Feelings are disturbing.
+;  People are taught that pain is evil and dangerous.
+;  How can they deal with love if they're afraid to feel?"
+; ═══════════════════════════════════════════════════════════════════════════════
