@@ -3,10 +3,6 @@
 
 use std::fs;
 use std::process::Command;
-use std::path::Path;
-use crate::instr::{Instr, CodeBlock};
-use crate::store::Store;
-use crate::hash::Hash;
 
 /// CUDA code generator
 pub struct CudaCompiler {

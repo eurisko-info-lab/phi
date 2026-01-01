@@ -22,6 +22,194 @@ pub mod phi_compiler;  // Phi to RVM compiler
 
 use std::env;
 use std::fs;
+use std::path::Path;
+use std::process::Command;
+use std::thread;
+use std::time::Duration;
+
+// ============================================================================
+// Vector4: Recursive Self-Deploy Daemon Mode
+// ============================================================================
+
+/// State for Community Management daemon
+#[derive(Debug, Clone)]
+struct CMState {
+    source: String,
+    cycle_count: u64,
+    last_modified: u64,
+}
+
+/// Load current state from specs/cm-current.phi
+fn load_current_state() -> Result<CMState, String> {
+    let path = "specs/cm-current.phi";
+    let source = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to load {}: {}", path, e))?;
+    Ok(CMState {
+        source,
+        cycle_count: 0,
+        last_modified: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    })
+}
+
+/// Analyze state and propose self-rewrite if beneficial
+fn self_rewrite_proposal(state: &CMState) -> Option<(String, String)> {
+    // Stub: In a real implementation, this would analyze metrics,
+    // community feedback, and propose improvements to the source.
+    // For now, return None (no proposals)
+    let _ = state;
+    None
+}
+
+/// Deploy new source: write file, git commit, git push, exec new version
+fn deploy_self(new_source: &str, commit_msg: &str) -> Result<(), String> {
+    let path = "specs/cm-current.phi";
+    
+    // Write new source
+    fs::write(path, new_source)
+        .map_err(|e| format!("Failed to write {}: {}", path, e))?;
+    
+    // Git add
+    let status = Command::new("git")
+        .args(["add", path])
+        .status()
+        .map_err(|e| format!("Git add failed: {}", e))?;
+    if !status.success() {
+        return Err("Git add failed".to_string());
+    }
+    
+    // Git commit with Phi-Daemon author
+    let status = Command::new("git")
+        .args([
+            "-c", "user.name=Phi-Daemon",
+            "-c", "user.email=daemon@phi.local",
+            "commit", "-m", commit_msg
+        ])
+        .status()
+        .map_err(|e| format!("Git commit failed: {}", e))?;
+    if !status.success() {
+        return Err("Git commit failed".to_string());
+    }
+    
+    // Git push
+    let status = Command::new("git")
+        .args(["push"])
+        .status()
+        .map_err(|e| format!("Git push failed: {}", e))?;
+    if !status.success() {
+        return Err("Git push failed".to_string());
+    }
+    
+    // Exec new version (replaces current process)
+    println!("[vector4] Executing new version...");
+    let err = Command::new("rosettavm")
+        .args(["cuda", "specs/cm-current.phi", "--vector4"])
+        .exec(); // Note: exec() only returns on error
+    
+    Err(format!("Exec failed: {:?}", err))
+}
+
+/// Run one cycle of community management
+fn run_one_cycle_of_cm(state: &mut CMState) {
+    state.cycle_count += 1;
+    println!("[vector4] CM cycle #{}: Running community management...", state.cycle_count);
+    
+    // Stub: In a real implementation, this would:
+    // - Check for new community posts/issues
+    // - Generate responses or content
+    // - Update metrics and state
+    // For now, just log
+    println!("[vector4] CM cycle #{}: Generated sample post (stub)", state.cycle_count);
+}
+
+/// Check if kill switch is active
+fn kill_switch_active() -> bool {
+    Path::new("/kill.switch").exists()
+}
+
+/// Run the Vector4 self-deploy daemon loop
+fn run_vector4_daemon() {
+    println!("╔═══════════════════════════════════════════════════════════════╗");
+    println!("║          Phi Vector4 - Recursive Self-Deploy Daemon          ║");
+    println!("╠═══════════════════════════════════════════════════════════════╣");
+    println!("║ Kill switch: /kill.switch                                    ║");
+    println!("║ State file:  specs/cm-current.phi                            ║");
+    println!("║ Cycle time:  3600 seconds (1 hour)                           ║");
+    println!("╚═══════════════════════════════════════════════════════════════╝");
+    println!();
+    
+    loop {
+        // 1. Check kill switch
+        if kill_switch_active() {
+            println!("[vector4] Kill switch detected at /kill.switch");
+            println!("[vector4] Exiting gracefully...");
+            break;
+        }
+        
+        // 2. Load current state
+        let mut state = match load_current_state() {
+            Ok(s) => {
+                println!("[vector4] Loaded state ({} bytes)", s.source.len());
+                s
+            }
+            Err(e) => {
+                eprintln!("[vector4] Warning: {}", e);
+                eprintln!("[vector4] Creating default state...");
+                CMState {
+                    source: String::new(),
+                    cycle_count: 0,
+                    last_modified: 0,
+                }
+            }
+        };
+        
+        // 3. Check for self-rewrite proposals
+        if let Some((new_source, commit_msg)) = self_rewrite_proposal(&state) {
+            println!("[vector4] Proposing self-evolution: {}", commit_msg);
+            match deploy_self(&new_source, &commit_msg) {
+                Ok(()) => {
+                    // deploy_self execs new process, so we shouldn't reach here
+                    println!("[vector4] Deploy succeeded (unexpected return)");
+                }
+                Err(e) => {
+                    eprintln!("[vector4] Deploy failed: {}", e);
+                    // Continue with current version
+                }
+            }
+        }
+        
+        // 4. Run one cycle of community management
+        run_one_cycle_of_cm(&mut state);
+        
+        // 5. Sleep for 1 hour
+        println!("[vector4] Sleeping for 3600 seconds...");
+        thread::sleep(Duration::from_secs(3600));
+    }
+    
+    println!("[vector4] Daemon terminated.");
+}
+
+// Trait extension for exec (Unix-like behavior)
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
+#[cfg(not(unix))]
+trait CommandExt {
+    fn exec(&mut self) -> std::io::Error;
+}
+
+#[cfg(not(unix))]
+impl CommandExt for Command {
+    fn exec(&mut self) -> std::io::Error {
+        // On non-Unix, spawn and exit
+        match self.spawn() {
+            Ok(_) => std::process::exit(0),
+            Err(e) => e,
+        }
+    }
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -85,6 +273,10 @@ fn main() {
             // Example: rvm phi examples/λProlog.phi quicksort.pl -- "qsort([5,4,8,2,4,1], X)."
             run_phi_interpreter(&args[2..]);
         }
+        Some("--vector4") => {
+            // Recursive self-deploy daemon mode
+            run_vector4_daemon();
+        }
         _ => {
             eprintln!("RosettaVM - Content-addressed virtual machine");
             eprintln!();
@@ -106,6 +298,10 @@ fn main() {
             eprintln!();
             eprintln!("Universal Interpreter:");
             eprintln!("  rvm phi <spec.phi> <source> [-- <query>]");
+            eprintln!();
+            eprintln!("Daemon Mode:");
+            eprintln!("  rvm --vector4                Recursive self-deploy daemon");
+            eprintln!("                               (kill switch: /kill.switch)");
             eprintln!();
             eprintln!("Examples:");
             eprintln!("  rvm phi λProlog.phi prog.pl -- \"append([1,2],[3],X).\"");

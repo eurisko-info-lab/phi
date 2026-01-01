@@ -16,7 +16,8 @@ pub struct CudaCodegen {
     func_arities: HashMap<Hash, u8>,
     /// Entry point hash
     entry_hash: Option<Hash>,
-    /// Global data
+    /// Global data (reserved for future use)
+    #[allow(dead_code)]
     globals: Vec<String>,
     /// String table
     strings: Vec<String>,
@@ -108,7 +109,7 @@ impl CudaCodegen {
         code
     }
 
-    fn compile_instr(&mut self, instr: &Instr, pc: usize, total: usize) -> String {
+    fn compile_instr(&mut self, instr: &Instr, pc: usize, _total: usize) -> String {
         match instr {
             // Stack operations
             Instr::Push(lit) => {

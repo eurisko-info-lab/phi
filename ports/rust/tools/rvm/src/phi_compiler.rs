@@ -86,9 +86,11 @@ pub struct PhiCompiler {
     next_local: u32,
     /// Generated code
     code: Vec<Instr>,
-    /// Function table for forward references
+    /// Function table for forward references (reserved)
+    #[allow(dead_code)]
     functions: HashMap<String, Hash>,
-    /// Label counter for jumps
+    /// Label counter for jumps (reserved)
+    #[allow(dead_code)]
     label_counter: usize,
 }
 
@@ -127,6 +129,7 @@ impl PhiCompiler {
         self.code.iter().map(|i| format!("{:?}", i)).collect()
     }
 
+    #[allow(dead_code)]
     fn fresh_label(&mut self) -> usize {
         self.label_counter += 1;
         self.label_counter
@@ -297,7 +300,7 @@ impl PhiCompiler {
                     self.code.push(Instr::Dup);
                     
                     // Test pattern - stores result on stack
-                    let fail_jump_idx = self.code.len();
+                    let _fail_jump_idx = self.code.len();
                     self.emit_pattern_test(pattern);
                     
                     // If pattern failed, record jump position
