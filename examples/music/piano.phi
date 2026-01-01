@@ -1,0 +1,172 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// piano.phi - A Piano Built from First Principles
+// ═══════════════════════════════════════════════════════════════════════════════
+// "Give a man a fish, he eats for a day.
+//  Teach a man to build the piano, he makes music forever."
+//
+// This defines not just a piano sound, but the mathematics of vibrating strings,
+// harmonic series, and the physics that make a piano a piano.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// === PHYSICAL CONSTANTS ===
+Const A4 : Frequency := 440.0           // Concert pitch
+Const φ  : Real := 1.618033988749       // Golden ratio (nature's harmony)
+Const τ  : Real := 6.283185307179       // Full circle (2π)
+
+// === THE MATHEMATICS OF PITCH ===
+// Equal temperament: each semitone is 2^(1/12) apart
+Type Semitone := Int                     // Offset from A4
+Type Octave := Int                       // Octave number (4 = middle)
+Type Frequency := Real                   // Hz
+
+// The fundamental equation of Western music
+Def pitch : Semitone -> Frequency
+    pitch n := A4 * 2^(n/12)
+
+// Named notes as semitone offsets from A4
+Note := ADT {
+    C : Octave -> Semitone
+    Cs : Octave -> Semitone    // C#
+    D : Octave -> Semitone
+    Ds : Octave -> Semitone
+    E : Octave -> Semitone
+    F : Octave -> Semitone
+    Fs : Octave -> Semitone
+    G : Octave -> Semitone
+    Gs : Octave -> Semitone
+    A : Octave -> Semitone
+    As : Octave -> Semitone
+    B : Octave -> Semitone
+}
+
+// Calculate semitone from note
+Def semitone : Note -> Semitone
+    semitone (C oct) := (oct - 4) * 12 - 9
+    semitone (Cs oct) := (oct - 4) * 12 - 8
+    semitone (D oct) := (oct - 4) * 12 - 7
+    semitone (Ds oct) := (oct - 4) * 12 - 6
+    semitone (E oct) := (oct - 4) * 12 - 5
+    semitone (F oct) := (oct - 4) * 12 - 4
+    semitone (Fs oct) := (oct - 4) * 12 - 3
+    semitone (G oct) := (oct - 4) * 12 - 2
+    semitone (Gs oct) := (oct - 4) * 12 - 1
+    semitone (A oct) := (oct - 4) * 12
+    semitone (As oct) := (oct - 4) * 12 + 1
+    semitone (B oct) := (oct - 4) * 12 + 2
+
+// Note to frequency
+Def freq : Note -> Frequency
+    freq note := pitch (semitone note)
+
+// === THE PHYSICS OF A VIBRATING STRING ===
+// A piano string produces a fundamental frequency plus overtones
+// The harmonic series: f, 2f, 3f, 4f, ...
+
+Type Harmonic := Int                     // Which harmonic (1 = fundamental)
+Type Amplitude := Real                   // 0.0 to 1.0
+Type Time := Real                        // Seconds
+Type Sample := Real                      // Audio sample value
+
+// The harmonic series with natural decay
+Def harmonic_amplitude : Harmonic -> Amplitude
+    harmonic_amplitude n := 1.0 / (n^1.5)   // Higher harmonics decay faster
+
+// === THE WAVEFORM ===
+// A single sinusoid
+Def sine : Frequency -> Time -> Sample
+    sine f t := sin(τ * f * t)
+
+// Piano tone: sum of harmonics with characteristic timbre
+Def piano_tone : Frequency -> Time -> Sample
+    piano_tone f t := Σ(n, 1, 8, harmonic_amplitude(n) * sine(n * f, t))
+
+// === THE ENVELOPE (ADSR) ===
+// Attack-Decay-Sustain-Release shapes the sound over time
+Type Duration := Real
+
+Record Envelope := {
+    attack : Duration,      // Time to reach peak
+    decay : Duration,       // Time to reach sustain level  
+    sustain : Amplitude,    // Held amplitude
+    release : Duration      // Time to fade after key release
+}
+
+// Piano envelope: quick attack, long decay
+Const piano_env : Envelope := {
+    attack = 0.005,
+    decay = 0.1,
+    sustain = 0.7,
+    release = 0.3
+}
+
+// Apply envelope to time
+Def envelope : Envelope -> Duration -> Time -> Amplitude
+    envelope env dur t :=
+        if t < env.attack then
+            t / env.attack                                    // Attack phase
+        else if t < env.attack + env.decay then
+            1.0 - (1.0 - env.sustain) * (t - env.attack) / env.decay  // Decay
+        else if t < dur then
+            env.sustain                                       // Sustain
+        else if t < dur + env.release then
+            env.sustain * (1.0 - (t - dur) / env.release)    // Release
+        else
+            0.0                                               // Silent
+
+// === THE COMPLETE PIANO KEY ===
+// Combines waveform, envelope, and velocity sensitivity
+
+Type Velocity := Real  // 0.0 to 1.0 (how hard the key is pressed)
+
+Def piano_key : Note -> Velocity -> Duration -> Time -> Sample
+    piano_key note vel dur t :=
+        let f = freq note in
+        let amp = envelope piano_env dur t in
+        let tone = piano_tone f t in
+        vel * amp * tone
+
+// === THE 88 KEYS ===
+// A full piano from A0 to C8
+Type KeyNumber := Int  // 1 to 88
+
+Def key_to_note : KeyNumber -> Note
+    key_to_note k := 
+        let semitones = k - 49 in  // Key 49 = A4
+        // Convert semitone offset back to Note type
+        note_from_semitone semitones
+
+// === PEDALS ===
+// The sustain pedal lifts all dampers
+Type Pedal := Bool
+
+Def with_sustain : Pedal -> Duration -> Duration
+    with_sustain True dur := dur + 2.0    // Extended ring
+    with_sustain False dur := dur
+
+// === THE PIANO INSTRUMENT ===
+Record Piano := {
+    sample_rate : Real,        // Samples per second (44100 Hz)
+    keys : List KeyNumber,     // Which keys exist (1-88)
+    tuning : Frequency,        // A4 tuning (440 Hz standard)
+    temperament : Semitone -> Frequency  // Tuning system
+}
+
+// Standard concert piano
+Const grand_piano : Piano := {
+    sample_rate = 44100.0,
+    keys = [1..88],
+    tuning = 440.0,
+    temperament = pitch
+}
+
+// === RENDER A NOTE ===
+// Generate samples for a single note
+Def render_note : Piano -> Note -> Velocity -> Duration -> List Sample
+    render_note piano note vel dur :=
+        let n_samples = floor((dur + piano_env.release) * piano.sample_rate) in
+        [piano_key note vel dur (i / piano.sample_rate) | i <- [0..n_samples]]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// "The piano is built. Now teach the child to play."
+// See: player.phi
+// ═══════════════════════════════════════════════════════════════════════════════

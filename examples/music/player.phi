@@ -1,0 +1,214 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// player.phi - The Piano Player: From Score to Sound
+// ═══════════════════════════════════════════════════════════════════════════════
+// "A man's job is to teach his kids to build the piano AND the piano's player."
+//
+// This defines a music notation system and an interpreter that reads scores
+// and produces sound. The player doesn't just play - it understands music.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+Import "piano.phi"
+
+// === MUSICAL TIME ===
+Type Beat := Real                        // Position in beats
+Type BPM := Real                         // Beats per minute
+Type TimeSignature := (Int, Int)         // e.g., (4, 4) or (3, 4)
+
+Def beat_to_seconds : BPM -> Beat -> Time
+    beat_to_seconds bpm beat := beat * 60.0 / bpm
+
+// === NOTE VALUES ===
+// Duration as fractions of a whole note
+NoteValue := ADT {
+    Whole : NoteValue,           // 4 beats in 4/4
+    Half : NoteValue,            // 2 beats
+    Quarter : NoteValue,         // 1 beat
+    Eighth : NoteValue,          // 1/2 beat
+    Sixteenth : NoteValue,       // 1/4 beat
+    Dotted : NoteValue -> NoteValue,  // 1.5x duration
+    Triplet : NoteValue -> NoteValue  // 2/3x duration
+}
+
+Def note_value_beats : NoteValue -> Beat
+    note_value_beats Whole := 4.0
+    note_value_beats Half := 2.0
+    note_value_beats Quarter := 1.0
+    note_value_beats Eighth := 0.5
+    note_value_beats Sixteenth := 0.25
+    note_value_beats (Dotted nv) := 1.5 * note_value_beats nv
+    note_value_beats (Triplet nv) := (2.0/3.0) * note_value_beats nv
+
+// === MUSICAL EVENTS ===
+// What can happen in a piece of music
+
+Event := ADT {
+    PlayNote : Note -> NoteValue -> Velocity -> Event,
+    Rest : NoteValue -> Event,
+    Chord : List Note -> NoteValue -> Velocity -> Event,
+    Sustain : Bool -> Event,          // Pedal on/off
+    Tempo : BPM -> Event,             // Tempo change
+    Dynamic : Velocity -> Event       // Volume change (pp, p, mp, mf, f, ff)
+}
+
+// === THE SCORE ===
+// A piece of music is a sequence of events with timing
+
+Record ScoreEvent := {
+    beat : Beat,                      // When it happens
+    event : Event                     // What happens
+}
+
+Type Score := List ScoreEvent
+
+// === DYNAMICS VOCABULARY ===
+// Italian musical terms as velocities
+Const pp  : Velocity := 0.2   // Pianissimo
+Const p   : Velocity := 0.35  // Piano
+Const mp  : Velocity := 0.5   // Mezzo-piano
+Const mf  : Velocity := 0.65  // Mezzo-forte
+Const f   : Velocity := 0.8   // Forte
+Const ff  : Velocity := 0.95  // Fortissimo
+
+// === ARTICULATION ===
+Articulation := ADT {
+    Legato : Articulation,            // Smooth, connected
+    Staccato : Articulation,          // Short, detached
+    Accent : Articulation,            // Emphasized
+    Tenuto : Articulation             // Held full value
+}
+
+Def apply_articulation : Articulation -> Duration -> Velocity -> (Duration, Velocity)
+    apply_articulation Legato dur vel := (dur * 1.0, vel)
+    apply_articulation Staccato dur vel := (dur * 0.5, vel)
+    apply_articulation Accent dur vel := (dur * 0.9, vel * 1.2)
+    apply_articulation Tenuto dur vel := (dur * 1.0, vel)
+
+// === THE INTERPRETER ===
+// Reads a score and schedules notes for rendering
+
+Record PlayerState := {
+    current_beat : Beat,
+    tempo : BPM,
+    velocity : Velocity,
+    sustain : Bool
+}
+
+Const initial_state : PlayerState := {
+    current_beat = 0.0,
+    tempo = 120.0,
+    velocity = mf,
+    sustain = False
+}
+
+// Process one event, update state, emit sound events
+Def interpret_event : PlayerState -> Event -> (PlayerState, List SoundEvent)
+    interpret_event state (PlayNote note nv vel) :=
+        let dur = note_value_beats nv in
+        let time = beat_to_seconds state.tempo state.current_beat in
+        let state' = state { current_beat = state.current_beat + dur } in
+        (state', [SoundNote note vel dur time])
+    
+    interpret_event state (Rest nv) :=
+        let dur = note_value_beats nv in
+        let state' = state { current_beat = state.current_beat + dur } in
+        (state', [])
+    
+    interpret_event state (Chord notes nv vel) :=
+        let dur = note_value_beats nv in
+        let time = beat_to_seconds state.tempo state.current_beat in
+        let state' = state { current_beat = state.current_beat + dur } in
+        let sounds = [SoundNote n vel dur time | n <- notes] in
+        (state', sounds)
+    
+    interpret_event state (Tempo bpm) :=
+        (state { tempo = bpm }, [])
+    
+    interpret_event state (Dynamic vel) :=
+        (state { velocity = vel }, [])
+    
+    interpret_event state (Sustain on) :=
+        (state { sustain = on }, [])
+
+// Sound events to be rendered
+Record SoundEvent := {
+    note : Note,
+    velocity : Velocity,
+    duration : Duration,
+    start_time : Time
+}
+
+// === THE RENDERER ===
+// Converts sound events to audio samples
+
+Def render_sound_event : Piano -> SoundEvent -> List (Time, Sample)
+    render_sound_event piano se :=
+        let samples = render_note piano se.note se.velocity se.duration in
+        [(se.start_time + i/piano.sample_rate, s) | (i, s) <- enumerate samples]
+
+// Mix all sounds together
+Def mix : List (Time, Sample) -> Time -> Sample
+    mix events t := Σ(e in events where |e.time - t| < 0.001, e.sample)
+
+// === PLAY A SCORE ===
+// The main function: Score -> Audio
+
+Def play : Piano -> Score -> List Sample
+    play piano score :=
+        let (_, sound_events) = foldl interpret_event initial_state (map (.event) score) in
+        let all_events = concat [render_sound_event piano se | se <- sound_events] in
+        let total_time = max [se.start_time + se.duration | se <- sound_events] in
+        let n_samples = floor(total_time * piano.sample_rate) in
+        [mix all_events (i / piano.sample_rate) | i <- [0..n_samples]]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// === EXAMPLE: EINE KLEINE NACHTMUSIK ===
+// ═══════════════════════════════════════════════════════════════════════════════
+
+Def eine_kleine_nachtmusik : Score
+    eine_kleine_nachtmusik := [
+        // The famous opening theme
+        { beat = 0.0,  event = Tempo 132 },
+        { beat = 0.0,  event = Dynamic f },
+        
+        // Bar 1-2: G-G-G, D---
+        { beat = 0.0,  event = PlayNote (G 4) Eighth f },
+        { beat = 0.5,  event = Rest Eighth },
+        { beat = 1.0,  event = PlayNote (G 4) Eighth f },
+        { beat = 1.5,  event = Rest Eighth },
+        { beat = 2.0,  event = PlayNote (G 4) Eighth f },
+        { beat = 2.5,  event = Rest Eighth },
+        { beat = 3.0,  event = PlayNote (D 4) (Dotted Half) f },
+        
+        // Bar 3-4: G-G-G, B---
+        { beat = 6.0,  event = PlayNote (G 4) Eighth f },
+        { beat = 6.5,  event = Rest Eighth },
+        { beat = 7.0,  event = PlayNote (G 4) Eighth f },
+        { beat = 7.5,  event = Rest Eighth },
+        { beat = 8.0,  event = PlayNote (G 4) Eighth f },
+        { beat = 8.5,  event = Rest Eighth },
+        { beat = 9.0,  event = PlayNote (B 4) (Dotted Half) f },
+        
+        // Bar 5-6: Descending scale
+        { beat = 12.0, event = PlayNote (D 5) Quarter mf },
+        { beat = 13.0, event = PlayNote (C 5) Quarter mf },
+        { beat = 14.0, event = PlayNote (B 4) Quarter mf },
+        { beat = 15.0, event = PlayNote (A 4) Quarter mf },
+        { beat = 16.0, event = PlayNote (G 4) Half mf },
+        
+        // With chord accompaniment
+        { beat = 0.0,  event = Chord [G 3, D 4] Half p },
+        { beat = 3.0,  event = Chord [D 3, A 3] Half p },
+        { beat = 6.0,  event = Chord [G 3, D 4] Half p },
+        { beat = 9.0,  event = Chord [G 3, B 3, D 4] Half p }
+    ]
+
+// === PLAY IT ===
+Def main : IO ()
+    main := do
+        let audio = play grand_piano eine_kleine_nachtmusik
+        write_wav "mozart.wav" 44100 audio
+        putStrLn "♪ Eine kleine Nachtmusik ♪"
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// "Now the child knows not just to play, but to compose."
+// ═══════════════════════════════════════════════════════════════════════════════
