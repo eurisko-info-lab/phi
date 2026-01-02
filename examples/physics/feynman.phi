@@ -1,0 +1,543 @@
+-- ============================================================================
+-- FEYNMAN.PHI
+-- The Language of Understanding: Physics From First Principles
+-- ============================================================================
+--
+-- "The first principle is that you must not fool yourself—
+--  and you are the easiest person to fool."
+--
+-- "What I cannot create, I do not understand."
+--
+-- "I learned very early the difference between knowing the name of something
+--  and knowing something."
+--
+-- This is an attempt to formalize the Feynman method: the art of true
+-- understanding through simplicity, visualization, and playful exploration.
+-- ============================================================================
+
+-- ============================================================================
+-- PART I: THE FEYNMAN PHILOSOPHY
+-- ============================================================================
+
+-- The enemy of understanding
+type Pseudoknowledge
+  = NameWithoutMeaning      -- Knowing the word but not the thing
+  | FormulaWithoutIntuition -- Manipulating symbols without seeing
+  | AuthorityWithoutTest    -- Believing because someone said so
+  | ComplexityAsPretense    -- Using jargon to hide ignorance
+  | MemoryAsUnderstanding   -- Reciting without grasping
+
+-- The path to real knowledge
+type Understanding
+  = CanExplain         Audience Level    -- Explain to anyone
+  | CanDerive          Result Scratch    -- Build from nothing
+  | CanPredict         Situation Outcome -- Know what happens
+  | CanVisualize       Process Picture   -- See it in mind
+  | CanPlayWith        Concept Variation -- Explore the edges
+  | CanSimplify        Complex Simple    -- Find the essence
+  | KnowsLimits        Knowledge Bounds  -- Where it breaks
+
+-- The Feynman Test
+feynman-test : Knowledge -> Bool
+feynman-test k = can-explain-to-freshman k 
+              && can-rebuild-from-scratch k
+              && knows-where-it-fails k
+
+-- ============================================================================
+-- PART II: THE FEYNMAN METHOD
+-- ============================================================================
+
+-- Step 1: Choose a concept
+type Concept = {
+  name        : String,
+  domain      : Domain,
+  mystery     : Question,      -- What we don't understand
+  known-facts : List Fact,
+  intuitions  : List Picture   -- Mental images
+}
+
+-- Step 2: Teach it to a child
+type ChildExplanation = {
+  everyday-analogy : Analogy,
+  simple-words     : Vocabulary,  -- No jargon allowed
+  pictures         : List Diagram,
+  story            : Narrative,
+  questions-raised : List Question
+}
+
+-- The vocabulary constraint
+type Vocabulary = List Word where
+  ∀ w ∈ Vocabulary: 
+    length(w) < 10 ∧ 
+    child-can-understand(w) ∧
+    concrete-or-action(w)
+
+-- Step 3: Identify gaps
+type Gap
+  = CannotExplain   Point     -- Where words fail
+  | CannotVisualize Process   -- Cannot see it
+  | CannotDerive    Result    -- Don't know why
+  | CircularDefn    A B       -- A defined by B defined by A
+  | MagicStep       Before After  -- Something happens but unclear
+
+-- Step 4: Return to source
+return-to-source : Gap -> Source -> Understanding
+return-to-source gap src = 
+  let raw = original-derivation src
+      simple = simplify raw
+      visual = make-picture simple
+      test = check-against-nature visual
+  in if test then integrate visual else deeper-look raw
+
+-- Step 5: Simplify and analogize
+type Analogy = {
+  familiar  : EverydayThing,
+  unfamiliar : PhysicsConcept,
+  mapping   : Familiar -> Unfamiliar,
+  limits    : WhereMappingBreaks
+}
+
+-- Famous Feynman analogies
+SPINNING-PLATE-ANALOGY : Analogy
+SPINNING-PLATE-ANALOGY = {
+  familiar  = WobblingDinnerPlate,
+  unfamiliar = ElectronPrecession,
+  mapping   = λ wobble -> precession-angle wobble,
+  limits    = "Plates don't have spin-1/2 quantum nature"
+}
+
+SPRINKLER-ANALOGY : Analogy  
+SPRINKLER-ANALOGY = {
+  familiar  = LawnSprinkler,
+  unfamiliar = RadiationPressure,
+  mapping   = λ spray -> momentum-transfer spray,
+  limits    = "Forces at molecular scale"
+}
+
+-- ============================================================================
+-- PART III: FEYNMAN DIAGRAMS
+-- ============================================================================
+
+-- The revolution: pictures that compute
+
+type Particle
+  = Fermion Spin Mass Charge
+  | Boson Spin Mass
+
+type Line
+  = Straight Particle Direction  -- Fermions (electron, quark)
+  | Wavy Particle Direction      -- Photons (light)
+  | Dashed Particle Direction    -- Scalar (Higgs)
+  | Curly Particle Direction     -- Gluons (strong force)
+
+type Vertex = {
+  incoming : List Line,
+  outgoing : List Line,
+  coupling : CouplingConstant,
+  conserves : List Conservation  -- Charge, momentum, etc.
+}
+
+type FeynmanDiagram = {
+  vertices  : List Vertex,
+  external  : List Line,      -- What goes in, what comes out
+  internal  : List Line,      -- Virtual particles
+  amplitude : Complex         -- The number we compute
+}
+
+-- The miracle: a picture = a number
+diagram-to-amplitude : FeynmanDiagram -> Complex
+diagram-to-amplitude d = 
+  product (map vertex-factor (vertices d)) *
+  product (map propagator (internal d)) *
+  integral (loop-momenta d)
+
+-- Vertex factors (how particles interact)
+vertex-factor : Vertex -> Complex
+vertex-factor v = case interaction v of
+  QED   -> -i * e * gamma-mu          -- Electron emits photon
+  QCD   -> -i * gs * T^a * gamma-mu   -- Quark emits gluon
+  Weak  -> -i * (g/√2) * gamma-mu * PL -- Weak interaction
+
+-- Propagators (how particles travel)
+propagator : Line -> Complex
+propagator l = case l of
+  Straight electron p -> i * (p-slash + m) / (p² - m² + iε)
+  Wavy photon p       -> -i * g-μν / (p² + iε)
+  Curly gluon p       -> -i * δ-ab * g-μν / (p² + iε)
+
+-- The big insight: sum all possible diagrams
+amplitude : Process -> Complex
+amplitude proc = sum [diagram-to-amplitude d | d <- all-diagrams proc]
+
+-- QED: The simplest case
+-- Electron-electron scattering: just count diagrams!
+electron-scattering : FeynmanDiagram
+electron-scattering = {
+  vertices = [v1, v2],  -- Two electrons exchange a photon
+  external = [e-in-1, e-in-2, e-out-1, e-out-2],
+  internal = [virtual-photon],
+  amplitude = (e²/q²)  -- Coulomb's law falls out!
+}
+
+-- ============================================================================
+-- PART IV: PATH INTEGRALS
+-- ============================================================================
+
+-- "Every path contributes. Reality is democracy."
+
+type Path = {
+  start     : SpaceTimePoint,
+  end       : SpaceTimePoint,
+  trajectory: Time -> Space
+}
+
+type Action = Path -> Real
+-- S[path] = ∫ L dt, where L = Lagrangian
+
+-- The amplitude for a process
+path-integral : Start -> End -> Amplitude
+path-integral a b = ∫ all-paths (a -> b) exp(i * S[path] / ħ)
+
+-- Classical physics emerges from destructive interference
+-- Paths far from classical cancel out (rapid phase oscillation)
+-- Paths near classical add up (stationary phase)
+
+classical-limit : PathIntegral -> ClassicalPath
+classical-limit pi = 
+  let stat = stationary-phase pi  -- δS = 0
+  in extremal-path stat           -- The "chosen" trajectory
+
+-- The double-slit experiment
+double-slit : Source -> Screen -> Pattern
+double-slit src scr = 
+  let path1 = through-slit-1 src scr
+      path2 = through-slit-2 src scr
+      amp1 = exp(i * S[path1] / ħ)
+      amp2 = exp(i * S[path2] / ħ)
+  in |amp1 + amp2|²  -- Interference!
+
+-- The magic: the electron goes through both slits
+-- Not metaphor. Not interpretation. Calculation.
+
+-- ============================================================================
+-- PART V: QUANTUM ELECTRODYNAMICS
+-- ============================================================================
+
+-- The most successful theory in physics
+-- Agrees with experiment to 12 decimal places
+
+type QED = {
+  particles : (Electron, Photon, Positron),
+  interaction : ElectronPhotonCoupling,
+  parameter : α ≈ 1/137  -- Fine structure constant
+}
+
+-- The anomalous magnetic moment
+-- g = 2 for a "simple" electron
+-- But QED predicts g ≠ 2 (anomaly)
+
+g-factor : Electron -> Real
+g-factor e = 2 * (1 + a_e)
+  where a_e = α/(2π)                    -- First order: Schwinger
+          - 0.328... * (α/π)²         -- Second order
+          + 1.181... * (α/π)³         -- Third order
+          - ...                        -- And so on
+
+-- Experiment: g/2 = 1.001 159 652 180 73 (28)
+-- Theory:     g/2 = 1.001 159 652 181 78 (77)
+-- Agreement to 12 decimal places!
+
+-- "If you want to know how Nature works, this is it."
+
+-- ============================================================================
+-- PART VI: THE PLEASURE OF FINDING THINGS OUT
+-- ============================================================================
+
+-- Curiosity as the fundamental force
+
+type Curiosity = {
+  wonder    : Phenomenon -> Question,
+  play      : System -> Exploration,
+  patience  : Time -> Persistence,
+  honesty   : Result -> Acceptance
+}
+
+-- The Feynman approach to problem-solving
+solve : Problem -> Maybe Solution
+solve p = 
+  -- 1. Write down what you know
+  let known = gather-facts p
+  -- 2. Write down what you want
+      goal = state-clearly (objective p)
+  -- 3. Think about what connects them
+      links = brainstorm (known, goal)
+  -- 4. Try the simplest thing
+      attempt = simplest-approach links
+  -- 5. If stuck, try a different representation
+      alt = different-picture p
+  -- 6. Play with special cases
+      special = limits-and-extremes p
+  -- 7. Check dimensions (saves 90% of errors)
+      dim = dimensional-analysis attempt
+  -- 8. Verify with known results
+      check = sanity-check attempt
+  in if passes check then Just attempt else solve (reformulate p)
+
+-- Special cases are golden
+special-cases : Theory -> Understanding
+special-cases t = {
+  zero    = limit-zero t,          -- What if x → 0?
+  one     = unit-case t,           -- Simplest non-trivial
+  infinity = limit-infinity t,      -- What if x → ∞?
+  symmetric = high-symmetry t,     -- All equal, all zero
+  classical = ħ-to-zero t,         -- Classical limit
+  static   = no-time-dependence t  -- Equilibrium
+}
+
+-- ============================================================================
+-- PART VII: SURELY YOU'RE JOKING
+-- ============================================================================
+
+-- Physics as play
+
+type Play
+  = SafesCracking          -- Pattern recognition as game
+  | DrumCircle             -- Rhythm as physics
+  | ArtModel               -- Beauty as truth
+  | BongoDrums             -- Entropy in action
+  | ToplessBar             -- Diagrams anywhere
+  | MayanCodex             -- Decipherment as physics
+
+-- "Physics is like sex: sure, it may give some practical results,
+--  but that's not why we do it."
+
+-- The cargo cult problem
+type CargoCult = {
+  form-without-content  : Action,
+  ritual-without-understanding : Behavior,
+  appearance-of-science : Mimicry
+}
+
+-- The cure
+scientific-integrity : Researcher -> Behavior
+scientific-integrity r = {
+  report-all-results     = λ x -> publish x (especially-if-bad x),
+  imagine-alternatives   = λ h -> consider (not h),
+  test-your-theory       = λ t -> try-to-break t,
+  admit-ignorance        = λ q -> say "I don't know" freely,
+  credit-others          = λ w -> acknowledge (prior-work w)
+}
+
+-- ============================================================================
+-- PART VIII: TEACHING
+-- ============================================================================
+
+-- "I was born not knowing and have had only a little time
+--  to change that here and there."
+
+type GoodTeacher = {
+  loves-subject      : Deep,
+  respects-student   : Genuine,
+  avoids-pretense    : Always,
+  uses-examples      : Many,
+  welcomes-questions : All,
+  admits-ignorance   : Freely
+}
+
+-- The Feynman Lectures: the paradigm
+type Lecture = {
+  motivation  : WhyCarry,           -- Why should anyone care?
+  phenomenon  : WhatHappens,        -- The raw observation
+  model       : HowThink,           -- Mental picture
+  math        : HowCalculate,       -- The formalism (last!)
+  limits      : WhereBreaks,        -- Honest about boundaries
+  wonder      : WhyAmazing          -- The awe
+}
+
+-- The art of explanation
+explain : Concept -> Audience -> Explanation
+explain c aud = 
+  -- Start with phenomenon, not definition
+  let hook = surprising-fact c
+  -- Use analogy
+      bridge = everyday-analogy c
+  -- Build intuition before formalism
+      picture = visual-model c
+  -- Give the math meaning
+      interpret = what-symbols-mean c
+  -- Show the power
+      predict = use-to-calculate c
+  -- Honor the mystery
+      open = what-we-dont-know c
+  in weave [hook, bridge, picture, interpret, predict, open]
+
+-- ============================================================================
+-- PART IX: THE FEYNMAN TOOLBOX
+-- ============================================================================
+
+-- Tools for thought
+
+-- 1. Dimensional analysis
+dimensional-analysis : Formula -> Dimensions
+dimensional-analysis f = 
+  let dims = extract-dimensions f
+      check = all-terms-same-dimension dims
+  in if check then dims else Error "Formula wrong"
+
+-- Quick check: energy of a pendulum
+pendulum-energy : Mass -> Length -> Gravity -> Energy
+pendulum-energy m l g = 
+  -- E has dimensions [M L² T⁻²]
+  -- m has [M], l has [L], g has [L T⁻²]
+  -- Only combination: m * g * l
+  m * g * l  -- (times dimensionless factor, found by solving)
+
+-- 2. Order of magnitude
+fermi-estimate : Question -> (Order, Reasoning)
+fermi-estimate q = 
+  let factors = break-into-knowable q
+      estimates = map rough-guess factors
+      combined = product estimates
+  in (round-to-power-of-10 combined, show-work factors)
+
+-- How many piano tuners in Chicago?
+piano-tuners-chicago : Estimate
+piano-tuners-chicago = 
+  let pop = 3e6              -- Chicago population
+      households = pop / 2.5  -- People per household
+      pianos = households / 20  -- Fraction with pianos
+      tunings = pianos * 2    -- Per year
+      tuner-capacity = 4 * 250  -- Per day * workdays
+  in tunings / tuner-capacity ≈ 100
+
+-- 3. Symmetry arguments
+symmetry : System -> Constraints
+symmetry sys = 
+  let sym = identify-symmetries sys
+  in map (λ s -> conservation-law s) sym
+
+-- Why is angular momentum conserved?
+-- Because physics doesn't care which direction you call "up"
+rotational-symmetry → angular-momentum-conservation
+
+-- 4. Limiting behavior
+limits : Theory -> Understanding
+limits t = {
+  slow = non-relativistic-limit t,    -- v << c
+  weak = perturbation-theory t,       -- small coupling
+  large = thermodynamic-limit t,      -- N → ∞
+  cold = ground-state t               -- T → 0
+}
+
+-- ============================================================================
+-- PART X: THE MEANING OF IT ALL
+-- ============================================================================
+
+-- "I can live with doubt and uncertainty and not knowing."
+
+type Wisdom = {
+  doubt-is-valuable     : True,
+  uncertainty-is-honest : True,
+  mystery-remains       : True
+}
+
+-- The scientific worldview
+scientific-attitude : Worldview
+scientific-attitude = {
+  knowledge-is-provisional = True,
+  authority-is-irrelevant  = True,
+  only-experiment-decides  = True,
+  wonder-never-fades       = True
+}
+
+-- The deepest questions remain
+open-questions : Physics -> List Mystery
+open-questions phys = [
+  "Why these laws?",
+  "Why is there something rather than nothing?",
+  "What is time?",
+  "Why quantum mechanics?",
+  "What lies beneath?"
+]
+
+-- "I think I can safely say that nobody understands quantum mechanics."
+
+-- And that's okay.
+
+-- ============================================================================
+-- PART XI: A FEYNMAN DIAGRAM FOR LIFE
+-- ============================================================================
+
+-- The process of a life
+
+type Life = FeynmanDiagram where
+  vertices = [
+    Birth (incoming = [parents], outgoing = [child]),
+    Learning (incoming = [ignorance], outgoing = [questions]),
+    Discovery (incoming = [question], outgoing = [answer, more-questions]),
+    Teaching (incoming = [knowledge], outgoing = [student-with-spark]),
+    Love (incoming = [loneliness], outgoing = [connection]),
+    Creation (incoming = [nothing], outgoing = [something]),
+    Death (incoming = [all-that-was], outgoing = [influence, memory])
+  ]
+  
+-- The amplitude
+life-amplitude : Life -> Complex
+life-amplitude l = 
+  let curiosity = count-questions-asked l
+      joy = moments-of-understanding l
+      love = connections-made l
+      given = knowledge-shared l
+  in exp(i * (curiosity + joy + love + given))
+
+-- ============================================================================
+-- THE FEYNMAN CONSTANT
+-- ============================================================================
+
+THE-FEYNMAN-WAY : String
+THE-FEYNMAN-WAY = """
+  Study hard what interests you the most
+  in the most undisciplined, irreverent
+  and original manner possible.
+
+  The worthwhile problems are the ones
+  you can really solve or help solve,
+  the ones you can really contribute something to.
+
+  I would rather have questions that can't be answered
+  than answers that can't be questioned.
+
+  What do you care what other people think?
+
+  It doesn't matter how beautiful your theory is.
+  It doesn't matter how smart you are.
+  If it doesn't agree with experiment, it's wrong.
+
+  I have approximate answers and possible beliefs
+  and different degrees of certainty about different things,
+  but I'm not absolutely sure of anything.
+
+  Fall in love with some activity,
+  and do it! Nobody ever figures out what life is all about,
+  and it doesn't matter. Explore the world.
+
+  The first principle is that you must not fool yourself—
+  and you are the easiest person to fool.
+"""
+
+-- ============================================================================
+-- END
+-- ============================================================================
+
+-- "There's plenty of room at the bottom."
+
+-- And at the top.
+-- And everywhere in between.
+-- The universe is inexhaustible.
+
+-- So keep asking.
+-- Keep calculating.
+-- Keep wondering.
+-- Keep playing.
+
+-- That's the Feynman way.
