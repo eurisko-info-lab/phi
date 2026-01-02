@@ -1,0 +1,638 @@
+-- ============================================================================
+-- AI.PHI
+-- Artificial Intelligence: From Neurons to Transformers
+-- ============================================================================
+--
+-- "A neural network is just a differentiable program."
+--     — Every ML researcher, eventually
+--
+-- "Attention is all you need."
+--     — Vaswani et al., 2017
+--
+-- This spec formalizes AI/ML in Phi where:
+-- - Tensors are typed by their shape (no runtime dimension errors!)
+-- - Gradients flow through the type system (automatic differentiation)
+-- - Architectures are composable (functors all the way down)
+-- - The spec compiles to CUDA (RosettaVM already does this)
+-- ============================================================================
+
+-- ============================================================================
+-- PART I: TYPED TENSORS
+-- ============================================================================
+
+-- The curse of ML frameworks: runtime shape errors
+-- "Expected shape [32, 768], got [32, 512]" — every PyTorch user
+
+-- Phi's solution: shapes in the TYPE
+
+-- Shape is a type-level list of dimensions
+kind Shape = [Nat]
+
+-- Tensor with statically known shape
+type Tensor (shape : Shape) (dtype : DType) where
+  data : Array dtype (product shape)
+  
+  -- The shape is in the TYPE, not runtime metadata!
+
+-- Data types
+type DType = Float16 | Float32 | Float64 | BFloat16 | Int32 | Int64 | Bool
+
+-- Examples:
+-- Tensor [32, 768] Float32       -- Batch of 32 embeddings of dim 768
+-- Tensor [8, 12, 64, 64] Float16 -- 8 batch, 12 heads, 64x64 attention
+-- Tensor [] Float32              -- Scalar
+
+-- Shape-safe operations!
+add : Tensor s d → Tensor s d → Tensor s d           -- Same shape required
+matmul : Tensor [m, n] d → Tensor [n, p] d → Tensor [m, p] d  -- Dimensions must align!
+
+-- ILLEGAL at compile time:
+-- matmul (Tensor [32, 768]) (Tensor [512, 768])  -- Type error! 768 ≠ 512
+
+-- Broadcasting (with type-level rules)
+broadcast : Tensor s1 d → Tensor s2 d → (Tensor (Broadcast s1 s2) d, Tensor (Broadcast s1 s2) d)
+  where Broadcast follows NumPy rules at TYPE LEVEL
+
+
+-- ============================================================================
+-- PART II: AUTOMATIC DIFFERENTIATION
+-- ============================================================================
+
+-- The magic of deep learning: gradients for free
+-- In Phi: gradients are in the TYPE SYSTEM
+
+-- A differentiable value carries its gradient type
+type Diff (a : Type) where
+  value : a
+  grad  : a → a  -- Cotangent (for reverse mode)
+
+-- Differentiable tensor
+type DTensor (shape : Shape) = Diff (Tensor shape Float32)
+
+-- The key insight: composition of differentiable functions
+-- (f ∘ g)' = f' ∘ g × g'  (chain rule)
+
+-- Differentiable function type
+type (a ~> b) = Diff a → Diff b
+
+-- Composition preserves differentiability (chain rule built in!)
+compose : (b ~> c) → (a ~> b) → (a ~> c)
+compose f g x = 
+  let (y, dy) = g x
+      (z, dz) = f y
+  in (z, λ δz → dy (dz δz))  -- Chain rule!
+
+-- Forward mode AD
+forward : (a ~> b) → a → (b, a → b)
+forward f x = (f x, derivative f x)
+
+-- Reverse mode AD (backpropagation!)
+backward : (a ~> b) → a → b → (b, a)
+backward f x δy = 
+  let (y, pullback) = f x
+  in (y, pullback δy)
+
+-- Gradient of loss with respect to parameters
+grad : (Params → DTensor [] → DTensor []) → Params → DTensor [] → Params
+grad loss params input = backward loss params (tensor 1.0)
+
+
+-- ============================================================================
+-- PART III: NEURAL NETWORK LAYERS
+-- ============================================================================
+
+-- Layers are differentiable functions with parameters
+
+type Layer (input : Shape) (output : Shape) where
+  params  : Params
+  forward : DTensor input → DTensor output
+  -- Backward is derived automatically from forward!
+
+-- Linear layer: y = Wx + b
+linear : (in : Nat) → (out : Nat) → Layer [in] [out]
+linear in out = Layer {
+  params = {
+    W : DTensor [out, in],  -- Weight matrix
+    b : DTensor [out]       -- Bias
+  },
+  forward = λ x → matmul params.W x + params.b
+}
+
+-- Convolution: the workhorse of vision
+conv2d : (in_ch : Nat) → (out_ch : Nat) → (kernel : Nat) → 
+         Layer [batch, in_ch, h, w] [batch, out_ch, h', w']
+conv2d in_ch out_ch k = Layer {
+  params = {
+    kernel : DTensor [out_ch, in_ch, k, k],
+    bias   : DTensor [out_ch]
+  },
+  forward = λ x → convolve x params.kernel + params.bias
+}
+
+-- Batch normalization
+batchNorm : (features : Nat) → Layer [batch, features] [batch, features]
+batchNorm f = Layer {
+  params = {
+    gamma : DTensor [f],  -- Scale
+    beta  : DTensor [f],  -- Shift
+    running_mean : DTensor [f],  -- For inference
+    running_var  : DTensor [f]
+  },
+  forward = λ x →
+    let μ = mean x dim=0
+        σ² = var x dim=0
+        x̂ = (x - μ) / sqrt(σ² + ε)
+    in params.gamma * x̂ + params.beta
+}
+
+-- Layer normalization (for transformers)
+layerNorm : (features : Nat) → Layer [*, features] [*, features]
+layerNorm f = Layer {
+  params = { gamma : DTensor [f], beta : DTensor [f] },
+  forward = λ x →
+    let μ = mean x dim=-1
+        σ² = var x dim=-1
+        x̂ = (x - μ) / sqrt(σ² + ε)
+    in params.gamma * x̂ + params.beta
+}
+
+-- Dropout (with type-level training flag)
+dropout : (p : Float) → (training : Bool) → Layer s s
+dropout p True  = Layer { forward = λ x → x * bernoulli(1-p) / (1-p) }
+dropout p False = Layer { forward = id }
+
+
+-- ============================================================================
+-- PART IV: ACTIVATION FUNCTIONS
+-- ============================================================================
+
+-- Activations are differentiable, parameter-free
+
+relu : DTensor s → DTensor s
+relu x = max 0 x
+-- derivative: 1 if x > 0, 0 otherwise
+
+gelu : DTensor s → DTensor s  
+gelu x = x * Φ(x)  -- Φ = standard normal CDF
+-- The activation that powers transformers
+
+sigmoid : DTensor s → DTensor s
+sigmoid x = 1 / (1 + exp(-x))
+-- derivative: σ(x) * (1 - σ(x))
+
+tanh : DTensor s → DTensor s
+tanh x = (exp(x) - exp(-x)) / (exp(x) + exp(-x))
+
+softmax : DTensor [*, n] → DTensor [*, n]
+softmax x = exp(x - max(x)) / sum(exp(x - max(x)))
+-- Numerical stability: subtract max
+
+swish : DTensor s → DTensor s
+swish x = x * sigmoid(x)
+
+
+-- ============================================================================
+-- PART V: ATTENTION MECHANISM
+-- ============================================================================
+
+-- "Attention is all you need"
+
+-- Scaled dot-product attention
+-- Attention(Q, K, V) = softmax(QK^T / √d_k) V
+
+attention : DTensor [batch, seq, d_k] →  -- Query
+            DTensor [batch, seq, d_k] →  -- Key
+            DTensor [batch, seq, d_v] →  -- Value
+            DTensor [batch, seq, d_v]    -- Output
+attention Q K V = 
+  let scores = matmul Q (transpose K) / sqrt d_k  -- [batch, seq, seq]
+      weights = softmax scores                     -- [batch, seq, seq]
+  in matmul weights V                              -- [batch, seq, d_v]
+
+-- Multi-head attention
+-- Split into h heads, attend separately, concatenate
+
+multiHeadAttention : (d_model : Nat) → (h : Nat) → 
+                     Layer [batch, seq, d_model] [batch, seq, d_model]
+multiHeadAttention d_model h = Layer {
+  params = {
+    W_Q : DTensor [d_model, d_model],
+    W_K : DTensor [d_model, d_model],
+    W_V : DTensor [d_model, d_model],
+    W_O : DTensor [d_model, d_model]
+  },
+  forward = λ x →
+    let d_k = d_model / h
+        Q = linear W_Q x  -- [batch, seq, d_model]
+        K = linear W_K x
+        V = linear W_V x
+        -- Split into heads
+        Q' = reshape Q [batch, seq, h, d_k]
+        K' = reshape K [batch, seq, h, d_k]
+        V' = reshape V [batch, seq, h, d_k]
+        -- Transpose for batched attention
+        Q'' = transpose Q' [0, 2, 1, 3]  -- [batch, h, seq, d_k]
+        K'' = transpose K' [0, 2, 1, 3]
+        V'' = transpose V' [0, 2, 1, 3]
+        -- Attend
+        attended = attention Q'' K'' V''  -- [batch, h, seq, d_k]
+        -- Concatenate heads
+        concat = reshape (transpose attended [0, 2, 1, 3]) [batch, seq, d_model]
+    in linear W_O concat
+}
+
+-- Causal attention (for autoregressive models)
+causalAttention : DTensor [batch, seq, d] → DTensor [batch, seq, d]
+causalAttention x = 
+  let mask = tril (ones [seq, seq])  -- Lower triangular
+      scores = matmul Q (transpose K) / sqrt d
+      masked = where (mask == 0) (-∞) scores  -- Mask future
+  in softmax masked
+
+
+-- ============================================================================
+-- PART VI: TRANSFORMER ARCHITECTURE
+-- ============================================================================
+
+-- The architecture that changed everything
+
+-- Transformer encoder block
+encoderBlock : (d_model : Nat) → (d_ff : Nat) → (h : Nat) → 
+               Layer [batch, seq, d_model] [batch, seq, d_model]
+encoderBlock d_model d_ff h = Layer {
+  params = {
+    attn : multiHeadAttention d_model h,
+    ff   : feedForward d_model d_ff,
+    ln1  : layerNorm d_model,
+    ln2  : layerNorm d_model
+  },
+  forward = λ x →
+    let x' = x + attn (ln1 x)       -- Self-attention + residual
+    in x' + ff (ln2 x')              -- FFN + residual
+}
+
+-- Feed-forward network
+feedForward : (d_model : Nat) → (d_ff : Nat) → Layer [*, d_model] [*, d_model]
+feedForward d_model d_ff = 
+  linear d_model d_ff >>> gelu >>> linear d_ff d_model
+
+-- Transformer decoder block (with cross-attention)
+decoderBlock : (d_model : Nat) → (d_ff : Nat) → (h : Nat) →
+               Layer ([batch, seq, d_model], [batch, src_seq, d_model]) 
+                     [batch, seq, d_model]
+decoderBlock d_model d_ff h = Layer {
+  forward = λ (x, encoder_out) →
+    let x' = x + causalSelfAttention (ln1 x)
+        x'' = x' + crossAttention (ln2 x') encoder_out
+    in x'' + ff (ln3 x'')
+}
+
+-- Full transformer encoder
+transformerEncoder : (layers : Nat) → (d_model : Nat) → (d_ff : Nat) → (h : Nat) →
+                     Layer [batch, seq, d_model] [batch, seq, d_model]
+transformerEncoder n d_model d_ff h = 
+  compose (replicate n (encoderBlock d_model d_ff h))
+
+-- GPT-style decoder-only transformer
+gpt : (layers : Nat) → (d_model : Nat) → (d_ff : Nat) → (h : Nat) → (vocab : Nat) →
+      Layer [batch, seq] [batch, seq, vocab]
+gpt n d_model d_ff h vocab = Layer {
+  params = {
+    embed     : DTensor [vocab, d_model],       -- Token embeddings
+    pos_embed : DTensor [max_seq, d_model],     -- Position embeddings
+    blocks    : List (decoderBlock d_model d_ff h),
+    ln_f      : layerNorm d_model,
+    head      : DTensor [d_model, vocab]        -- Output projection
+  },
+  forward = λ tokens →
+    let x = embed tokens + pos_embed[:seq_len]  -- Embed
+        x' = foldl (λ x block → block x) x blocks  -- Transform
+        x'' = ln_f x'                           -- Final norm
+    in matmul x'' head                          -- Project to vocab
+}
+
+
+-- ============================================================================
+-- PART VII: LOSS FUNCTIONS
+-- ============================================================================
+
+-- Cross-entropy loss (for classification)
+crossEntropy : DTensor [batch, classes] → DTensor [batch] → DTensor []
+crossEntropy logits labels = 
+  -mean (gather (logSoftmax logits) labels)
+
+-- MSE loss (for regression)
+mse : DTensor s → DTensor s → DTensor []
+mse pred target = mean ((pred - target) ** 2)
+
+-- Contrastive loss (for embeddings)
+contrastiveLoss : DTensor [batch, d] → DTensor [batch, d] → DTensor []
+contrastiveLoss anchor positive = 
+  let sim = matmul anchor (transpose positive) / τ  -- Cosine similarity
+      labels = arange batch                          -- Diagonal is positive
+  in crossEntropy sim labels
+
+
+-- ============================================================================
+-- PART VIII: OPTIMIZERS
+-- ============================================================================
+
+-- Optimizers update parameters to minimize loss
+
+type Optimizer where
+  state : OptimizerState
+  step  : Params → Grads → (Params, OptimizerState)
+
+-- Stochastic Gradient Descent
+sgd : (lr : Float) → Optimizer
+sgd lr = Optimizer {
+  state = (),
+  step = λ params grads → (params - lr * grads, ())
+}
+
+-- SGD with momentum
+momentum : (lr : Float) → (β : Float) → Optimizer
+momentum lr β = Optimizer {
+  state = zeros_like params,  -- Velocity
+  step = λ params grads →
+    let v' = β * state + grads
+    in (params - lr * v', v')
+}
+
+-- Adam (the default choice)
+adam : (lr : Float) → (β1 : Float) → (β2 : Float) → Optimizer
+adam lr β1 β2 = Optimizer {
+  state = (zeros_like params, zeros_like params, 0),  -- m, v, t
+  step = λ params grads →
+    let (m, v, t) = state
+        t' = t + 1
+        m' = β1 * m + (1 - β1) * grads
+        v' = β2 * v + (1 - β2) * grads ** 2
+        m̂ = m' / (1 - β1 ** t')  -- Bias correction
+        v̂ = v' / (1 - β2 ** t')
+    in (params - lr * m̂ / (sqrt v̂ + ε), (m', v', t'))
+}
+
+-- AdamW (Adam with weight decay)
+adamW : (lr : Float) → (β1 : Float) → (β2 : Float) → (wd : Float) → Optimizer
+adamW lr β1 β2 wd = Optimizer {
+  step = λ params grads →
+    let (params', state') = adam lr β1 β2 . step params grads
+    in (params' - lr * wd * params, state')  -- Weight decay
+}
+
+
+-- ============================================================================
+-- PART IX: TRAINING LOOP
+-- ============================================================================
+
+-- The training loop, typed and composable
+
+type TrainConfig where
+  epochs    : Nat
+  batchSize : Nat
+  optimizer : Optimizer
+  scheduler : LRScheduler
+
+-- Training step
+trainStep : Model → Optimizer → Batch → (Model, Loss, Optimizer)
+trainStep model opt (inputs, targets) = 
+  let outputs = model.forward inputs
+      loss = model.loss outputs targets
+      grads = backward loss model.params
+      (params', opt') = opt.step model.params grads
+  in ({ model | params = params' }, loss, opt')
+
+-- Training epoch
+trainEpoch : Model → Optimizer → DataLoader → IO (Model, Optimizer, Float)
+trainEpoch model opt loader = do
+  (model', opt', losses) ← foldM 
+    (λ (m, o, ls) batch → do
+      (m', l, o') ← trainStep m o batch
+      return (m', o', l :: ls))
+    (model, opt, [])
+    loader
+  return (model', opt', mean losses)
+
+-- Full training loop
+train : Model → TrainConfig → DataLoader → IO Model
+train model config loader = do
+  (model', opt') ← foldM
+    (λ (m, o) epoch → do
+      (m', o', loss) ← trainEpoch m o loader
+      log f"Epoch {epoch}: loss = {loss}"
+      return (m', scheduler.step o' epoch))
+    (model, config.optimizer)
+    [1..config.epochs]
+  return model'
+
+
+-- ============================================================================
+-- PART X: INFERENCE
+-- ============================================================================
+
+-- Autoregressive generation (for LLMs)
+generate : GPT → DTensor [1, prompt_len] → (maxLen : Nat) → IO (DTensor [1, *])
+generate model prompt maxLen = do
+  tokens ← ref prompt
+  for [1..maxLen] $ λ _ → do
+    logits ← model.forward (get tokens)
+    nextToken ← sample (logits[:, -1, :])  -- Sample from last position
+    tokens := concat [get tokens, [[nextToken]]]
+  return (get tokens)
+
+-- Sampling strategies
+sample : DTensor [vocab] → IO Token
+sample logits = categorical (softmax logits)  -- Random sample
+
+topK : (k : Nat) → DTensor [vocab] → IO Token
+topK k logits = 
+  let topIndices = argsort logits descending |> take k
+      topLogits = gather logits topIndices
+  in categorical (softmax topLogits)
+
+topP : (p : Float) → DTensor [vocab] → IO Token
+topP p logits =
+  let sorted = argsort logits descending
+      cumProbs = cumsum (softmax (gather logits sorted))
+      cutoff = findIndex (> p) cumProbs
+  in categorical (softmax (take cutoff sorted))
+
+temperature : (τ : Float) → DTensor [vocab] → DTensor [vocab]
+temperature τ logits = logits / τ  -- Higher τ = more random
+
+
+-- ============================================================================
+-- PART XI: COMPILATION TO HARDWARE
+-- ============================================================================
+
+-- Phi compiles to multiple backends!
+
+-- Target 1: CUDA (via RosettaVM)
+compile-cuda : Model → CUDA.Kernel
+compile-cuda model = RosettaVM.compile model {
+  target = CUDA,
+  optimize = [fuseOps, tensorCores, memoryCoalesce]
+}
+
+-- Target 2: ONNX (portable)
+compile-onnx : Model → ONNX.Graph
+compile-onnx model = traceModel model |> exportONNX
+
+-- Target 3: TensorRT (NVIDIA inference)
+compile-tensorrt : Model → TRT.Engine
+compile-tensorrt model = 
+  let onnx = compile-onnx model
+  in TensorRT.build onnx {precision = FP16, batchSize = 32}
+
+-- Target 4: Metal (Apple)
+compile-metal : Model → Metal.Library
+compile-metal model = compileToMetal model
+
+-- Target 5: WebGPU (browser)
+compile-webgpu : Model → WGSL.Shader
+compile-webgpu model = compileToWGSL model
+
+
+-- ============================================================================
+-- PART XII: PHI'S ADVANTAGES OVER PYTORCH
+-- ============================================================================
+
+{-
+PYTORCH:
+  x = torch.randn(32, 768)
+  y = torch.randn(32, 512)
+  z = x @ y  # RuntimeError: mat1 and mat2 shapes cannot be multiplied
+  
+  # No static checking. Error at runtime.
+  # Good luck finding it in a 1000-line model.
+
+PHI:
+  x : DTensor [32, 768] Float32
+  y : DTensor [32, 512] Float32
+  z = matmul x y  -- TYPE ERROR: 768 ≠ 512
+  
+  # Error at COMPILE TIME.
+  # Cannot run invalid code.
+
+PYTORCH:
+  # Gradient tracking is implicit, easy to forget
+  with torch.no_grad():
+    x = model(input)  # Oops, wanted gradients
+    
+PHI:
+  x : DTensor [32, 768]   -- No gradients
+  x : Diff (Tensor [32, 768] Float32)  -- Has gradients
+  
+  # The TYPE tells you!
+
+PYTORCH:
+  # Broadcasting is magic and confusing
+  x = torch.randn(3, 4)
+  y = torch.randn(4)
+  z = x + y  # Works? What shape is z?
+  
+PHI:
+  x : DTensor [3, 4]
+  y : DTensor [4]
+  z : DTensor [3, 4] = broadcast-add x y
+  
+  # Shape is in the TYPE. No guessing.
+
+SUMMARY:
+  - Shape errors: runtime → compile time
+  - Gradient tracking: implicit → explicit in type
+  - Broadcasting: magical → typed
+  - Hardware compilation: separate tool → same language
+-}
+
+
+-- ============================================================================
+-- PART XIII: EXAMPLE - TRAINING A TRANSFORMER
+-- ============================================================================
+
+-- A complete example: training GPT-2 style model
+
+-- Model configuration
+config : GPTConfig = {
+  vocab = 50257,
+  d_model = 768,
+  d_ff = 3072,
+  heads = 12,
+  layers = 12,
+  max_seq = 1024
+}
+
+-- Initialize model
+model : GPT = gpt config.layers config.d_model config.d_ff config.heads config.vocab
+
+-- Training configuration  
+trainConfig : TrainConfig = {
+  epochs = 3,
+  batchSize = 32,
+  optimizer = adamW 3e-4 0.9 0.999 0.01,
+  scheduler = cosineAnnealing warmup=1000 total=100000
+}
+
+-- Train!
+main : IO ()
+main = do
+  dataset ← loadDataset "openwebtext"
+  loader ← DataLoader dataset trainConfig.batchSize shuffle=True
+  model' ← train model trainConfig loader
+  save model' "gpt2-trained.phi"
+  
+  -- Generate some text
+  prompt ← tokenize "The meaning of life is"
+  output ← generate model' prompt maxLen=100
+  putStrLn (detokenize output)
+
+
+-- ============================================================================
+-- EPILOGUE: THE PHILOSOPHY
+-- ============================================================================
+
+{-
+WHAT WE'VE BUILT:
+
+A typed language for AI where:
+1. Shape errors are compile-time errors
+2. Gradients are tracked in the type system
+3. Models are composable (functorial)
+4. Same spec compiles to CUDA, ONNX, WebGPU
+
+WHY THIS MATTERS:
+
+PyTorch/TensorFlow: "Move fast and break things"
+  - Runtime errors, shape mismatches, silent bugs
+  - Debugging is archaeology
+  - "Why is my loss NaN?" — every ML engineer
+
+Phi for AI: "The type system is your friend"
+  - Errors at compile time
+  - If it compiles, the shapes are correct
+  - Composition is guaranteed to work
+
+THE DEEPER POINT:
+
+Neural networks ARE differentiable programs.
+Phi already has:
+  - Cofree for ASTs (model architectures)
+  - Tree transformations (forward pass, backward pass)
+  - Compilation to multiple targets
+
+AI is just another domain where Phi shines.
+
+FROM QUANTUM TO AI:
+
+quantum.phi: The physics of reality
+quantum-computing.phi: Computing on that physics
+phi-on-qm.phi: Phi running on quantum hardware
+ai.phi: Intelligence emerging from computation
+
+The loop continues to close.
+-}
+
+-- ============================================================================
+-- END
+-- ============================================================================
