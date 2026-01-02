@@ -26,6 +26,7 @@ jobs:
 
       - name: Post to Twitter
         if: ${{ vars.TWITTER_ENABLED == 'true' }}
+        continue-on-error: true
         uses: nearform-actions/github-action-notify-twitter@v1
         with:
           message: |
