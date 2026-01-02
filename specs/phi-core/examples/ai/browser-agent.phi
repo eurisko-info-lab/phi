@@ -1,0 +1,510 @@
+-- Browser AI Agent: Local Intelligence with WebGPU
+--
+-- Run AI agents entirely in the browser. No server. No API calls.
+-- Your data never leaves your device.
+--
+-- Use case: A coding assistant that analyzes your code locally.
+
+module Phi.AI.Browser where
+
+import Phi.AI.Agents (SLM, Agent, Cofree)
+
+-- =============================================================================
+-- THE SCENARIO: Local Code Review Agent
+-- =============================================================================
+
+-- Problem: You want AI code review but can't send proprietary code to OpenAI
+-- Solution: Run a small language model entirely in your browser via WebGPU
+--
+-- The agent:
+--   1. Analyzes code structure
+--   2. Detects potential bugs
+--   3. Suggests improvements
+--   4. All running locally on your GPU
+
+-- =============================================================================
+-- PART I: The Browser Agent Architecture
+-- =============================================================================
+
+-- Small model optimized for browser (fits in VRAM)
+BrowserSLM : Type
+BrowserSLM = SLM 512 6  -- 512 dim, 6 layers (~50MB quantized)
+
+-- The code review agent
+CodeReviewAgent : Type
+CodeReviewAgent = {
+  model      : BrowserSLM,
+  tokenizer  : Tokenizer,
+  context    : Vec 2048 Token,  -- Context window
+  capabilities : List Capability
+}
+
+Capability = 
+  | BugDetection
+  | StyleSuggestion
+  | SecurityAudit
+  | Refactoring
+  | Documentation
+
+-- =============================================================================
+-- PART II: WebGPU Compilation Target
+-- =============================================================================
+
+-- Phi compiles to WGSL (WebGPU Shading Language)
+
+-- Tensor stored in GPU buffer
+WebGPUTensor : Shape → Type
+WebGPUTensor shape = {
+  buffer : GPUBuffer,
+  shape  : shape,
+  dtype  : Float16  -- Use FP16 for browser efficiency
+}
+
+-- Matrix multiplication as compute shader
+matmul_wgsl : WebGPUTensor [m, k] → WebGPUTensor [k, n] → WebGPUTensor [m, n]
+matmul_wgsl = compile_to """
+@group(0) @binding(0) var<storage, read> a: array<f16>;
+@group(0) @binding(1) var<storage, read> b: array<f16>;
+@group(0) @binding(2) var<storage, read_write> result: array<f16>;
+
+@compute @workgroup_size(16, 16)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let row = gid.x;
+    let col = gid.y;
+    var sum: f16 = 0.0;
+    for (var i: u32 = 0u; i < K; i = i + 1u) {
+        sum = sum + a[row * K + i] * b[i * N + col];
+    }
+    result[row * N + col] = sum;
+}
+"""
+
+-- Attention kernel optimized for WebGPU
+attention_wgsl : WebGPUTensor [batch, seq, d] → WebGPUTensor [batch, seq, d]
+attention_wgsl = compile_to """
+@compute @workgroup_size(64)
+fn scaled_dot_product_attention(
+    @builtin(global_invocation_id) gid: vec3<u32>
+) {
+    let batch_idx = gid.z;
+    let head_idx = gid.y;
+    let seq_idx = gid.x;
+    
+    // Compute Q·K^T / sqrt(d_k)
+    var score: f16 = 0.0;
+    for (var i: u32 = 0u; i < D_K; i = i + 1u) {
+        score = score + Q[idx(batch_idx, head_idx, seq_idx, i)] 
+                      * K[idx(batch_idx, head_idx, seq_idx, i)];
+    }
+    score = score / sqrt(f16(D_K));
+    
+    // Softmax and weighted sum with V
+    // ... (full implementation in compiled output)
+}
+"""
+
+-- =============================================================================
+-- PART III: Model Loading & Quantization
+-- =============================================================================
+
+-- Load quantized model from URL (small enough for browser)
+loadModel : URL → IO BrowserSLM
+loadModel url = do
+  -- Fetch quantized weights (~50MB for 500M param model)
+  weights ← fetch url
+  
+  -- Decompress and dequantize on GPU
+  buffers ← createGPUBuffers weights
+  
+  return BrowserSLM {
+    layers = initLayers buffers,
+    config = { d_model = 512, n_heads = 8, n_layers = 6 }
+  }
+
+-- Quantization: FP32 → INT4 (12.5% size)
+quantize : Tensor s Float32 → Tensor s Int4
+quantize tensor = 
+  let scale = max (abs tensor) / 7.0  -- INT4 range: -8 to 7
+      quantized = round (tensor / scale)
+  in pack4bit quantized scale
+
+-- Dequantize on the fly during inference
+dequantize : Tensor s Int4 → Tensor s Float16
+dequantize (packed, scale) = 
+  unpack4bit packed * scale
+
+-- =============================================================================
+-- PART IV: The Inference Pipeline
+-- =============================================================================
+
+-- Token generation loop (runs entirely on GPU)
+generate : BrowserSLM → Vec n Token → Stream Token
+generate model prompt = unfold step (initState prompt)
+  where
+    step state = 
+      -- All on GPU, no CPU roundtrip
+      let logits = forward_pass model state.context
+          token  = sample_top_p 0.9 logits
+          state' = append state token
+      in (token, state')
+
+-- Forward pass compiled to WebGPU pipeline
+forward_pass : BrowserSLM → Context → Logits
+forward_pass model ctx =
+  -- Each layer is a compute shader dispatch
+  let embedded = embed ctx model.embeddings
+      processed = foldl apply_layer embedded model.layers
+      logits = project processed model.head
+  in logits
+
+-- Streaming response to UI
+streamToUI : Stream Token → (Token → IO ()) → IO ()
+streamToUI stream callback = 
+  forEach stream $ \token → do
+    text ← detokenize token
+    callback text
+
+-- =============================================================================
+-- PART V: Code Analysis Capabilities
+-- =============================================================================
+
+-- Structured prompts for code review
+
+bugDetectionPrompt : Code → Prompt
+bugDetectionPrompt code = """
+Analyze this code for potential bugs:
+
+```
+{code}
+```
+
+List any:
+1. Null/undefined errors
+2. Off-by-one errors
+3. Resource leaks
+4. Race conditions
+5. Type mismatches
+
+Format: [LINE]: [ISSUE] - [EXPLANATION]
+"""
+
+securityAuditPrompt : Code → Prompt
+securityAuditPrompt code = """
+Security audit for:
+
+```
+{code}
+```
+
+Check for:
+1. SQL injection
+2. XSS vulnerabilities
+3. Hardcoded secrets
+4. Insecure dependencies
+5. Authentication issues
+
+Severity: [HIGH/MEDIUM/LOW]
+"""
+
+refactoringPrompt : Code → Prompt
+refactoringPrompt code = """
+Suggest refactoring for cleaner code:
+
+```
+{code}
+```
+
+Consider:
+1. Extract functions
+2. Reduce nesting
+3. Improve naming
+4. Apply patterns
+5. Simplify logic
+"""
+
+-- Parse structured output
+parseCodeReview : Response → CodeReview
+parseCodeReview response = {
+  issues   = extractIssues response,
+  severity = extractSeverity response,
+  fixes    = extractFixes response,
+  line_numbers = extractLines response
+}
+
+-- =============================================================================
+-- PART VI: The Complete Web Application
+-- =============================================================================
+
+-- Main application state
+AppState : Type
+AppState = {
+  model       : Maybe BrowserSLM,
+  loading     : Bool,
+  code        : String,
+  review      : Maybe CodeReview,
+  streaming   : Bool,
+  gpu_info    : GPUInfo
+}
+
+-- Check WebGPU support
+checkWebGPU : IO (Either String GPUInfo)
+checkWebGPU = do
+  adapter ← navigator.gpu.requestAdapter
+  case adapter of
+    Nothing → return (Left "WebGPU not supported")
+    Just a  → do
+      device ← a.requestDevice
+      return (Right { 
+        vendor = a.name,
+        maxBufferSize = device.limits.maxBufferSize,
+        supported = True
+      })
+
+-- Initialize application
+initApp : IO AppState
+initApp = do
+  gpu ← checkWebGPU
+  case gpu of
+    Left err → 
+      return AppState { model = Nothing, gpu_info = { supported = False } }
+    Right info → do
+      -- Load model in background
+      model ← loadModel "https://models.phi.dev/code-review-500m-q4.bin"
+      return AppState { model = Just model, gpu_info = info }
+
+-- Handle code input
+onCodeChange : AppState → String → AppState
+onCodeChange state code = { state | code = code, review = Nothing }
+
+-- Run code review
+runReview : AppState → Capability → IO AppState
+runReview state capability = do
+  let prompt = case capability of
+        BugDetection    → bugDetectionPrompt state.code
+        SecurityAudit   → securityAuditPrompt state.code
+        Refactoring     → refactoringPrompt state.code
+        _               → genericPrompt state.code
+  
+  -- Stream response
+  let state' = { state | streaming = True }
+  
+  response ← collectStream $ generate state.model (tokenize prompt)
+  let review = parseCodeReview response
+  
+  return { state' | review = Just review, streaming = False }
+
+-- =============================================================================
+-- PART VII: UI Components (compiles to JSX/HTML)
+-- =============================================================================
+
+-- Main app component
+App : Component AppState
+App state = div [class "app"] [
+  Header,
+  
+  if not state.gpu_info.supported
+  then GPUWarning
+  else div [class "main"] [
+    CodeEditor state.code onCodeChange,
+    CapabilitySelector runReview,
+    
+    if state.streaming
+    then StreamingIndicator
+    else case state.review of
+      Nothing → Placeholder "Paste code and select a review type"
+      Just review → ReviewResults review
+  ],
+  
+  Footer state.gpu_info
+]
+
+-- Code editor with syntax highlighting  
+CodeEditor : String → (String → IO ()) → Component
+CodeEditor code onChange = 
+  textarea [
+    class "code-editor",
+    value code,
+    onInput onChange,
+    placeholder "Paste your code here..."
+  ]
+
+-- Review results with inline annotations
+ReviewResults : CodeReview → Component
+ReviewResults review = div [class "results"] [
+  h2 "Code Review Results",
+  
+  -- Summary
+  div [class "summary"] [
+    span [class "count"] [text $ show (length review.issues) ++ " issues found"],
+    span [class $ severityClass review.severity] [text $ show review.severity]
+  ],
+  
+  -- Issues list
+  ul [class "issues"] $ 
+    map issueItem review.issues,
+    
+  -- Suggested fixes
+  if not (null review.fixes)
+  then div [class "fixes"] [
+    h3 "Suggested Fixes",
+    map fixItem review.fixes
+  ]
+  else empty
+]
+
+issueItem : Issue → Component
+issueItem issue = li [class $ "issue " ++ severityClass issue.severity] [
+  span [class "line"] [text $ "Line " ++ show issue.line],
+  span [class "description"] [text issue.description],
+  if issue.fix
+  then button [onClick (applyFix issue)] [text "Apply Fix"]
+  else empty
+]
+
+-- =============================================================================
+-- PART VIII: Complete HTML/JS Output
+-- =============================================================================
+
+-- Phi compiles the entire app to deployable web assets:
+
+compile_webapp : App → WebAssets
+compile_webapp app = {
+  html = """
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Local Code Review - Powered by Phi</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
+""",
+
+  js = compile_js app,      -- React/Preact components
+  wgsl = compile_wgsl app,  -- WebGPU compute shaders
+  css = compile_css app,    -- Styles
+  
+  -- Model served separately (50MB)
+  model_url = "https://models.phi.dev/code-review-500m-q4.bin"
+}
+
+-- =============================================================================
+-- PART IX: USAGE EXAMPLE
+-- =============================================================================
+
+{-
+USER EXPERIENCE:
+
+1. Open https://code-review.phi.dev in browser
+2. Browser downloads ~50MB model (cached after first load)
+3. Paste code into editor
+4. Click "Bug Detection" or "Security Audit"
+5. Watch AI analyze your code in real-time
+6. See issues highlighted inline
+7. Click "Apply Fix" to auto-fix issues
+
+ALL RUNNING LOCALLY:
+- No code sent to any server
+- Works offline after model cached
+- Runs on your GPU via WebGPU
+- ~100 tokens/second on modern GPU
+- Private and secure
+
+SUPPORTED BROWSERS (as of 2025):
+- Chrome 113+
+- Edge 113+
+- Firefox 118+
+- Safari 17+
+-}
+
+-- =============================================================================
+-- PART X: DEPLOYMENT
+-- =============================================================================
+
+-- Build and deploy
+deploy : IO ()
+deploy = do
+  -- Compile Phi to web assets
+  let assets = compile_webapp App
+  
+  -- Write files
+  writeFile "dist/index.html" assets.html
+  writeFile "dist/app.js" assets.js
+  writeFile "dist/shaders.wgsl" assets.wgsl
+  writeFile "dist/styles.css" assets.css
+  
+  -- Deploy to edge CDN
+  cloudflare.deploy "dist/" "code-review.phi.dev"
+  
+  putStrLn "✅ Deployed to https://code-review.phi.dev"
+
+-- =============================================================================
+-- OTHER USE CASES
+-- =============================================================================
+
+-- The same pattern works for:
+
+-- 1. Document Summarizer
+DocumentSummarizer = BrowserAgent {
+  model = loadModel "summarizer-500m-q4.bin",
+  prompt = "Summarize this document in 3 bullet points:\n{doc}"
+}
+
+-- 2. Local Translator  
+Translator = BrowserAgent {
+  model = loadModel "translator-500m-q4.bin",
+  prompt = "Translate to {target_lang}:\n{text}"
+}
+
+-- 3. Writing Assistant
+WritingAssistant = BrowserAgent {
+  model = loadModel "writing-500m-q4.bin",
+  prompt = "Improve this writing for clarity:\n{text}"
+}
+
+-- 4. SQL Generator
+SQLGenerator = BrowserAgent {
+  model = loadModel "sql-500m-q4.bin",
+  prompt = "Generate SQL for: {natural_language_query}"
+}
+
+-- 5. Regex Helper
+RegexHelper = BrowserAgent {
+  model = loadModel "regex-500m-q4.bin",
+  prompt = "Create regex to match: {pattern_description}"
+}
+
+-- All run locally. All private. All powered by WebGPU.
+
+-- =============================================================================
+-- THE INSIGHT
+-- =============================================================================
+
+{-
+WHY THIS MATTERS:
+
+1. PRIVACY: Your code/documents never leave your device
+2. SPEED: No network latency, instant responses
+3. COST: No API fees, runs on hardware you already own
+4. OFFLINE: Works without internet after initial load
+5. SCALE: No server costs as users grow
+
+THE PHI ADVANTAGE:
+
+- One spec describes model + UI + deployment
+- Type-safe tensor operations (no shape bugs)
+- Compiles to optimized WebGPU shaders
+- Same code could target CUDA for server deployment
+
+FROM SPEC TO PRODUCTION:
+
+  phi-spec → WebGPU shaders
+           → JavaScript runtime
+           → React components
+           → Deployable webapp
+
+Grammar = Implementation, all the way to the browser.
+-}
