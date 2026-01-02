@@ -1,0 +1,634 @@
+-- ============================================================================
+-- GRAPHICS.PHI: Rendering in Types
+-- ============================================================================
+-- From rays to pixels, mathematically specified.
+-- Shaders as functions, scenes as data, rendering as evaluation.
+-- ============================================================================
+
+-- ============================================================================
+-- PART I: MATHEMATICAL FOUNDATIONS
+-- ============================================================================
+
+-- Vectors
+type Vec2 = (Float, Float)
+type Vec3 = (Float, Float, Float)
+type Vec4 = (Float, Float, Float, Float)
+
+-- Vector operations
+add : Vec3 → Vec3 → Vec3
+add (x1,y1,z1) (x2,y2,z2) = (x1+x2, y1+y2, z1+z2)
+
+sub : Vec3 → Vec3 → Vec3
+sub (x1,y1,z1) (x2,y2,z2) = (x1-x2, y1-y2, z1-z2)
+
+mul : Float → Vec3 → Vec3
+mul s (x,y,z) = (s*x, s*y, s*z)
+
+dot : Vec3 → Vec3 → Float
+dot (x1,y1,z1) (x2,y2,z2) = x1*x2 + y1*y2 + z1*z2
+
+cross : Vec3 → Vec3 → Vec3
+cross (x1,y1,z1) (x2,y2,z2) = 
+  (y1*z2 - z1*y2, z1*x2 - x1*z2, x1*y2 - y1*x2)
+
+length_ : Vec3 → Float
+length_ v = sqrt (dot v v)
+
+normalize : Vec3 → Vec3
+normalize v = mul (1.0 / length_ v) v
+
+reflect : Vec3 → Vec3 → Vec3
+reflect incident normal = 
+  sub incident (mul (2.0 * dot incident normal) normal)
+
+refract : Vec3 → Vec3 → Float → Option Vec3
+refract incident normal eta =
+  let cosI = -dot incident normal
+  let sin2T = eta * eta * (1.0 - cosI * cosI)
+  if sin2T > 1.0 then None  -- Total internal reflection
+  else 
+    let cosT = sqrt (1.0 - sin2T)
+    Some (add (mul eta incident) (mul (eta * cosI - cosT) normal))
+
+-- Matrices
+type Mat3 = Vec3 × Vec3 × Vec3
+type Mat4 = Vec4 × Vec4 × Vec4 × Vec4
+
+matMul : Mat4 → Mat4 → Mat4
+matMul a b = -- Standard matrix multiplication
+
+transform : Mat4 → Vec4 → Vec4
+transform m v = -- Matrix-vector multiplication
+
+-- ============================================================================
+-- PART II: COLORS AND IMAGES
+-- ============================================================================
+
+-- Color spaces
+type RGB = { r : Float, g : Float, b : Float }  -- [0,1] range
+type RGBA = { r : Float, g : Float, b : Float, a : Float }
+type HSV = { h : Float, s : Float, v : Float }  -- Hue [0,360), S,V [0,1]
+type HSL = { h : Float, s : Float, l : Float }
+type XYZ = { x : Float, y : Float, z : Float }  -- CIE XYZ
+type Lab = { l : Float, a : Float, b : Float }  -- CIELAB
+
+-- Color conversions
+rgbToHsv : RGB → HSV
+rgbToHsv c =
+  let max_ = max c.r (max c.g c.b)
+  let min_ = min c.r (min c.g c.b)
+  let delta = max_ - min_
+  let h = if delta == 0 then 0
+          else if max_ == c.r then 60 * ((c.g - c.b) / delta `mod` 6)
+          else if max_ == c.g then 60 * ((c.b - c.r) / delta + 2)
+          else 60 * ((c.r - c.g) / delta + 4)
+  let s = if max_ == 0 then 0 else delta / max_
+  { h = h, s = s, v = max_ }
+
+-- Gamma correction
+linearToSrgb : Float → Float
+linearToSrgb x = if x <= 0.0031308 then 12.92 * x
+                 else 1.055 * (x ** (1/2.4)) - 0.055
+
+srgbToLinear : Float → Float
+srgbToLinear x = if x <= 0.04045 then x / 12.92
+                 else ((x + 0.055) / 1.055) ** 2.4
+
+-- Tone mapping
+type ToneMapper = RGB → RGB
+
+reinhardToneMap : ToneMapper
+reinhardToneMap c = { r = c.r / (1 + c.r), g = c.g / (1 + c.g), b = c.b / (1 + c.b) }
+
+acesToneMap : ToneMapper  -- Academy Color Encoding System
+acesToneMap c =
+  let a = 2.51
+  let b = 0.03
+  let c_ = 2.43
+  let d = 0.59
+  let e = 0.14
+  let f x = clamp ((x * (a*x + b)) / (x * (c_*x + d) + e)) 0 1
+  { r = f c.r, g = f c.g, b = f c.b }
+
+-- Image as 2D array of colors
+type Image (w : Nat) (h : Nat) = Vec (Vec RGB w) h
+
+getPixel : Image w h → Nat → Nat → RGB
+getPixel img x y = img[y][x]
+
+setPixel : Image w h → Nat → Nat → RGB → Image w h
+setPixel img x y c = img[y := img[y][x := c]]
+
+-- ============================================================================
+-- PART III: RAY TRACING
+-- ============================================================================
+
+-- Ray: Origin + Direction
+type Ray = { origin : Vec3, direction : Vec3 }
+
+-- Camera
+type Camera = {
+  position : Vec3,
+  lookAt : Vec3,
+  up : Vec3,
+  fov : Float,  -- Field of view in degrees
+  aspectRatio : Float
+}
+
+generateRay : Camera → Float → Float → Ray
+generateRay cam u v =
+  let forward = normalize (sub cam.lookAt cam.position)
+  let right = normalize (cross forward cam.up)
+  let up = cross right forward
+  let halfH = tan (cam.fov * π / 360)
+  let halfW = halfH * cam.aspectRatio
+  let direction = normalize (add forward 
+                    (add (mul ((u - 0.5) * 2 * halfW) right)
+                         (mul ((v - 0.5) * 2 * halfH) up)))
+  { origin = cam.position, direction = direction }
+
+-- Scene primitives
+type Primitive = 
+  | Sphere { center : Vec3, radius : Float }
+  | Plane { normal : Vec3, d : Float }
+  | Triangle { v0 : Vec3, v1 : Vec3, v2 : Vec3 }
+  | Box { min : Vec3, max : Vec3 }
+
+-- Intersection result
+type Hit = {
+  t : Float,        -- Distance along ray
+  point : Vec3,     -- Intersection point
+  normal : Vec3,    -- Surface normal
+  material : Material
+}
+
+-- Ray-primitive intersection
+intersect : Ray → Primitive → Option Hit
+
+intersect ray (Sphere { center, radius }) =
+  let oc = sub ray.origin center
+  let a = dot ray.direction ray.direction
+  let b = 2.0 * dot oc ray.direction
+  let c = dot oc oc - radius * radius
+  let discriminant = b * b - 4 * a * c
+  if discriminant < 0 then None
+  else
+    let t = (-b - sqrt discriminant) / (2 * a)
+    if t < 0 then None
+    else
+      let point = add ray.origin (mul t ray.direction)
+      let normal = normalize (sub point center)
+      Some { t = t, point = point, normal = normal, material = default }
+
+intersect ray (Plane { normal, d }) =
+  let denom = dot normal ray.direction
+  if abs denom < 0.0001 then None
+  else
+    let t = -(dot normal ray.origin + d) / denom
+    if t < 0 then None
+    else
+      let point = add ray.origin (mul t ray.direction)
+      Some { t = t, point = point, normal = normal, material = default }
+
+intersect ray (Triangle { v0, v1, v2 }) =
+  -- Möller-Trumbore algorithm
+  let e1 = sub v1 v0
+  let e2 = sub v2 v0
+  let h = cross ray.direction e2
+  let a = dot e1 h
+  if abs a < 0.0001 then None
+  else
+    let f = 1.0 / a
+    let s = sub ray.origin v0
+    let u = f * dot s h
+    if u < 0 || u > 1 then None
+    else
+      let q = cross s e1
+      let v = f * dot ray.direction q
+      if v < 0 || u + v > 1 then None
+      else
+        let t = f * dot e2 q
+        if t < 0 then None
+        else
+          let point = add ray.origin (mul t ray.direction)
+          let normal = normalize (cross e1 e2)
+          Some { t = t, point = point, normal = normal, material = default }
+
+-- ============================================================================
+-- PART IV: MATERIALS AND BRDF
+-- ============================================================================
+
+-- Material properties
+type Material = {
+  albedo : RGB,
+  metallic : Float,      -- 0 = dielectric, 1 = metal
+  roughness : Float,     -- 0 = smooth, 1 = rough
+  ior : Float,           -- Index of refraction
+  emissive : RGB         -- Emission color
+}
+
+-- BRDF (Bidirectional Reflectance Distribution Function)
+type BRDF = Vec3 → Vec3 → Vec3 → Material → RGB  -- (L, V, N, mat) → color
+
+-- Lambertian (diffuse)
+lambertianBRDF : BRDF
+lambertianBRDF l v n mat = mul (1 / π) mat.albedo
+
+-- Cook-Torrance (specular)
+cookTorranceBRDF : BRDF
+cookTorranceBRDF l v n mat =
+  let h = normalize (add l v)
+  let nDotL = max (dot n l) 0
+  let nDotV = max (dot n v) 0
+  let nDotH = max (dot n h) 0
+  let vDotH = max (dot v h) 0
+  
+  -- Normal distribution function (GGX)
+  let a = mat.roughness * mat.roughness
+  let a2 = a * a
+  let denom = nDotH * nDotH * (a2 - 1) + 1
+  let D = a2 / (π * denom * denom)
+  
+  -- Geometry function (Smith)
+  let k = (mat.roughness + 1) ** 2 / 8
+  let G1 nDotX = nDotX / (nDotX * (1 - k) + k)
+  let G = G1 nDotL * G1 nDotV
+  
+  -- Fresnel (Schlick)
+  let f0 = lerp 0.04 mat.albedo mat.metallic
+  let F = add f0 (mul ((1 - f0) * (1 - vDotH) ** 5) white)
+  
+  -- Cook-Torrance specular
+  let specular = mul (D * G / (4 * nDotL * nDotV + 0.001)) F
+  
+  -- Combine diffuse and specular
+  let kD = mul (1 - mat.metallic) (sub white F)
+  add (mul kD (lambertianBRDF l v n mat)) specular
+
+-- ============================================================================
+-- PART V: PATH TRACING
+-- ============================================================================
+
+-- Scene representation
+type Scene = {
+  primitives : List (Primitive, Material),
+  lights : List Light,
+  skybox : Vec3 → RGB
+}
+
+type Light = 
+  | PointLight { position : Vec3, color : RGB, intensity : Float }
+  | DirectionalLight { direction : Vec3, color : RGB }
+  | AreaLight { primitive : Primitive, emission : RGB }
+
+-- Trace ray through scene
+traceRay : Scene → Ray → Nat → RGB
+traceRay scene ray 0 = scene.skybox ray.direction
+traceRay scene ray depth =
+  case findClosest scene.primitives ray of
+    None → scene.skybox ray.direction
+    Some hit →
+      -- Emission
+      let emission = hit.material.emissive
+      
+      -- Direct lighting
+      let direct = foldl (λ acc light → add acc (sampleLight scene hit light)) black scene.lights
+      
+      -- Indirect lighting (recursive)
+      let (newDir, pdf) = sampleBRDF hit
+      let newRay = { origin = add hit.point (mul 0.001 hit.normal), direction = newDir }
+      let indirect = mul (1 / pdf) (mul (evalBRDF hit newDir) (traceRay scene newRay (depth - 1)))
+      
+      add emission (add direct indirect)
+
+-- Monte Carlo integration
+pathTrace : Scene → Camera → Nat → Nat → Image w h
+pathTrace scene camera samples depth =
+  tabulate w h (λ x y →
+    let colors = map (λ _ →
+      let u = (x + random()) / w
+      let v = (y + random()) / h
+      let ray = generateRay camera u v
+      traceRay scene ray depth
+    ) [1..samples]
+    average colors
+  )
+
+-- ============================================================================
+-- PART VI: SIGNED DISTANCE FUNCTIONS
+-- ============================================================================
+
+-- SDF: Distance to surface (negative inside)
+type SDF = Vec3 → Float
+
+-- Primitive SDFs
+sphereSDF : Vec3 → Float → SDF
+sphereSDF center radius = λ p → length_ (sub p center) - radius
+
+boxSDF : Vec3 → Vec3 → SDF
+boxSDF center size = λ p →
+  let d = sub (abs (sub p center)) size
+  length_ (max d 0) + min (max d.x (max d.y d.z)) 0
+
+planeSDF : Vec3 → Float → SDF
+planeSDF normal d = λ p → dot p normal + d
+
+torusSDF : Vec3 → Float → Float → SDF
+torusSDF center R r = λ p →
+  let q = (length_ (sub p.xz center.xz) - R, p.y - center.y)
+  length_ q - r
+
+-- CSG operations
+unionSDF : SDF → SDF → SDF
+unionSDF a b = λ p → min (a p) (b p)
+
+intersectSDF : SDF → SDF → SDF
+intersectSDF a b = λ p → max (a p) (b p)
+
+differenceSDF : SDF → SDF → SDF
+differenceSDF a b = λ p → max (a p) (-b p)
+
+-- Smooth operations
+smoothUnion : Float → SDF → SDF → SDF
+smoothUnion k a b = λ p →
+  let da = a p
+  let db = b p
+  let h = clamp (0.5 + 0.5 * (db - da) / k) 0 1
+  lerp db da h - k * h * (1 - h)
+
+-- Domain operations
+translate : Vec3 → SDF → SDF
+translate offset sdf = λ p → sdf (sub p offset)
+
+scale : Float → SDF → SDF
+scale s sdf = λ p → s * sdf (mul (1/s) p)
+
+rotate : Mat3 → SDF → SDF
+rotate m sdf = λ p → sdf (matMul (transpose m) p)
+
+repeat : Vec3 → SDF → SDF
+repeat period sdf = λ p → sdf (mod p period - mul 0.5 period)
+
+-- Ray marching
+rayMarch : SDF → Ray → Option Hit
+rayMarch sdf ray =
+  let march t steps =
+    if steps > 256 || t > 1000 then None
+    else
+      let p = add ray.origin (mul t ray.direction)
+      let d = sdf p
+      if d < 0.001 then 
+        let normal = estimateNormal sdf p
+        Some { t = t, point = p, normal = normal, material = default }
+      else march (t + d) (steps + 1)
+  march 0 0
+
+estimateNormal : SDF → Vec3 → Vec3
+estimateNormal sdf p =
+  let e = 0.0001
+  normalize (
+    sdf (p.x + e, p.y, p.z) - sdf (p.x - e, p.y, p.z),
+    sdf (p.x, p.y + e, p.z) - sdf (p.x, p.y - e, p.z),
+    sdf (p.x, p.y, p.z + e) - sdf (p.x, p.y, p.z - e)
+  )
+
+-- ============================================================================
+-- PART VII: GPU SHADERS
+-- ============================================================================
+
+-- Shader types
+type VertexShader = VertexInput → VertexOutput
+type FragmentShader = FragmentInput → RGBA
+type ComputeShader = WorkGroup → ()
+
+type VertexInput = {
+  position : Vec3,
+  normal : Vec3,
+  uv : Vec2,
+  color : RGBA
+}
+
+type VertexOutput = {
+  clipPosition : Vec4,  -- gl_Position
+  worldPosition : Vec3,
+  normal : Vec3,
+  uv : Vec2
+}
+
+type FragmentInput = {
+  worldPosition : Vec3,
+  normal : Vec3,
+  uv : Vec2
+}
+
+-- Uniforms
+type Uniforms = {
+  modelMatrix : Mat4,
+  viewMatrix : Mat4,
+  projectionMatrix : Mat4,
+  cameraPosition : Vec3,
+  lightPosition : Vec3,
+  time : Float
+}
+
+-- Standard vertex shader
+standardVS : Uniforms → VertexShader
+standardVS u input = {
+  clipPosition = transform (matMul u.projectionMatrix (matMul u.viewMatrix u.modelMatrix)) 
+                          (input.position, 1),
+  worldPosition = transform u.modelMatrix (input.position, 1),
+  normal = normalize (transform (transpose (inverse u.modelMatrix)) (input.normal, 0)),
+  uv = input.uv
+}
+
+-- PBR fragment shader
+pbrFS : Uniforms → Material → Texture → FragmentShader
+pbrFS u mat tex input =
+  let albedo = sample tex input.uv
+  let N = normalize input.normal
+  let V = normalize (sub u.cameraPosition input.worldPosition)
+  let L = normalize (sub u.lightPosition input.worldPosition)
+  
+  let color = cookTorranceBRDF L V N { mat | albedo = albedo }
+  let ambient = mul 0.03 albedo
+  
+  { r = color.r + ambient.r, g = color.g + ambient.g, b = color.b + ambient.b, a = 1 }
+
+-- ============================================================================
+-- PART VIII: RENDERING PIPELINE
+-- ============================================================================
+
+-- Render pipeline stages
+type Pipeline = {
+  vertexShader : VertexShader,
+  fragmentShader : FragmentShader,
+  cullMode : CullMode,
+  depthTest : Bool,
+  blending : BlendMode
+}
+
+type CullMode = NoCull | BackFace | FrontFace
+type BlendMode = Opaque | AlphaBlend | Additive
+
+-- Rasterization
+rasterize : Pipeline → List Triangle → Framebuffer → Framebuffer
+rasterize pipeline triangles fb =
+  foldl (λ fb tri →
+    -- Vertex processing
+    let (v0, v1, v2) = map pipeline.vertexShader tri
+    
+    -- Culling
+    if shouldCull pipeline.cullMode (v0, v1, v2) then fb
+    else
+      -- Clip to view frustum
+      let clipped = clip (v0, v1, v2)
+      
+      -- Perspective divide
+      let (ndc0, ndc1, ndc2) = map perspectiveDivide clipped
+      
+      -- Viewport transform
+      let (screen0, screen1, screen2) = map (viewportTransform fb.width fb.height) (ndc0, ndc1, ndc2)
+      
+      -- Rasterize triangle
+      rasterizeTriangle pipeline.fragmentShader (screen0, screen1, screen2) fb
+  ) fb triangles
+
+rasterizeTriangle : FragmentShader → (Vec3, Vec3, Vec3) → Framebuffer → Framebuffer
+rasterizeTriangle fs (v0, v1, v2) fb =
+  let bbox = boundingBox v0 v1 v2
+  foldl (λ fb (x, y) →
+    let (u, v, w) = barycentric v0 v1 v2 (x, y)
+    if u >= 0 && v >= 0 && w >= 0 then
+      let interpolated = interpolate (u, v, w) (v0, v1, v2)
+      let color = fs interpolated
+      let z = u * v0.z + v * v1.z + w * v2.z
+      if z < fb.depth[y][x] then
+        { fb | 
+          color = setPixel fb.color x y color,
+          depth = setPixel fb.depth x y z
+        }
+      else fb
+    else fb
+  ) fb (pixelsInBbox bbox)
+
+-- ============================================================================
+-- PART IX: EFFECTS AND POST-PROCESSING
+-- ============================================================================
+
+-- Post-processing effects
+type PostProcess = Image w h → Image w h
+
+-- Bloom
+bloom : Float → Float → PostProcess
+bloom threshold intensity = λ img →
+  let bright = filter (λ c → luminance c > threshold) img
+  let blurred = gaussianBlur 16 bright
+  add img (mul intensity blurred)
+
+-- Depth of field
+depthOfField : Float → Float → Image w h → Image w h → Image w h
+depthOfField focalDistance aperture color depth =
+  map2 (λ c d →
+    let coc = abs (d - focalDistance) * aperture
+    blur coc c
+  ) color depth
+
+-- Motion blur
+motionBlur : Vec2 → Nat → PostProcess
+motionBlur velocity samples = λ img →
+  let step = mul (1 / samples) velocity
+  average (map (λ i → sampleAt img (add pos (mul i step))) [0..samples-1])
+
+-- Screen-space ambient occlusion
+ssao : Float → Nat → Image w h → Image w h → Image w h
+ssao radius samples normals depth = 
+  map2 (λ n d →
+    let occlusion = foldl (λ acc _ →
+      let samplePos = add pos (mul (random3D() * radius) n)
+      let sampleDepth = depth[samplePos]
+      if sampleDepth < samplePos.z then acc + 1 else acc
+    ) 0 [1..samples]
+    1 - occlusion / samples
+  ) normals depth
+
+-- ============================================================================
+-- PART X: COMPILE TARGETS
+-- ============================================================================
+
+-- Graphics compiles to:
+
+compile[GLSL] : Shader → String
+  -- OpenGL shading language
+  -- Vertex/Fragment/Geometry/Compute
+  -- Vulkan GLSL variant
+
+compile[HLSL] : Shader → String
+  -- DirectX shading language
+  -- Shader Model 6.x
+  -- DXR ray tracing
+
+compile[Metal] : Shader → String
+  -- Apple Metal shading language
+  -- iOS/macOS GPU compute
+
+compile[WGSL] : Shader → String
+  -- WebGPU shading language
+  -- Browser-based graphics
+
+compile[SPIRV] : Shader → Bytes
+  -- Vulkan intermediate representation
+  -- Cross-platform shader bytecode
+
+compile[CUDA] : ComputeShader → PTX
+  -- NVIDIA GPU compute
+  -- Ray tracing (OptiX)
+
+-- ============================================================================
+-- EXAMPLE: Complete Scene
+-- ============================================================================
+
+-- Demo scene with ray marching
+demoScene : SDF
+demoScene = 
+  let ground = planeSDF (0, 1, 0) 0
+  let sphere = sphereSDF (0, 1, 0) 1
+  let box = boxSDF (2, 0.5, 0) (0.5, 0.5, 0.5)
+  let torus = translate (−2, 0.5, 0) (torusSDF (0,0,0) 0.5 0.2)
+  
+  -- CSG operations
+  let combined = smoothUnion 0.1 sphere box
+  
+  -- Infinite repetition
+  let pillars = repeat (4, 0, 4) (boxSDF (0, 1, 0) (0.2, 1, 0.2))
+  
+  unionSDF ground (unionSDF combined (unionSDF torus pillars))
+
+-- Render with shadertoy-style main
+mainImage : Vec2 → Vec2 → Float → RGBA
+mainImage fragCoord resolution time =
+  let uv = sub (div fragCoord resolution) 0.5
+  let camera = (sin time * 5, 2, cos time * 5)
+  let target = (0, 0.5, 0)
+  let ray = { origin = camera, direction = rayDirection uv camera target }
+  
+  case rayMarch demoScene ray of
+    None → { r = 0.1, g = 0.1, b = 0.2, a = 1 }  -- Sky
+    Some hit →
+      let light = normalize (1, 1, 1)
+      let diffuse = max (dot hit.normal light) 0
+      let shadow = if rayMarch demoScene { origin = add hit.point (mul 0.01 hit.normal), direction = light } 
+                   then 0.3 else 1
+      { r = diffuse * shadow, g = diffuse * shadow * 0.9, b = diffuse * shadow * 0.8, a = 1 }
+
+-- ============================================================================
+-- THE BOTTOM LINE
+-- ============================================================================
+
+-- Graphics is geometry transformed through light:
+-- • Rays are half-lines in 3D space
+-- • Surfaces are implicit or explicit geometry
+-- • Materials describe light interaction
+-- • Shaders are parallel pixel functions
+-- • The GPU is a massively parallel evaluator
+
+-- Phi makes rendering pipelines composable and type-safe.

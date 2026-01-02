@@ -1,0 +1,657 @@
+-- ============================================================================
+-- CRYPTO.PHI: Cryptography in Types
+-- ============================================================================
+-- Hashes, ciphers, signatures, zero-knowledge proofs, and blockchains.
+-- Security properties proven at compile time.
+-- ============================================================================
+
+-- ============================================================================
+-- PART I: FOUNDATIONAL PRIMITIVES
+-- ============================================================================
+
+-- Bytes and bits
+type Byte = BitVec 8
+type Bytes (n : Nat) = Vec Byte n
+
+-- Hash functions: Deterministic, one-way, collision-resistant
+type Hash (in : Nat) (out : Nat) = {
+  hash : Bytes in → Bytes out,
+  
+  -- Security properties (proofs required)
+  preimageResistance : ∀ h. ¬∃ m. hash m = h  -- computationally
+  secondPreimage : ∀ m1. ¬∃ m2. m1 ≠ m2 ∧ hash m1 = hash m2
+  collisionResistance : ¬∃ m1 m2. m1 ≠ m2 ∧ hash m1 = hash m2
+}
+
+-- Common hash functions
+sha256 : Hash * 32  -- 256-bit output
+sha256 = {
+  hash = λ msg → 
+    let padded = pad msg
+    let blocks = chunk padded 64
+    foldl compress initialHash blocks
+}
+
+-- SHA-256 compression function
+compress : Bytes 32 → Bytes 64 → Bytes 32
+compress h block =
+  let w = expand block           -- Message schedule
+  let (a,b,c,d,e,f,g,h) = h
+  let rounds = iterate roundFn (a,b,c,d,e,f,g,h) 64
+  zipWith (+) h rounds
+
+-- Merkle tree
+type MerkleTree a = Cofree[MerkleF, Hash]
+
+type MerkleF a = 
+  | Leaf a
+  | Branch (MerkleTree a) (MerkleTree a)
+
+merkleRoot : MerkleTree a → Bytes 32
+merkleRoot (Leaf x) = sha256 x
+merkleRoot (Branch l r) = sha256 (merkleRoot l ++ merkleRoot r)
+
+-- Merkle proof
+type MerkleProof = List (Either (Bytes 32) (Bytes 32))
+
+verifyMerkle : Bytes 32 → MerkleProof → Bytes 32 → Bool
+verifyMerkle root [] leaf = root == sha256 leaf
+verifyMerkle root (Left sibling : rest) current =
+  verifyMerkle root rest (sha256 (sibling ++ current))
+verifyMerkle root (Right sibling : rest) current =
+  verifyMerkle root rest (sha256 (current ++ sibling))
+
+-- ============================================================================
+-- PART II: SYMMETRIC CRYPTOGRAPHY
+-- ============================================================================
+
+-- Block cipher
+type BlockCipher (k : Nat) (b : Nat) = {
+  encrypt : Bytes k → Bytes b → Bytes b,
+  decrypt : Bytes k → Bytes b → Bytes b,
+  
+  -- Correctness
+  roundtrip : ∀ key msg. decrypt key (encrypt key msg) = msg
+}
+
+-- AES-256
+aes256 : BlockCipher 32 16  -- 256-bit key, 128-bit block
+aes256 = {
+  encrypt = λ key block →
+    let roundKeys = keyExpansion key
+    let state = addRoundKey block roundKeys[0]
+    let rounds = foldl aesRound state (take 13 (drop 1 roundKeys))
+    finalRound state roundKeys[14],
+    
+  decrypt = λ key block →
+    let roundKeys = reverse (keyExpansion key)
+    -- Inverse operations
+    invFinalRound block roundKeys[0]
+}
+
+-- AES round function
+aesRound : Bytes 16 → Bytes 16 → Bytes 16
+aesRound state roundKey =
+  addRoundKey (mixColumns (shiftRows (subBytes state))) roundKey
+
+-- Modes of operation
+type Mode (c : BlockCipher k b) = {
+  encrypt : Bytes k → Bytes * → Bytes *,  -- Variable length
+  decrypt : Bytes k → Bytes * → Bytes *
+}
+
+-- CBC mode
+cbc : BlockCipher k b → Bytes b → Mode
+cbc cipher iv = {
+  encrypt = λ key msg →
+    let blocks = pad msg b
+    let encrypted = scanl (λ prev block → cipher.encrypt key (xor prev block)) iv blocks
+    concat (tail encrypted),
+    
+  decrypt = λ key ciphertext →
+    let blocks = chunk ciphertext b
+    let decrypted = zipWith (λ prev curr → xor prev (cipher.decrypt key curr)) (iv : blocks) blocks
+    unpad (concat decrypted)
+}
+
+-- CTR mode (parallelizable)
+ctr : BlockCipher k b → Bytes b → Mode
+ctr cipher nonce = {
+  encrypt = λ key msg →
+    let counters = map (λ i → nonce + i) [0..]
+    let keystream = map (cipher.encrypt key) counters
+    zipWith xor msg (concat keystream),
+    
+  decrypt = λ key ciphertext →
+    -- CTR mode: encryption = decryption
+    ctr cipher nonce .encrypt key ciphertext
+}
+
+-- ============================================================================
+-- PART III: ASYMMETRIC CRYPTOGRAPHY
+-- ============================================================================
+
+-- Public key cryptosystem
+type PKC (pub : Type) (priv : Type) (msg : Type) (cipher : Type) = {
+  keyGen : Random → (pub, priv),
+  encrypt : pub → msg → cipher,
+  decrypt : priv → cipher → msg,
+  
+  -- Correctness
+  roundtrip : ∀ (pk, sk) msg. decrypt sk (encrypt pk msg) = msg
+}
+
+-- RSA
+type RSA = PKC RSAPublic RSAPrivate (Bytes n) (Bytes n)
+
+type RSAPublic = { n : Integer, e : Integer }
+type RSAPrivate = { n : Integer, d : Integer, p : Integer, q : Integer }
+
+rsa : Nat → RSA
+rsa bits = {
+  keyGen = λ rand →
+    let p = randomPrime rand (bits / 2)
+    let q = randomPrime rand (bits / 2)
+    let n = p * q
+    let φ = (p - 1) * (q - 1)
+    let e = 65537  -- Common choice
+    let d = modInverse e φ
+    ({ n = n, e = e }, { n = n, d = d, p = p, q = q }),
+    
+  encrypt = λ pk msg → modPow (toInt msg) pk.e pk.n,
+  decrypt = λ sk cipher → fromInt (modPow cipher sk.d sk.n)
+}
+
+-- Elliptic Curve Cryptography
+type Curve = {
+  p : Integer,          -- Prime field
+  a : Integer,          -- Curve parameter
+  b : Integer,          -- Curve parameter (y² = x³ + ax + b)
+  G : Point,            -- Generator point
+  n : Integer,          -- Order of G
+  h : Integer           -- Cofactor
+}
+
+type Point = Infinity | Affine Integer Integer
+
+-- Point operations
+pointAdd : Curve → Point → Point → Point
+pointAdd curve Infinity p = p
+pointAdd curve p Infinity = p
+pointAdd curve (Affine x1 y1) (Affine x2 y2) =
+  if x1 == x2 && y1 == -y2 then Infinity
+  else
+    let λ = if x1 == x2 
+            then (3 * x1² + curve.a) / (2 * y1)
+            else (y2 - y1) / (x2 - x1)
+    let x3 = λ² - x1 - x2
+    let y3 = λ * (x1 - x3) - y1
+    Affine (x3 `mod` curve.p) (y3 `mod` curve.p)
+
+pointMul : Curve → Integer → Point → Point
+pointMul curve 0 _ = Infinity
+pointMul curve n p =
+  let half = pointMul curve (n / 2) p
+  let doubled = pointAdd curve half half
+  if n `mod` 2 == 0 then doubled
+  else pointAdd curve doubled p
+
+-- secp256k1 (Bitcoin curve)
+secp256k1 : Curve
+secp256k1 = {
+  p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F,
+  a = 0,
+  b = 7,
+  G = Affine 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
+            0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8,
+  n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141,
+  h = 1
+}
+
+-- ============================================================================
+-- PART IV: DIGITAL SIGNATURES
+-- ============================================================================
+
+-- Signature scheme
+type SignatureScheme (pub : Type) (priv : Type) (msg : Type) (sig : Type) = {
+  keyGen : Random → (pub, priv),
+  sign : priv → msg → sig,
+  verify : pub → msg → sig → Bool,
+  
+  -- Security: Existential unforgeability under chosen message attack (EU-CMA)
+  unforgeable : ∀ adversary. 
+    P[adversary forges valid (msg, sig) | adversary can query sign oracle] < negligible
+}
+
+-- ECDSA (Elliptic Curve Digital Signature Algorithm)
+type ECDSA = SignatureScheme Point Integer (Bytes 32) (Integer, Integer)
+
+ecdsa : Curve → ECDSA
+ecdsa curve = {
+  keyGen = λ rand →
+    let sk = randomInteger rand 1 (curve.n - 1)
+    let pk = pointMul curve sk curve.G
+    (pk, sk),
+    
+  sign = λ sk msg →
+    let z = sha256 msg
+    let k = randomInteger rand 1 (curve.n - 1)  -- Must be unique per signature!
+    let (Affine x _) = pointMul curve k curve.G
+    let r = x `mod` curve.n
+    let s = (modInverse k curve.n) * (z + r * sk) `mod` curve.n
+    (r, s),
+    
+  verify = λ pk msg (r, s) →
+    let z = sha256 msg
+    let w = modInverse s curve.n
+    let u1 = z * w `mod` curve.n
+    let u2 = r * w `mod` curve.n
+    let (Affine x _) = pointAdd curve 
+                        (pointMul curve u1 curve.G) 
+                        (pointMul curve u2 pk)
+    r == x `mod` curve.n
+}
+
+-- Ed25519 (EdDSA on Curve25519)
+ed25519 : SignatureScheme Point Integer (Bytes *) (Bytes 64)
+
+-- Schnorr signatures (BIP340)
+schnorr : Curve → SignatureScheme Point Integer (Bytes 32) (Bytes 64)
+schnorr curve = {
+  sign = λ sk msg →
+    let k = deterministicNonce sk msg  -- RFC 6979
+    let R = pointMul curve k curve.G
+    let e = sha256 (R.x ++ pk.x ++ msg)
+    let s = k + e * sk `mod` curve.n
+    (R.x, s),
+    
+  verify = λ pk msg (rx, s) →
+    let e = sha256 (rx ++ pk.x ++ msg)
+    let R = pointAdd curve 
+             (pointMul curve s curve.G) 
+             (pointMul curve (curve.n - e) pk)
+    R.x == rx
+}
+
+-- ============================================================================
+-- PART V: ZERO-KNOWLEDGE PROOFS
+-- ============================================================================
+
+-- Zero-knowledge proof system
+type ZKProof (statement : Type) (witness : Type) (proof : Type) = {
+  prove : statement → witness → proof,
+  verify : statement → proof → Bool,
+  
+  -- Properties
+  completeness : ∀ s w. valid s w → verify s (prove s w) = True,
+  soundness : ∀ s p. verify s p = True → ∃ w. valid s w,
+  zeroKnowledge : ∀ s w. prove s w reveals nothing about w beyond validity
+}
+
+-- Sigma protocol (3-round honest-verifier ZK)
+type SigmaProtocol (statement : Type) (witness : Type) = {
+  commitment : witness → Random → Commitment,
+  challenge : () → Challenge,
+  response : witness → Commitment → Challenge → Response,
+  verify : statement → Commitment → Challenge → Response → Bool
+}
+
+-- Schnorr identification (discrete log ZKP)
+schnorrZK : Curve → SigmaProtocol Point Integer
+schnorrZK curve = {
+  -- Prove: I know x such that Y = xG
+  commitment = λ x rand →
+    let r = randomInteger rand 1 (curve.n - 1)
+    let R = pointMul curve r curve.G
+    (r, R),
+    
+  challenge = λ () → randomInteger 1 (curve.n - 1),
+  
+  response = λ x (r, _) e →
+    r + e * x `mod` curve.n,
+    
+  verify = λ Y (_, R) e s →
+    pointMul curve s curve.G == pointAdd curve R (pointMul curve e Y)
+}
+
+-- zkSNARK (Succinct Non-interactive Argument of Knowledge)
+type SNARK (circuit : Type) = ZKProof Statement Witness (Bytes n) where
+  -- Constant-size proofs (~200 bytes)
+  -- O(1) verification time
+  -- Requires trusted setup
+
+-- Groth16 (common SNARK)
+groth16 : Circuit → SNARK Circuit
+groth16 circuit = {
+  setup = trustedSetup circuit,  -- Generates CRS
+  
+  prove = λ statement witness →
+    let (A, B, C) = computeQAP circuit witness
+    -- Compute elliptic curve pairings
+    grothProver A B C crs,
+    
+  verify = λ statement proof →
+    -- Pairing check: e(A, B) = e(α, β) · e(input, γ) · e(C, δ)
+    pairingCheck proof statement crs
+}
+
+-- PLONK (universal SNARK)
+plonk : Circuit → SNARK Circuit
+plonk circuit = {
+  -- Universal trusted setup (reusable)
+  -- Slightly larger proofs than Groth16
+  -- Supports custom gates
+}
+
+-- Bulletproofs (no trusted setup)
+type Bulletproof = ZKProof RangeStatement Integer (Bytes n) where
+  -- Log-size proofs
+  -- No trusted setup
+  -- Slower verification
+
+bulletproofRange : Bulletproof
+bulletproofRange = {
+  -- Prove: x ∈ [0, 2^n) without revealing x
+  prove = λ x →
+    let bits = toBits x n
+    let commitments = map pedersen bits
+    innerProductProof commitments
+}
+
+-- ============================================================================
+-- PART VI: BLOCKCHAIN PRIMITIVES
+-- ============================================================================
+
+-- Block structure
+type Block (tx : Type) = {
+  header : BlockHeader,
+  transactions : List tx,
+  merkleRoot : Bytes 32
+}
+
+type BlockHeader = {
+  version : Word32,
+  prevHash : Bytes 32,
+  merkleRoot : Bytes 32,
+  timestamp : Word32,
+  difficulty : Word32,
+  nonce : Word32
+}
+
+-- Proof of work
+proofOfWork : BlockHeader → Bytes 32
+proofOfWork header = sha256 (sha256 (serialize header))
+
+validatePOW : BlockHeader → Bool
+validatePOW header = 
+  let hash = proofOfWork header
+  hash < difficultyTarget header.difficulty
+
+-- Mining
+mine : BlockHeader → BlockHeader
+mine header =
+  if validatePOW header then header
+  else mine { header | nonce = header.nonce + 1 }
+
+-- UTXO model (Bitcoin)
+type UTXO = {
+  txid : Bytes 32,
+  index : Word32,
+  value : Satoshi,
+  script : Script
+}
+
+type Transaction = {
+  inputs : List TxInput,
+  outputs : List TxOutput,
+  
+  -- Validity
+  valid : sum inputs.value ≥ sum outputs.value
+}
+
+type TxInput = { utxo : UTXO, witness : Witness }
+type TxOutput = { value : Satoshi, script : Script }
+
+-- Script (Bitcoin Script)
+type Script = List Op
+
+type Op = 
+  | OP_DUP | OP_HASH160 | OP_EQUALVERIFY | OP_CHECKSIG
+  | OP_PUSH Bytes | OP_IF | OP_ELSE | OP_ENDIF
+  | OP_CHECKMULTISIG | OP_CHECKLOCKTIMEVERIFY | OP_CHECKSEQUENCEVERIFY
+
+-- Standard scripts
+p2pkh : Bytes 20 → Script  -- Pay to Public Key Hash
+p2pkh pkh = [OP_DUP, OP_HASH160, OP_PUSH pkh, OP_EQUALVERIFY, OP_CHECKSIG]
+
+p2sh : Bytes 20 → Script   -- Pay to Script Hash
+p2sh sh = [OP_HASH160, OP_PUSH sh, OP_EQUAL]
+
+-- Account model (Ethereum)
+type Account = {
+  nonce : Word64,
+  balance : Wei,
+  storageRoot : Bytes 32,
+  codeHash : Bytes 32
+}
+
+type EthTransaction = {
+  nonce : Word64,
+  gasPrice : Wei,
+  gasLimit : Word64,
+  to : Option Address,
+  value : Wei,
+  data : Bytes,
+  v : Word8, r : Bytes 32, s : Bytes 32  -- Signature
+}
+
+-- ============================================================================
+-- PART VII: SMART CONTRACTS
+-- ============================================================================
+
+-- EVM-like computation
+type Contract = {
+  code : Bytes,
+  storage : Map (Bytes 32) (Bytes 32),
+  balance : Wei
+}
+
+type EVMState = {
+  stack : List (Bytes 32),
+  memory : Bytes,
+  storage : Map (Bytes 32) (Bytes 32),
+  pc : Nat,
+  gas : Nat
+}
+
+-- EVM execution
+step : EVMState → Contract → EVMState
+step state contract =
+  let op = contract.code[state.pc]
+  case op of
+    0x01 → -- ADD
+      let (a : b : rest) = state.stack
+      { state | stack = (a + b) : rest, pc = state.pc + 1 }
+    0x55 → -- SSTORE
+      let (key : value : rest) = state.stack
+      { state | storage = insert key value state.storage, 
+                stack = rest, pc = state.pc + 1 }
+    0xf1 → -- CALL
+      let (gas : addr : value : argsOff : argsLen : retOff : retLen : rest) = state.stack
+      executeCall gas addr value (slice state.memory argsOff argsLen)
+    -- ... hundreds more opcodes
+
+-- Solidity-like DSL
+type Solidity = {
+  state : List StateVar,
+  functions : List Function,
+  events : List Event,
+  modifiers : List Modifier
+}
+
+-- Example: ERC-20 token
+erc20 : Solidity
+erc20 = contract {
+  -- State
+  mapping(address → uint256) balances
+  mapping(address → mapping(address → uint256)) allowances
+  uint256 totalSupply
+  
+  -- Functions
+  function transfer(to : address, amount : uint256) → bool {
+    require(balances[msg.sender] >= amount)
+    balances[msg.sender] -= amount
+    balances[to] += amount
+    emit Transfer(msg.sender, to, amount)
+    return true
+  }
+  
+  function approve(spender : address, amount : uint256) → bool {
+    allowances[msg.sender][spender] = amount
+    emit Approval(msg.sender, spender, amount)
+    return true
+  }
+  
+  function transferFrom(from : address, to : address, amount : uint256) → bool {
+    require(balances[from] >= amount)
+    require(allowances[from][msg.sender] >= amount)
+    balances[from] -= amount
+    balances[to] += amount
+    allowances[from][msg.sender] -= amount
+    emit Transfer(from, to, amount)
+    return true
+  }
+}
+
+-- ============================================================================
+-- PART VIII: ADVANCED PROTOCOLS
+-- ============================================================================
+
+-- Multi-party computation (MPC)
+type MPC (n : Nat) (f : Vec a n → b) = {
+  share : a → Vec Share n,
+  compute : Vec Share n → Share,
+  reconstruct : Vec Share n → b,
+  
+  -- Privacy: No coalition of < n parties learns inputs
+  privacy : ∀ coalition. |coalition| < n → reveals nothing
+}
+
+-- Shamir secret sharing
+shamir : Nat → Nat → MPC n
+shamir n k = {
+  share = λ secret →
+    let poly = randomPolynomial k secret
+    map (λ i → (i, evalPoly poly i)) [1..n],
+    
+  reconstruct = λ shares →
+    lagrangeInterpolate shares 0
+}
+
+-- Threshold signatures
+type ThresholdSig (n : Nat) (k : Nat) = {
+  -- k-of-n threshold
+  keyGen : Random → (PublicKey, Vec PrivateKeyShare n),
+  partialSign : PrivateKeyShare → Message → PartialSig,
+  combine : Vec PartialSig k → Signature
+}
+
+-- Ring signatures (anonymous signer)
+type RingSig = SignatureScheme (Vec PublicKey n) PrivateKey Message Signature where
+  -- Prove: I am one of these n people (without revealing which)
+  anonymity : ∀ signer. verify succeeds → signer is information-theoretically hidden
+
+-- BLS signatures (aggregatable)
+type BLS = SignatureScheme BLSPublic BLSPrivate Message BLSSignature where
+  aggregate : Vec BLSSignature n → BLSSignature  -- n signatures → 1 signature
+  verifyAggregate : Vec BLSPublic n → Vec Message n → BLSSignature → Bool
+
+-- ============================================================================
+-- PART IX: COMPILE TARGETS
+-- ============================================================================
+
+-- Cryptographic implementations:
+
+compile[OpenSSL] : Crypto → C
+  -- Constant-time implementations
+  -- Side-channel resistance
+  -- Hardware acceleration
+
+compile[Libsecp256k1] : ECDSAsecp256k1 → C
+  -- Bitcoin's optimized library
+  -- Endomorphism optimization
+  -- GLV decomposition
+
+compile[Circom] : ZKCircuit → R1CS
+  -- zkSNARK circuit compilation
+  -- Witness generation
+  -- Verifier contract
+
+compile[Cairo] : StarkProgram → STARK
+  -- StarkNet execution
+  -- AIR constraints
+  -- FRI proofs
+
+compile[Solidity] : Contract → EVM Bytecode
+  -- Ethereum deployment
+  -- Gas optimization
+  -- Security checks
+
+compile[Move] : Module → MoveBytecode
+  -- Resource-oriented programming
+  -- Linear types
+  -- Formal verification
+
+-- ============================================================================
+-- EXAMPLE: Complete Bitcoin Transaction
+-- ============================================================================
+
+-- Create and sign a Bitcoin transaction
+createTransaction : List UTXO → Address → Satoshi → PrivateKey → Transaction
+createTransaction inputs recipient amount privkey =
+  let inputTotal = sum (map (.value) inputs)
+  let fee = estimateFee inputs 1
+  let change = inputTotal - amount - fee
+  
+  let tx = {
+    version = 1,
+    inputs = map (λ utxo → { prevOut = utxo, scriptSig = [] }) inputs,
+    outputs = [
+      { value = amount, script = p2pkh (hash160 recipient) },
+      { value = change, script = p2pkh (hash160 (pubkey privkey)) }
+    ],
+    locktime = 0
+  }
+  
+  -- Sign each input
+  let sigHash = sighashAll tx
+  let signatures = map (λ i → sign privkey (sigHash i)) [0..length inputs - 1]
+  
+  -- Add signatures to inputs
+  { tx | inputs = zipWith addSignature tx.inputs signatures }
+
+-- Verify transaction
+verifyTransaction : Transaction → UTXO Set → Bool
+verifyTransaction tx utxos =
+  -- All inputs exist and are unspent
+  all (λ input → member input.prevOut utxos) tx.inputs &&
+  -- All signatures valid
+  all (λ (input, i) → verifyScript input.scriptSig input.prevOut.script (sighashAll tx i)) 
+      (zip tx.inputs [0..]) &&
+  -- No double spend
+  unique (map (.prevOut) tx.inputs) &&
+  -- Value conservation (inputs ≥ outputs)
+  sum (map (.prevOut.value) tx.inputs) >= sum (map (.value) tx.outputs)
+
+-- ============================================================================
+-- THE BOTTOM LINE
+-- ============================================================================
+
+-- Cryptography is mathematics as security:
+-- • Hashes are one-way compression
+-- • Encryption is structured randomness
+-- • Signatures are unforgeable proofs
+-- • Zero-knowledge reveals nothing but truth
+-- • Blockchains are cryptographic consensus
+
+-- Phi types make security properties explicit and verifiable.

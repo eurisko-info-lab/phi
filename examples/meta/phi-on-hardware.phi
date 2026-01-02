@@ -1,0 +1,643 @@
+-- ============================================================================
+-- PHI-ON-HARDWARE.PHI: Phi Compiled to Silicon
+-- ============================================================================
+-- Phi running directly on custom hardware.
+-- From λ-calculus to logic gates, from types to wires.
+-- ============================================================================
+
+-- ============================================================================
+-- PART I: PHI INSTRUCTION SET ARCHITECTURE
+-- ============================================================================
+
+-- Phi-native ISA (not emulating x86!)
+type PhiISA = {
+  -- Core lambda calculus operations
+  LAM : Opcode,      -- Create closure
+  APP : Opcode,      -- Apply function
+  VAR : Opcode,      -- Variable lookup
+  RET : Opcode,      -- Return from function
+  
+  -- Algebraic data types
+  CONS : Opcode,     -- Construct tagged value
+  CASE : Opcode,     -- Pattern match
+  
+  -- Primitives
+  ADD : Opcode,
+  MUL : Opcode,
+  CMP : Opcode,
+  
+  -- Memory
+  ALLOC : Opcode,    -- Allocate on heap
+  LOAD : Opcode,     -- Load from heap
+  STORE : Opcode,    -- Store to heap
+  
+  -- Concurrency
+  FORK : Opcode,     -- Spawn parallel computation
+  JOIN : Opcode,     -- Wait for completion
+  SEND : Opcode,     -- Channel send
+  RECV : Opcode      -- Channel receive
+}
+
+-- Instruction encoding
+type PhiInstruction = BitVec 32
+
+encodeInstruction : PhiOp → List Operand → PhiInstruction
+encodeInstruction op operands =
+  let opcBits = encodeOpcode op        -- 6 bits
+  let modeBits = encodeMode operands   -- 2 bits
+  let operandBits = encodeOperands operands  -- 24 bits
+  opcBits ++ modeBits ++ operandBits
+
+-- Register file
+type PhiRegisters = {
+  -- General purpose (64-bit)
+  r : Vec Word64 32,
+  
+  -- Special purpose
+  sp : Word64,        -- Stack pointer
+  fp : Word64,        -- Frame pointer (closure environment)
+  hp : Word64,        -- Heap pointer
+  pc : Word64,        -- Program counter
+  
+  -- Type tags (for runtime type info)
+  tags : Vec TypeTag 32
+}
+
+type TypeTag = 
+  | TInt | TFloat | TPtr | TClosure | TCons | TUnit
+
+-- ============================================================================
+-- PART II: CLOSURE REPRESENTATION
+-- ============================================================================
+
+-- Closure layout in memory
+type ClosureLayout = {
+  header : Word64,    -- GC bits, size, tag
+  code : Word64,      -- Pointer to code
+  arity : Word16,     -- Number of arguments needed
+  captured : Word16,  -- Number of captured variables
+  freeVars : Vec Word64 n  -- Captured environment
+}
+
+-- Create closure hardware unit
+type ClosureUnit = {
+  -- Inputs
+  codeAddr : Word64,
+  arity : Word16,
+  freeVars : List Word64,
+  
+  -- Outputs
+  closurePtr : Word64,
+  
+  -- Internal
+  allocate : HeapPort,
+  write : MemoryPort
+}
+
+mkClosure : ClosureUnit → Word64 → List Word64 → Word64
+mkClosure unit code freeVars =
+  -- Allocate space
+  let size = 4 + length freeVars  -- Words
+  let ptr = unit.allocate size
+  
+  -- Write header
+  unit.write ptr (mkHeader size CLOSURE_TAG)
+  unit.write (ptr + 1) code
+  unit.write (ptr + 2) (length freeVars)
+  
+  -- Write free variables
+  zipWithIndex (λ i v → unit.write (ptr + 4 + i) v) freeVars
+  
+  ptr
+
+-- ============================================================================
+-- PART III: APPLICATION UNIT
+-- ============================================================================
+
+-- Function application in hardware
+type ApplicationUnit = {
+  -- Function to apply
+  closure : Word64,
+  
+  -- Arguments
+  args : Vec Word64 8,  -- Up to 8 arguments
+  numArgs : Word8,
+  
+  -- Control
+  start : Bit,
+  done : Bit,
+  
+  -- Result
+  result : Word64
+}
+
+applyHardware : ApplicationUnit
+applyHardware = {
+  -- State machine
+  state = enum { IDLE, LOAD_CLOSURE, CHECK_ARITY, PUSH_ARGS, JUMP, WAIT_RETURN },
+  
+  -- Combinational logic
+  nextState = case state of
+    IDLE → if start then LOAD_CLOSURE else IDLE
+    
+    LOAD_CLOSURE →
+      -- Fetch closure from memory
+      let header = mem.read closure
+      let codePtr = mem.read (closure + 1)
+      let arity = mem.read (closure + 2)
+      CHECK_ARITY
+    
+    CHECK_ARITY →
+      if numArgs == arity then PUSH_ARGS
+      else if numArgs < arity then
+        -- Partial application: create new closure
+        createPartialClosure closure args numArgs
+        IDLE
+      else
+        -- Over-application: apply then apply again
+        PUSH_ARGS
+    
+    PUSH_ARGS →
+      -- Push arguments to stack
+      forM args (λ arg → stack.push arg)
+      -- Push return address
+      stack.push returnAddr
+      JUMP
+    
+    JUMP →
+      -- Set PC to function code
+      pc := codePtr
+      WAIT_RETURN
+    
+    WAIT_RETURN →
+      if returned then
+        result := returnValue
+        done := High
+        IDLE
+      else WAIT_RETURN
+}
+
+-- ============================================================================
+-- PART IV: PATTERN MATCHING UNIT
+-- ============================================================================
+
+-- Hardware pattern matching
+type PatternMatchUnit = {
+  -- Scrutinee
+  value : Word64,
+  tag : TypeTag,
+  
+  -- Pattern table (ROM)
+  patterns : Vec (Tag, Address) 64,  -- Up to 64 cases
+  numPatterns : Word8,
+  
+  -- Output
+  matchedCase : Address,
+  bindings : Vec Word64 8  -- Extracted fields
+}
+
+patternMatch : PatternMatchUnit
+patternMatch = {
+  -- Read tag from value
+  actualTag = if isPointer value
+              then mem.read value .tag
+              else tag
+  
+  -- CAM lookup (content-addressable memory)
+  matchedIndex = cam.lookup actualTag patterns
+  
+  -- Jump target
+  matchedCase = patterns[matchedIndex].address
+  
+  -- Extract bindings (parallel reads)
+  bindings = if isPointer value
+             then [mem.read (value + 1), mem.read (value + 2), ...]
+             else []
+}
+
+-- Parallel pattern matching (try all branches at once)
+type ParallelPatternMatch (n : Nat) = {
+  branches : Vec PatternMatchUnit n,
+  select : OneHot n,
+  result : Word64
+}
+
+-- ============================================================================
+-- PART V: GRAPH REDUCTION
+-- ============================================================================
+
+-- STG-style graph reduction in hardware
+type GraphReducer = {
+  -- Node types
+  node : enum { APP, LAM, CONS, PRIM, IND },
+  
+  -- Spine stack (pending applications)
+  spine : Stack Word64 256,
+  
+  -- Update stack (for lazy evaluation)
+  updates : Stack (Word64, Address) 64,
+  
+  -- Heap interface
+  heap : HeapPort
+}
+
+reduce : GraphReducer → Word64 → Word64
+reduce gr node = {
+  state = enum { EVAL, APPLY, UPDATE, RETURN },
+  
+  step = case state of
+    EVAL →
+      -- Evaluate to WHNF
+      let tag = readTag node
+      case tag of
+        APP →
+          -- Push argument, evaluate function
+          spine.push (getArg node)
+          node := getFunc node
+          EVAL
+        
+        LAM →
+          -- Have function, check for arguments
+          if spine.isEmpty then RETURN
+          else APPLY
+        
+        IND →
+          -- Indirection: follow pointer
+          node := getTarget node
+          EVAL
+        
+        _ → RETURN  -- Already in WHNF
+    
+    APPLY →
+      -- Apply function to argument
+      let arg = spine.pop
+      let (code, env) = unpackClosure node
+      updates.push (node, pc)
+      setupCall code arg env
+      EVAL
+    
+    UPDATE →
+      -- Update thunk with result
+      let (thunk, retAddr) = updates.pop
+      overwriteWithIndirection thunk node
+      pc := retAddr
+      RETURN
+    
+    RETURN →
+      -- Unwind update stack
+      if updates.isEmpty then done := true
+      else UPDATE
+}
+
+-- ============================================================================
+-- PART VI: GARBAGE COLLECTOR
+-- ============================================================================
+
+-- Hardware garbage collector
+type HardwareGC = {
+  -- Two semi-spaces
+  fromSpace : MemoryRegion,
+  toSpace : MemoryRegion,
+  
+  -- Allocation pointer
+  allocPtr : Word64,
+  
+  -- Root set
+  roots : Vec Word64 64,
+  
+  -- Forwarding pointers (CAM)
+  forwarding : CAM Word64 Word64 1024
+}
+
+-- Cheney's algorithm in hardware
+cheneyGC : HardwareGC → HardwareGC
+cheneyGC gc = {
+  -- Initialize
+  scanPtr = toSpace.base
+  allocPtr = toSpace.base
+  
+  -- Copy roots
+  forM gc.roots (λ root →
+    if inFromSpace root then
+      let copied = copyObject root allocPtr
+      forwarding.insert root copied
+      allocPtr := allocPtr + sizeOf root
+  )
+  
+  -- Scan and copy
+  while scanPtr < allocPtr do
+    let obj = mem.read scanPtr
+    forM (pointers obj) (λ ptr →
+      if inFromSpace ptr then
+        case forwarding.lookup ptr of
+          Some fwd → updatePointer scanPtr ptr fwd
+          None →
+            let copied = copyObject ptr allocPtr
+            forwarding.insert ptr copied
+            updatePointer scanPtr ptr copied
+            allocPtr := allocPtr + sizeOf ptr
+    )
+    scanPtr := scanPtr + sizeOf obj
+  
+  -- Swap spaces
+  swap fromSpace toSpace
+}
+
+-- Parallel GC with multiple copiers
+type ParallelGC (n : Nat) = {
+  copiers : Vec HardwareGC n,
+  workQueue : FIFO Word64,
+  
+  -- Each copier works on different portion
+  partition : Word64 → Fin n
+}
+
+-- ============================================================================
+-- PART VII: PARALLEL REDUCTION NETWORK
+-- ============================================================================
+
+-- Interaction Net topology
+type InteractionNet = {
+  -- Agents (computation nodes)
+  agents : Vec Agent 1024,
+  
+  -- Ports (connection points)
+  ports : Vec Port 4096,
+  
+  -- Active pairs (reducible connections)
+  activePairs : FIFO (AgentId, AgentId) 512,
+  
+  -- Reduction rules (hardwired)
+  rules : Matrix Rule 16 16  -- Agent type × Agent type → Rule
+}
+
+type Agent = {
+  agentType : AgentType,
+  ports : Vec PortId 4,  -- Up to 4 ports per agent
+  data : Word64          -- Payload
+}
+
+type Rule = {
+  consume : (AgentType, AgentType),  -- Input pattern
+  produce : List Agent,               -- Output agents
+  rewire : List (PortId, PortId)     -- New connections
+}
+
+-- Parallel reduction: All active pairs reduce simultaneously
+reduceParallel : InteractionNet → InteractionNet
+reduceParallel net = {
+  -- Find all active pairs (parallel scan)
+  active = findActivePairs net.ports
+  
+  -- Apply rules in parallel (no conflicts by construction)
+  forM active (λ (a, b) →
+    let rule = net.rules[a.type][b.type]
+    applyRule rule a b
+  )
+  
+  -- Update network topology
+  net'
+}
+
+-- ============================================================================
+-- PART VIII: PHI PROCESSOR CORE
+-- ============================================================================
+
+-- Complete Phi processor
+type PhiCore = {
+  -- Fetch unit
+  fetch : FetchUnit,
+  
+  -- Decode unit
+  decode : DecodeUnit,
+  
+  -- Execution units (parallel)
+  closureUnit : ClosureUnit,
+  appUnit : ApplicationUnit,
+  matchUnit : PatternMatchUnit,
+  alu : ALU,
+  
+  -- Memory system
+  l1Cache : Cache 32KB,
+  heap : HeapManager,
+  gc : HardwareGC,
+  
+  -- Register file
+  registers : PhiRegisters,
+  
+  -- Pipeline control
+  pipeline : PipelineController
+}
+
+-- Pipeline stages
+type PhiPipeline = {
+  stages : enum { IF, ID, ENV, EX, MEM, WB },
+  
+  -- Hazard detection
+  hazards : HazardUnit,
+  
+  -- Forwarding
+  forward : ForwardingUnit,
+  
+  -- Branch prediction for CASE
+  branchPredictor : BranchPredictor
+}
+
+-- One cycle of execution
+cycle : PhiCore → PhiCore
+cycle core = {
+  -- Fetch instruction
+  let instr = core.fetch.fetch core.registers.pc
+  
+  -- Decode
+  let decoded = core.decode.decode instr
+  
+  -- Execute (depends on instruction type)
+  case decoded.opcode of
+    LAM → 
+      let closure = core.closureUnit.create decoded.codeAddr decoded.freeVars
+      core.registers[decoded.rd] := closure
+    
+    APP →
+      core.appUnit.apply core.registers[decoded.rs1] core.registers[decoded.rs2]
+    
+    CASE →
+      let result = core.matchUnit.match core.registers[decoded.rs1] decoded.patterns
+      core.registers.pc := result.target
+      core.registers[decoded.rd..] := result.bindings
+    
+    -- ... other instructions
+  
+  -- Update PC
+  core.registers.pc := nextPC
+  
+  core
+}
+
+-- ============================================================================
+-- PART IX: MULTI-CORE PHI CHIP
+-- ============================================================================
+
+-- Multi-core Phi processor
+type PhiChip (n : Nat) = {
+  -- Cores
+  cores : Vec PhiCore n,
+  
+  -- Shared memory
+  l2Cache : Cache 256KB,
+  l3Cache : Cache 4MB,
+  mainMemory : DRAM,
+  
+  -- Interconnect
+  network : Mesh n,
+  
+  -- Channel network (for message passing)
+  channels : ChannelRouter,
+  
+  -- Global GC coordinator
+  globalGC : GlobalGC n
+}
+
+-- Channel implementation
+type Channel a = {
+  buffer : FIFO a 64,
+  producer : CoreId,
+  consumer : CoreId,
+  
+  -- Hardware flow control
+  ready : Bit,
+  valid : Bit,
+  data : a
+}
+
+send : Channel a → a → ()
+send ch x = 
+  while not ch.ready do wait
+  ch.data := x
+  ch.valid := High
+  wait_ack
+
+recv : Channel a → a
+recv ch =
+  ch.ready := High
+  while not ch.valid do wait
+  let x = ch.data
+  send_ack
+  x
+
+-- Work stealing for load balancing
+type WorkStealer = {
+  localQueue : Deque Task,
+  stealFrom : CoreId → Option Task,
+  
+  -- When local queue empty, steal from random neighbor
+  getWork : () → Option Task
+}
+
+-- ============================================================================
+-- PART X: COMPILATION FROM PHI TO HARDWARE
+-- ============================================================================
+
+-- Phi → PhiISA compilation
+compile : PhiExpr → List PhiInstruction
+compile expr = case expr of
+  Lam x body →
+    let bodyCode = compile body
+    let freeVars = free body - {x}
+    [LAM (length freeVars), CAPTURE freeVars...] ++ bodyCode ++ [RET]
+  
+  App f arg →
+    compile arg ++ compile f ++ [APP]
+  
+  Var x →
+    [VAR (lookup x env)]
+  
+  Case scrutinee branches →
+    let scrutCode = compile scrutinee
+    let branchCode = map compileBranch branches
+    scrutCode ++ [CASE (length branches)] ++ branchCode
+  
+  Lit n →
+    [PUSH n]
+  
+  -- ... other cases
+
+-- PhiISA → Verilog
+synthesize : List PhiInstruction → VerilogModule
+synthesize code = {
+  -- ROM for code
+  codeRom = rom code
+  
+  -- Instantiate processor
+  core = PhiCore {
+    fetch = mkFetchUnit codeRom,
+    decode = mkDecodeUnit,
+    closureUnit = mkClosureUnit,
+    appUnit = mkApplicationUnit,
+    matchUnit = mkPatternMatchUnit,
+    alu = mkALU,
+    ...
+  }
+  
+  -- Connect to memory
+  connect core.l1Cache mainMemory
+}
+
+-- ============================================================================
+-- EXAMPLE: FULL PROCESSOR
+-- ============================================================================
+
+-- Example: Factorial in hardware
+factorialHardware : PhiChip 1
+factorialHardware = synthesize (compile (
+  fix (λ fact n →
+    case n of
+      0 → 1
+      _ → n * fact (n - 1)
+  )
+))
+
+-- Estimated performance:
+-- - ~10 cycles per reduction step
+-- - Parallel GC overlapped with computation
+-- - Native closures (no boxing overhead)
+-- - Hardware pattern matching (single cycle)
+
+-- ============================================================================
+-- FPGA SYNTHESIS TARGETS
+-- ============================================================================
+
+-- Synthesize for various FPGAs:
+
+compile[Xilinx] : PhiChip n → VivadoProject
+  -- Xilinx Ultrascale+
+  -- ~200 MHz achievable
+  -- ~100K LUTs for single core
+
+compile[Intel] : PhiChip n → QuartusProject
+  -- Intel Agilex/Stratix
+  -- Similar resource usage
+
+compile[Lattice] : PhiChip n → DiamondProject
+  -- Smaller FPGAs
+  -- Reduced feature set
+
+compile[ASIC] : PhiChip n → GDSII
+  -- Full custom silicon
+  -- Could hit 2+ GHz
+  -- ~1M transistors per core
+
+-- ============================================================================
+-- THE BOTTOM LINE
+-- ============================================================================
+
+-- Hardware is frozen lambda calculus:
+-- • Closures are memory layouts
+-- • Application is stack manipulation
+-- • Pattern matching is CAM lookup
+-- • Reduction is state machine transitions
+-- • Garbage collection is memory shuffling
+-- • Parallelism is spatial replication
+
+-- Phi compiles to silicon. The CPU IS the interpreter.
+-- No emulation. No JIT. Just physics computing λ-terms.

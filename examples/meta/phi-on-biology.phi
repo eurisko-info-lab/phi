@@ -1,0 +1,514 @@
+-- ============================================================================
+-- PHI-ON-BIOLOGY.PHI: Phi Compiled to Living Systems
+-- ============================================================================
+-- Phi running on DNA, proteins, and cellular machinery.
+-- Code stored in genomes, executed by ribosomes, computed by chemistry.
+-- ============================================================================
+
+-- ============================================================================
+-- PART I: DNA AS STORAGE
+-- ============================================================================
+
+-- DNA encoding of Phi terms
+-- 4 nucleotides = 2 bits per base
+-- Codon = 6 bits = 64 values (enough for Phi opcodes)
+
+type DNAEncoding = {
+  -- Phi primitives → Codons
+  encodeOp : PhiOp → Codon,
+  decodeOp : Codon → PhiOp,
+  
+  -- Structural elements
+  startCodon : Codon,    -- ATG = begin expression
+  stopCodon : Codon,     -- TAA/TAG/TGA = end expression
+  promoter : DNA 35,     -- TATA box, marks code start
+  terminator : DNA 50    -- Signals end of gene
+}
+
+-- Phi opcode → Codon mapping
+type PhiOp = 
+  | LAM    -- λ abstraction (CCC = Proline → binding)
+  | APP    -- Application (GGG = Glycine → combination)
+  | VAR    -- Variable reference (AAA = Lysine → lookup)
+  | LET    -- Let binding (TTT = Phenylalanine → assignment)
+  | INT    -- Integer literal (ATC = Isoleucine)
+  | ADD    -- Addition (GAT = Aspartate)
+  | MUL    -- Multiplication (TGT = Cysteine)
+  | IF     -- Conditional (CAT = Histidine)
+  | CONS   -- Pair construction (ACT = Threonine)
+  | CAR    -- First of pair (GCA = Alanine)
+  | CDR    -- Second of pair (TCA = Serine)
+  | NIL    -- Empty list (TAC = Tyrosine)
+  | FIX    -- Fixed point (ATG = Methionine, start!)
+  | QUOTE  -- Quote expression (GTA = Valine)
+  | EVAL   -- Evaluate (CTG = Leucine)
+
+-- Encode Phi program as DNA
+encodePhi : PhiExpr → DNA n
+encodePhi expr = 
+  let header = promoter ++ ribosome_binding_site
+  let body = encodeExpr expr
+  let footer = stopCodon ++ terminator
+  header ++ body ++ footer
+
+encodeExpr : PhiExpr → DNA n
+encodeExpr = λ e → case e of
+  Lam x body → 
+    opToCodon LAM ++ encodeVar x ++ encodeExpr body
+  App f arg →
+    opToCodon APP ++ encodeExpr f ++ encodeExpr arg
+  Var x →
+    opToCodon VAR ++ encodeVar x
+  Lit n →
+    opToCodon INT ++ encodeNat n
+  -- ... other cases
+
+-- Variable names as DNA sequences
+encodeVar : String → DNA m
+encodeVar name = 
+  -- Use unique sequences for each variable
+  -- Like restriction sites: GAATTC for "x", GGATCC for "y"
+  hashToDNA (hash name) 6  -- 6 bases = 4096 possible names
+
+-- ============================================================================
+-- PART II: PROTEIN-BASED COMPUTATION
+-- ============================================================================
+
+-- Phi term as protein structure
+-- Different protein folds = different computation types
+
+type ProteinComputer = {
+  -- Enzyme-based logic gates
+  andGate : Enzyme (Bool, Bool) Bool,
+  orGate : Enzyme (Bool, Bool) Bool,
+  notGate : Enzyme Bool Bool,
+  
+  -- Allosteric computation
+  conditional : AllostericEnzyme Condition (Input → Output),
+  
+  -- Protein-protein interaction network
+  bindingNetwork : Graph Protein Interaction
+}
+
+-- Lambda as protein binding site
+type LambdaProtein = {
+  bindingSite : ActiveSite Variable,
+  body : ProteinComputer,
+  
+  -- When variable binds, conformational change exposes body
+  bind : Variable → ProteinComputer
+}
+
+-- Application as protein-protein docking
+apply : LambdaProtein → Protein → Protein
+apply f x =
+  let bound = f.bind x  -- Ligand binding
+  let activated = conformationalChange f bound  -- Allosteric activation
+  computeResult activated
+
+-- Environment as protein complex
+type ProteinEnvironment = {
+  bindings : Map Variable Protein,
+  scaffold : ScaffoldProtein,  -- Holds everything together
+  
+  lookup : Variable → Protein,
+  extend : Variable → Protein → ProteinEnvironment
+}
+
+-- ============================================================================
+-- PART III: CELLULAR EXECUTION
+-- ============================================================================
+
+-- Cell as Phi runtime
+type CellularRuntime = {
+  -- Code storage
+  genome : DNA n,
+  plasmids : List (DNA m),  -- Additional programs
+  
+  -- Execution machinery
+  ribosomes : List Ribosome,
+  
+  -- Running computations
+  active : Map Gene (Protein, ComputationState),
+  
+  -- I/O via signaling
+  receptors : List Receptor,
+  secretory : SecretoryPathway
+}
+
+-- Gene expression = Phi evaluation
+express : CellularRuntime → Gene → (Protein, CellularRuntime)
+express runtime gene =
+  -- Transcription: DNA → mRNA
+  let mrna = transcribe (extractGene runtime.genome gene)
+  
+  -- Translation: mRNA → Protein
+  let ribosome = allocateRibosome runtime.ribosomes
+  let protein = translate ribosome mrna
+  
+  -- Post-translational modification = optimization
+  let folded = foldProtein protein runtime.chaperones
+  let modified = postTranslationalModify folded
+  
+  (modified, updateRuntime runtime gene modified)
+
+-- Reduction = Metabolic reaction
+reduce : Protein → Protein → Protein
+reduce enzyme substrate =
+  -- Michaelis-Menten kinetics
+  let bound = bind enzyme.activesite substrate
+  let transitionState = catalyze enzyme bound
+  let products = release transitionState
+  products
+
+-- ============================================================================
+-- PART IV: GENETIC CIRCUITS
+-- ============================================================================
+
+-- Boolean logic via gene regulation
+type GeneticGate = {
+  inputs : List Promoter,
+  output : Gene,
+  logic : List Bool → Bool
+}
+
+-- AND gate: Two activators needed
+geneticAnd : GeneticGate
+geneticAnd = {
+  inputs = [promoterA, promoterB],
+  output = geneZ,
+  logic = λ [a, b] → a && b,
+  
+  -- Implementation: Both TFs must bind to activate
+  implementation = {
+    promoter = "...TATA...ACTIVATOR_A_SITE...ACTIVATOR_B_SITE...",
+    requires_both = true
+  }
+}
+
+-- OR gate: Either activator sufficient
+geneticOr : GeneticGate
+geneticOr = {
+  inputs = [promoterA, promoterB],
+  output = geneZ,
+  logic = λ [a, b] → a || b,
+  
+  -- Implementation: Duplicate promoters
+  implementation = {
+    promoter = "...TATA...ACTIVATOR_SITE...TATA...ACTIVATOR_SITE...",
+    either_sufficient = true
+  }
+}
+
+-- NOT gate: Repressor
+geneticNot : GeneticGate
+geneticNot = {
+  inputs = [promoterA],
+  output = geneZ,
+  logic = λ [a] → not a,
+  
+  -- Implementation: Input produces repressor
+  implementation = {
+    repressor = lacI,
+    operator = lacO
+  }
+}
+
+-- Phi conditional as genetic switch
+geneticIf : Condition → Gene → Gene → Gene
+geneticIf cond thenGene elseGene = {
+  circuit = [
+    -- Condition activates one branch
+    { when = cond, activate = thenGene, repress = elseGene },
+    { when = not cond, activate = elseGene, repress = thenGene }
+  ]
+}
+
+-- ============================================================================
+-- PART V: MEMORY AND STATE
+-- ============================================================================
+
+-- Memory via DNA methylation
+type EpigeneticMemory = {
+  -- Methylation marks = stored bits
+  methylationPattern : Map Position Bool,
+  
+  -- Read: Check methylation
+  read : Position → Bool,
+  
+  -- Write: Add/remove methyl groups
+  write : Position → Bool → EpigeneticMemory
+}
+
+-- Bistable switch = 1 bit memory
+type GeneticFlipFlop = {
+  state : Gene,  -- Which gene is active
+  
+  -- Toggle memory cell
+  set : Signal → GeneticFlipFlop,
+  reset : Signal → GeneticFlipFlop,
+  
+  -- Lambda repressor / Cro switch from phage λ
+  implementation = {
+    gene1 = lambdaRepressor,  -- Maintains lysogeny
+    gene2 = cro,              -- Triggers lysis
+    mutual_repression = true
+  }
+}
+
+-- Register file as plasmid collection
+type GeneticRegister = {
+  plasmids : Vec Plasmid 8,  -- 8 registers
+  
+  read : Fin 8 → DNA n,
+  write : Fin 8 → DNA n → GeneticRegister
+}
+
+-- Stack via tandem repeats
+type GeneticStack = {
+  dna : DNA n,  -- Contains stack data as repeats
+  
+  push : DNA m → GeneticStack,  -- Insert repeat
+  pop : (DNA m, GeneticStack)   -- Excise repeat
+}
+
+-- Heap via chromosome
+type GeneticHeap = {
+  chromosome : DNA n,
+  
+  allocate : Nat → (Address, GeneticHeap),
+  read : Address → DNA m,
+  write : Address → DNA m → GeneticHeap,
+  gc : GeneticHeap → GeneticHeap  -- DNA repair = garbage collection
+}
+
+-- ============================================================================
+-- PART VI: PARALLEL EXECUTION
+-- ============================================================================
+
+-- Multiple ribosomes = parallel threads
+type BiologicalParallelism = {
+  -- Polysome: Many ribosomes on one mRNA
+  polysome : mRNA → List Ribosome,
+  
+  -- Multiple cells in colony
+  colony : List CellularRuntime,
+  
+  -- Quorum sensing for synchronization
+  quorum : ColonyState → Signal
+}
+
+-- Fork: Cell division
+fork : CellularRuntime → (CellularRuntime, CellularRuntime)
+fork cell =
+  let (dna1, dna2) = replicateDNA cell.genome
+  let daughter1 = { cell | genome = dna1 }
+  let daughter2 = { cell | genome = dna2 }
+  (daughter1, daughter2)
+
+-- Join: Cell fusion (rare in nature)
+join : CellularRuntime → CellularRuntime → CellularRuntime
+join cell1 cell2 =
+  -- Combine genomes (like sexual reproduction)
+  let combined = recombine cell1.genome cell2.genome
+  { genome = combined, ... }
+
+-- Map-reduce over cell colony
+biologicalMapReduce : (a → b) → (b → b → b) → List a → b
+biologicalMapReduce map reduce inputs =
+  -- Each cell processes one input
+  let colony = zipWith (λ cell input → 
+    express cell (encode (map input))
+  ) cells inputs
+  
+  -- Collect results via quorum sensing
+  let results = map readOutput colony
+  
+  -- Reduce via chemical reaction (e.g., concentrations)
+  foldl reduce initial results
+
+-- ============================================================================
+-- PART VII: I/O AND COMMUNICATION
+-- ============================================================================
+
+-- Input: Receptor binding
+type BiologicalInput = {
+  receptor : Receptor,
+  ligand : Molecule,
+  transduction : SignalCascade,
+  response : GeneExpression
+}
+
+-- Read environment
+sense : Environment → Cell → Signal
+sense env cell =
+  let concentration = env.concentration receptor.ligand
+  let bound = bind cell.receptor ligand
+  let signal = transduce cell.cascade bound
+  signal
+
+-- Output: Secretion
+type BiologicalOutput = {
+  gene : Gene,
+  protein : Protein,
+  secretion : SecretoryPathway,
+  effect : Environment → Environment
+}
+
+-- Write to environment
+secrete : Cell → Protein → Environment → Environment
+secrete cell protein env =
+  let exported = cell.golgi.process protein
+  let released = cell.membrane.exocytosis exported
+  { env | concentration = increment env.concentration released }
+
+-- Cell-to-cell communication
+type QuorumSensing = {
+  autoinducer : Molecule,
+  threshold : Concentration,
+  response : GeneRegulation
+}
+
+-- Distributed computation via quorum
+consensus : List Cell → Decision
+consensus cells =
+  -- Each cell produces autoinducer proportional to "vote"
+  let totalSignal = sum (map (λ c → c.output.concentration) cells)
+  
+  -- Threshold detection
+  if totalSignal > threshold then DecisionA else DecisionB
+
+-- ============================================================================
+-- PART VIII: ERROR HANDLING
+-- ============================================================================
+
+-- DNA repair = Error correction
+type DNARepair = {
+  mismatchRepair : DNA n → DNA n,     -- Fix replication errors
+  excisionRepair : DNA n → DNA n,     -- Remove damaged bases
+  recombinationalRepair : DNA n → DNA n  -- Fix double-strand breaks
+}
+
+-- Type checking via chaperones
+type ChaperoneTyepCheck = {
+  -- Chaperones ensure proper folding
+  hsp70 : Protein → Either FoldedProtein MisfoldedProtein,
+  hsp90 : Protein → Protein,
+  
+  -- Misfolded → degradation (type error = runtime crash)
+  proteasome : MisfoldedProtein → AminoAcids
+}
+
+-- Exception handling via stress response
+type StressResponse = {
+  heatShock : Temperature → GeneExpression,
+  oxidativeStress : ROS → GeneExpression,
+  dnaeDamage : Damage → GeneExpression,
+  
+  -- Apoptosis as "abort"
+  apoptosis : StressLevel → CellDeath
+}
+
+-- ============================================================================
+-- PART IX: COMPILATION PIPELINE
+-- ============================================================================
+
+-- Phi → DNA compilation
+compile : PhiExpr → BioProgram
+compile expr = {
+  -- Optimize expression
+  optimized = optimize expr,
+  
+  -- Allocate genetic resources
+  genes = allocateGenes optimized,
+  promoters = designPromoters genes,
+  circuits = wireCircuits genes promoters,
+  
+  -- Generate DNA sequence
+  dna = assembleDNA circuits,
+  
+  -- Add biological overhead
+  full = addReplicationOrigin dna
+       |> addSelectionMarker
+       |> addRibosomalBindingSites
+}
+
+-- Synthesis (DNA printing)
+synthesize : DNA n → PhysicalDNA
+synthesize dna =
+  -- Order from DNA synthesis company
+  -- Or use enzymatic synthesis in lab
+  phosphoramidite_synthesis dna
+
+-- Transformation (load program into cell)
+transform : PhysicalDNA → Cell → TransformedCell
+transform dna cell =
+  -- Methods: electroporation, heat shock, chemical
+  electroporate cell dna
+
+-- Execute
+run : TransformedCell → Environment → Observation
+run cell env =
+  let expressed = expressGenome cell
+  let output = measureOutput cell env
+  output
+
+-- ============================================================================
+-- PART X: PRACTICAL EXAMPLES
+-- ============================================================================
+
+-- Example 1: Biological factorial
+factorialBio : DNA n
+factorialBio = compile (
+  fix (λ fact n →
+    if n == 0 then 1
+    else n * fact (n - 1)
+  )
+)
+
+-- Implementation:
+-- - Counter gene with decreasing expression
+-- - Multiplier enzyme cascade
+-- - Terminator at n=0
+
+-- Example 2: Biological Fibonacci sensor
+fibSensor : Concentration → GeneticCircuit
+fibSensor input = {
+  -- Two state variables (previous fib numbers)
+  state1 = geneticRegister 1,
+  state2 = geneticRegister 1,
+  
+  -- Update rule: new = state1 + state2
+  update = geneticAdd state1 state2,
+  
+  -- Output when matches input
+  output = geneticCompare result input
+}
+
+-- Example 3: DNA-based neural network
+bioNeuralNet : GeneticCircuit
+bioNeuralNet = {
+  -- Weights as promoter strengths
+  weights : List (Promoter, Float),
+  
+  -- Activation via Hill equation (sigmoid-like)
+  activation = λ x → x^n / (K^n + x^n),
+  
+  -- Layers as gene expression cascades
+  layers = [inputGenes, hiddenGenes, outputGenes]
+}
+
+-- ============================================================================
+-- THE BOTTOM LINE
+-- ============================================================================
+
+-- Biology is computation in chemistry:
+-- • DNA is source code (4-letter alphabet)
+-- • Transcription is compilation (DNA → RNA)
+-- • Translation is execution (RNA → Protein)
+-- • Proteins are functions (enzymes catalyze)
+-- • Cells are processes (concurrent, communicating)
+-- • Evolution is optimization (genetic algorithms)
+
+-- Phi can be compiled to living systems.
+-- The cell is a universal Turing machine made of carbon.

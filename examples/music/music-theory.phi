@@ -1,0 +1,562 @@
+-- ============================================================================
+-- MUSIC-THEORY.PHI: Sound Formalized in Types
+-- ============================================================================
+-- From frequencies to symphonies, mathematically specified.
+-- Pitches as ratios, chords as sets, progressions as morphisms.
+-- ============================================================================
+
+-- ============================================================================
+-- PART I: ACOUSTIC FOUNDATIONS
+-- ============================================================================
+
+-- Frequency in Hz
+type Frequency = Float  -- Positive real
+
+-- Amplitude [0, 1]
+type Amplitude = Float
+
+-- Duration in beats
+type Duration = Rational
+
+-- Time in seconds
+type Time = Float
+
+-- Pure tone
+type Tone = {
+  frequency : Frequency,
+  amplitude : Amplitude,
+  phase : Float  -- [0, 2π)
+}
+
+-- Waveform as a function of time
+type Waveform = Time → Amplitude
+
+sine : Frequency → Amplitude → Waveform
+sine f a = λ t → a * sin (2 * π * f * t)
+
+square : Frequency → Amplitude → Waveform
+square f a = λ t → a * sign (sin (2 * π * f * t))
+
+sawtooth : Frequency → Amplitude → Waveform
+sawtooth f a = λ t → a * (2 * (f * t - floor (f * t + 0.5)))
+
+triangle : Frequency → Amplitude → Waveform
+triangle f a = λ t → a * (2 * abs (2 * (f * t - floor (f * t + 0.5))) - 1)
+
+-- Superposition of waveforms
+mix : List (Waveform, Amplitude) → Waveform
+mix waves = λ t → sum (map (λ (w, a) → a * w t) waves)
+
+-- ============================================================================
+-- PART II: PITCH AND INTERVALS
+-- ============================================================================
+
+-- Pitch class (octave-equivalent)
+type PitchClass = C | Cs | D | Ds | E | F | Fs | G | Gs | A | As | B
+
+-- Scientific pitch notation
+type Pitch = { class_ : PitchClass, octave : Int }
+
+-- MIDI note number
+type MidiNote = Int  -- 0-127
+
+-- Conversions
+pitchToMidi : Pitch → MidiNote
+pitchToMidi p = 12 * (p.octave + 1) + pitchClassToInt p.class_
+
+pitchClassToInt : PitchClass → Int
+pitchClassToInt = λ pc → case pc of
+  C → 0 | Cs → 1 | D → 2 | Ds → 3 | E → 4 | F → 5
+  Fs → 6 | G → 7 | Gs → 8 | A → 9 | As → 10 | B → 11
+
+midiToFreq : MidiNote → Frequency
+midiToFreq n = 440 * 2^((n - 69) / 12)  -- A4 = 440 Hz
+
+-- Intervals as semitone distances
+type Interval = Int
+
+-- Named intervals
+unison : Interval = 0
+minorSecond : Interval = 1
+majorSecond : Interval = 2
+minorThird : Interval = 3
+majorThird : Interval = 4
+perfectFourth : Interval = 5
+tritone : Interval = 6
+perfectFifth : Interval = 7
+minorSixth : Interval = 8
+majorSixth : Interval = 9
+minorSeventh : Interval = 10
+majorSeventh : Interval = 11
+octave : Interval = 12
+
+-- Interval ratios (just intonation)
+type JustRatio = Rational
+
+justRatios : Interval → JustRatio
+justRatios = λ i → case i of
+  0 → 1/1       -- Unison
+  1 → 16/15     -- Minor second
+  2 → 9/8       -- Major second
+  3 → 6/5       -- Minor third
+  4 → 5/4       -- Major third
+  5 → 4/3       -- Perfect fourth
+  6 → 45/32     -- Tritone
+  7 → 3/2       -- Perfect fifth
+  8 → 8/5       -- Minor sixth
+  9 → 5/3       -- Major sixth
+  10 → 9/5     -- Minor seventh (or 16/9)
+  11 → 15/8    -- Major seventh
+  12 → 2/1     -- Octave
+
+-- Transpose
+transpose : Interval → Pitch → Pitch
+transpose i p = midiToPitch (pitchToMidi p + i)
+
+-- ============================================================================
+-- PART III: SCALES AND MODES
+-- ============================================================================
+
+-- Scale as a set of intervals from root
+type Scale = List Interval
+
+-- Major scale
+major : Scale = [0, 2, 4, 5, 7, 9, 11]
+
+-- Natural minor scale
+minor : Scale = [0, 2, 3, 5, 7, 8, 10]
+
+-- Harmonic minor
+harmonicMinor : Scale = [0, 2, 3, 5, 7, 8, 11]
+
+-- Melodic minor (ascending)
+melodicMinor : Scale = [0, 2, 3, 5, 7, 9, 11]
+
+-- Pentatonic scales
+majorPentatonic : Scale = [0, 2, 4, 7, 9]
+minorPentatonic : Scale = [0, 3, 5, 7, 10]
+
+-- Blues scale
+blues : Scale = [0, 3, 5, 6, 7, 10]
+
+-- Whole tone
+wholeTone : Scale = [0, 2, 4, 6, 8, 10]
+
+-- Chromatic
+chromatic : Scale = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
+-- Church modes (rotations of major scale)
+type Mode = Ionian | Dorian | Phrygian | Lydian | Mixolydian | Aeolian | Locrian
+
+modeScale : Mode → Scale
+modeScale = λ m → case m of
+  Ionian     → [0, 2, 4, 5, 7, 9, 11]  -- Major
+  Dorian     → [0, 2, 3, 5, 7, 9, 10]
+  Phrygian   → [0, 1, 3, 5, 7, 8, 10]
+  Lydian     → [0, 2, 4, 6, 7, 9, 11]
+  Mixolydian → [0, 2, 4, 5, 7, 9, 10]
+  Aeolian    → [0, 2, 3, 5, 7, 8, 10]  -- Natural minor
+  Locrian    → [0, 1, 3, 5, 6, 8, 10]
+
+-- Scale degree
+type ScaleDegree = I | II | III | IV | V | VI | VII
+
+degreeToInterval : Scale → ScaleDegree → Interval
+degreeToInterval scale degree = scale[degreeToInt degree]
+
+-- ============================================================================
+-- PART IV: CHORDS AND HARMONY
+-- ============================================================================
+
+-- Chord as set of intervals from root
+type ChordType = List Interval
+
+-- Triads
+majorTriad : ChordType = [0, 4, 7]      -- Root, M3, P5
+minorTriad : ChordType = [0, 3, 7]      -- Root, m3, P5
+diminished : ChordType = [0, 3, 6]      -- Root, m3, d5
+augmented : ChordType = [0, 4, 8]       -- Root, M3, A5
+
+-- Seventh chords
+majorSeventh : ChordType = [0, 4, 7, 11]     -- Δ7
+dominantSeventh : ChordType = [0, 4, 7, 10]  -- 7
+minorSeventh : ChordType = [0, 3, 7, 10]     -- m7
+halfDiminished : ChordType = [0, 3, 6, 10]   -- ø7
+fullDiminished : ChordType = [0, 3, 6, 9]    -- °7
+minorMajorSeventh : ChordType = [0, 3, 7, 11] -- mΔ7
+
+-- Extended chords
+ninth : ChordType = [0, 4, 7, 10, 14]
+eleventh : ChordType = [0, 4, 7, 10, 14, 17]
+thirteenth : ChordType = [0, 4, 7, 10, 14, 17, 21]
+
+-- Chord with root
+type Chord = { root : PitchClass, type_ : ChordType }
+
+-- Get pitches of chord
+chordPitches : Chord → Int → List Pitch
+chordPitches chord octave = 
+  let rootMidi = pitchToMidi { class_ = chord.root, octave = octave }
+  map (λ i → midiToPitch (rootMidi + i)) chord.type_
+
+-- Chord inversions
+invert : Nat → ChordType → ChordType
+invert 0 chord = chord
+invert n chord = invert (n-1) (tail chord ++ [head chord + 12])
+
+-- Voice leading distance
+voiceLeadingDistance : List Pitch → List Pitch → Int
+voiceLeadingDistance from to =
+  sum (zipWith (λ f t → abs (pitchToMidi f - pitchToMidi t)) from to)
+
+-- ============================================================================
+-- PART V: CHORD PROGRESSIONS
+-- ============================================================================
+
+-- Roman numeral analysis
+type RomanNumeral = { degree : ScaleDegree, quality : ChordQuality }
+type ChordQuality = Major | Minor | Diminished | Augmented | Dom7 | Maj7 | Min7
+
+-- Diatonic chords in major key
+diatonicChords : Scale → List (ScaleDegree, ChordType)
+diatonicChords major = [
+  (I, majorTriad),
+  (II, minorTriad),
+  (III, minorTriad),
+  (IV, majorTriad),
+  (V, majorTriad),
+  (VI, minorTriad),
+  (VII, diminished)
+]
+
+-- Common progressions
+type Progression = List RomanNumeral
+
+-- I-IV-V-I
+turnaround : Progression = [I Major, IV Major, V Major, I Major]
+
+-- ii-V-I (jazz)
+iiVI : Progression = [II Min7, V Dom7, I Maj7]
+
+-- I-V-vi-IV (pop)
+fourChords : Progression = [I Major, V Major, VI Minor, IV Major]
+
+-- 12-bar blues
+twelveBarBlues : Progression = [
+  I Dom7, I Dom7, I Dom7, I Dom7,
+  IV Dom7, IV Dom7, I Dom7, I Dom7,
+  V Dom7, IV Dom7, I Dom7, V Dom7
+]
+
+-- Circle of fifths
+circleOfFifths : List PitchClass = [C, G, D, A, E, B, Fs, Cs, Gs, Ds, As, F]
+
+-- Secondary dominants
+secondaryDominant : ScaleDegree → Chord
+secondaryDominant target = 
+  { root = transpose perfectFifth (degreeRoot target), type_ = dominantSeventh }
+
+-- ============================================================================
+-- PART VI: RHYTHM AND METER
+-- ============================================================================
+
+-- Note values
+type NoteValue = Whole | Half | Quarter | Eighth | Sixteenth | ThirtySecond
+
+noteValueDuration : NoteValue → Duration
+noteValueDuration = λ nv → case nv of
+  Whole → 4/1
+  Half → 2/1
+  Quarter → 1/1
+  Eighth → 1/2
+  Sixteenth → 1/4
+  ThirtySecond → 1/8
+
+-- Dotted notes
+dotted : Duration → Duration
+dotted d = d * 3/2
+
+doubleDotted : Duration → Duration
+doubleDotted d = d * 7/4
+
+-- Time signature
+type TimeSignature = { numerator : Nat, denominator : Nat }
+
+commonTime : TimeSignature = { numerator = 4, denominator = 4 }
+cutTime : TimeSignature = { numerator = 2, denominator = 2 }
+waltz : TimeSignature = { numerator = 3, denominator = 4 }
+compound : TimeSignature = { numerator = 6, denominator = 8 }
+
+-- Beat pattern
+type BeatPattern = List (Bool, Duration)  -- (accented, duration)
+
+simpleQuadruple : BeatPattern = [
+  (True, 1), (False, 1), (False, 1), (False, 1)  -- Strong-weak-weak-weak
+]
+
+simpleTriple : BeatPattern = [
+  (True, 1), (False, 1), (False, 1)  -- Strong-weak-weak
+]
+
+compoundDuple : BeatPattern = [
+  (True, 1), (False, 1), (False, 1),    -- Strong-weak-weak
+  (False, 1), (False, 1), (False, 1)    -- Weak-weak-weak
+]
+
+-- Polyrhythm
+type Polyrhythm = (Nat, Nat)  -- e.g., (3, 2) = 3 against 2
+
+polyrhythmPattern : Polyrhythm → List (Time, Time)
+polyrhythmPattern (m, n) =
+  let lcm_ = lcm m n
+  zip (map (λ i → i * lcm_ / m) [0..m-1])
+      (map (λ i → i * lcm_ / n) [0..n-1])
+
+-- ============================================================================
+-- PART VII: MUSICAL STRUCTURE
+-- ============================================================================
+
+-- Note event
+type Note = {
+  pitch : Pitch,
+  duration : Duration,
+  velocity : Int,  -- 0-127
+  onset : Duration  -- Start time in beats
+}
+
+-- Rest
+type Rest = { duration : Duration, onset : Duration }
+
+-- Musical event
+type Event = NoteEvent Note | RestEvent Rest
+
+-- Phrase as sequence of events
+type Phrase = List Event
+
+-- Musical section
+type Section = {
+  name : String,
+  events : Phrase,
+  repeat : Nat
+}
+
+-- Song structure
+type Structure = List Section
+
+-- Common forms
+aaba : Structure → Structure  -- 32-bar standard
+aaba sections = [sections.A, sections.A, sections.B, sections.A]
+
+sonataAllegro : Structure → Structure  -- Exposition, Development, Recapitulation
+sonataAllegro s = [s.exposition, s.development, s.recapitulation]
+
+verse_chorus : Structure → Structure
+verse_chorus s = [s.intro, s.verse, s.chorus, s.verse, s.chorus, s.bridge, s.chorus, s.outro]
+
+-- ============================================================================
+-- PART VIII: COUNTERPOINT
+-- ============================================================================
+
+-- Voice
+type Voice = List Note
+
+-- Counterpoint rules (first species)
+type CounterpointRule = Voice → Voice → Bool
+
+parallelFifthsProhibited : CounterpointRule
+parallelFifthsProhibited v1 v2 =
+  not (any (λ (a, b) → 
+    interval a.1 a.2 == perfectFifth && 
+    interval b.1 b.2 == perfectFifth &&
+    motion a b == Parallel
+  ) (zip (pairs v1) (pairs v2)))
+
+parallelOctavesProhibited : CounterpointRule
+parallelOctavesProhibited v1 v2 =
+  not (any (λ (a, b) →
+    interval a.1 a.2 `mod` 12 == 0 &&
+    interval b.1 b.2 `mod` 12 == 0 &&
+    motion a b == Parallel
+  ) (zip (pairs v1) (pairs v2)))
+
+type Motion = Parallel | Contrary | Oblique | Similar
+
+motionBetween : (Note, Note) → (Note, Note) → Motion
+motionBetween (a1, a2) (b1, b2) =
+  let dir1 = compare (pitchToMidi a2) (pitchToMidi a1)
+  let dir2 = compare (pitchToMidi b2) (pitchToMidi b1)
+  case (dir1, dir2) of
+    (EQ, _) → Oblique
+    (_, EQ) → Oblique
+    (x, y) | x == y → Parallel
+    _ → Contrary
+
+-- Canon
+type Canon = {
+  leader : Voice,
+  follower : Voice,
+  interval : Interval,  -- Transposition
+  delay : Duration      -- Time offset
+}
+
+canon : Voice → Interval → Duration → Canon
+canon leader interval delay = {
+  leader = leader,
+  follower = map (transpose interval) (shift delay leader),
+  interval = interval,
+  delay = delay
+}
+
+-- Fugue structure
+type Fugue = {
+  subject : Voice,
+  answer : Voice,        -- Subject at fifth
+  countersubject : Voice,
+  episodes : List Voice,
+  stretto : Bool
+}
+
+-- ============================================================================
+-- PART IX: TRANSFORMATIONS
+-- ============================================================================
+
+-- Pitch transformations
+type PitchTransform = Pitch → Pitch
+
+transposeBy : Interval → PitchTransform
+transposeBy i = λ p → midiToPitch (pitchToMidi p + i)
+
+inversion : Pitch → PitchTransform
+inversion axis = λ p → 
+  let axisMidi = pitchToMidi axis
+  let pMidi = pitchToMidi p
+  midiToPitch (2 * axisMidi - pMidi)
+
+-- Retrograde (reverse)
+retrograde : Phrase → Phrase
+retrograde = reverse
+
+-- Retrograde inversion
+retrogradeInversion : Pitch → Phrase → Phrase
+retrogradeInversion axis = reverse . map (invertNote axis)
+
+-- Augmentation (slower)
+augmentation : Rational → Phrase → Phrase
+augmentation factor = map (λ e → { e | duration = e.duration * factor })
+
+-- Diminution (faster)
+diminution : Rational → Phrase → Phrase
+diminution factor = augmentation (1 / factor)
+
+-- Serial operations (twelve-tone)
+type ToneRow = Vec PitchClass 12
+
+primeRow : ToneRow → ToneRow
+primeRow = id
+
+retrogradeRow : ToneRow → ToneRow
+retrogradeRow = reverse
+
+inversionRow : ToneRow → ToneRow
+inversionRow row = 
+  let axis = head row
+  map (λ pc → invert axis pc) row
+
+retrogradeInversionRow : ToneRow → ToneRow
+retrogradeInversionRow = reverse . inversionRow
+
+-- All 48 forms
+type RowMatrix = Matrix PitchClass 12 12
+
+generateMatrix : ToneRow → RowMatrix
+generateMatrix prime =
+  let inverted = inversionRow prime
+  map (λ start → transpose (start - head prime) prime) inverted
+
+-- ============================================================================
+-- PART X: COMPILE TARGETS
+-- ============================================================================
+
+-- Music compiles to:
+
+compile[MIDI] : Music → MidiFile
+  -- Standard MIDI format
+  -- Note on/off events
+  -- Control changes
+
+compile[MusicXML] : Music → XML
+  -- Notation interchange
+  -- Sheet music rendering
+  -- Sibelius/Finale/MuseScore
+
+compile[LilyPond] : Music → LilyPondSource
+  -- High-quality engraving
+  -- PDF/PNG/SVG output
+
+compile[Audio] : Music → Waveform
+  -- Direct synthesis
+  -- Sample rate conversion
+
+compile[SuperCollider] : Music → SCLang
+  -- Real-time synthesis
+  -- Live coding
+
+compile[Faust] : Synthesizer → FaustDSP
+  -- Digital signal processing
+  -- VST/AU plugins
+
+compile[Max/MSP] : Music → MaxPatch
+  -- Visual programming
+  -- Interactive systems
+
+-- ============================================================================
+-- EXAMPLE: Complete Composition
+-- ============================================================================
+
+-- Simple melody with harmony
+composition : Music
+composition = {
+  tempo = 120,  -- BPM
+  timeSignature = commonTime,
+  key = { root = C, mode = Ionian },
+  
+  melody = [
+    note C 4 Quarter,
+    note E 4 Quarter,
+    note G 4 Quarter,
+    note E 4 Quarter,
+    note F 4 Half,
+    note E 4 Half,
+    note D 4 Whole
+  ],
+  
+  harmony = [
+    chord C majorTriad Whole,
+    chord F majorTriad Half,
+    chord C majorTriad Half,
+    chord G dominantSeventh Whole
+  ],
+  
+  bass = [
+    note C 2 Whole,
+    note F 2 Half,
+    note C 2 Half,
+    note G 2 Whole
+  ]
+}
+
+-- Generate MIDI
+output : MidiFile = compile[MIDI] composition
+
+-- ============================================================================
+-- THE BOTTOM LINE
+-- ============================================================================
+
+-- Music is mathematics you can hear:
+-- • Pitches are frequency ratios
+-- • Intervals are logarithmic distances
+-- • Chords are vertical pitch sets
+-- • Progressions are harmonic morphisms
+-- • Rhythm is time subdivision
+
+-- Phi makes music theory compositional and type-safe.

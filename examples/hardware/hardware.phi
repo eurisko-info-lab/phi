@@ -1,0 +1,595 @@
+-- ============================================================================
+-- HARDWARE.PHI: Silicon in Types
+-- ============================================================================
+-- From transistors to CPUs, formally specified.
+-- Gates as functions, circuits as compositions, timing as types.
+-- ============================================================================
+
+-- ============================================================================
+-- PART I: DIGITAL LOGIC FOUNDATIONS
+-- ============================================================================
+
+-- Binary values
+type Bit = Low | High
+
+-- Bit operations as pure functions
+not_ : Bit → Bit
+not_ Low = High
+not_ High = Low
+
+and_ : Bit → Bit → Bit
+and_ High High = High
+and_ _ _ = Low
+
+or_ : Bit → Bit → Bit
+or_ Low Low = Low
+or_ _ _ = High
+
+xor_ : Bit → Bit → Bit
+xor_ a b = and_ (or_ a b) (not_ (and_ a b))
+
+nand_ : Bit → Bit → Bit
+nand_ a b = not_ (and_ a b)
+
+nor_ : Bit → Bit → Bit
+nor_ a b = not_ (or_ a b)
+
+-- All gates from NAND (universal gate)
+not_nand : Bit → Bit
+not_nand a = nand_ a a
+
+and_nand : Bit → Bit → Bit
+and_nand a b = nand_ (nand_ a b) (nand_ a b)
+
+or_nand : Bit → Bit → Bit  
+or_nand a b = nand_ (nand_ a a) (nand_ b b)
+
+-- ============================================================================
+-- PART II: TYPED BIT VECTORS
+-- ============================================================================
+
+-- Fixed-width bit vectors with width in type
+type BitVec (n : Nat) = Vec Bit n
+
+-- Common widths
+type Byte = BitVec 8
+type Word16 = BitVec 16
+type Word32 = BitVec 32
+type Word64 = BitVec 64
+
+-- Bitwise operations lifted to vectors
+bvNot : BitVec n → BitVec n
+bvNot = map not_
+
+bvAnd : BitVec n → BitVec n → BitVec n
+bvAnd = zipWith and_
+
+bvOr : BitVec n → BitVec n → BitVec n
+bvOr = zipWith or_
+
+bvXor : BitVec n → BitVec n → BitVec n
+bvXor = zipWith xor_
+
+-- Shift operations (with overflow protection in types)
+shiftLeft : BitVec n → Fin n → BitVec n
+shiftLeft v amount = 
+  let shifted = drop amount v ++ replicate amount Low
+  shifted
+
+shiftRight : BitVec n → Fin n → BitVec n
+shiftRight v amount =
+  replicate amount Low ++ take (n - amount) v
+
+-- Arithmetic shift (preserves sign)
+arithmeticShiftRight : BitVec n → Fin n → BitVec n
+arithmeticShiftRight v amount =
+  let sign = head v
+  replicate amount sign ++ take (n - amount) v
+
+-- ============================================================================
+-- PART III: ARITHMETIC CIRCUITS
+-- ============================================================================
+
+-- Half adder
+type HalfAdderOut = { sum : Bit, carry : Bit }
+
+halfAdder : Bit → Bit → HalfAdderOut
+halfAdder a b = { sum = xor_ a b, carry = and_ a b }
+
+-- Full adder
+type FullAdderOut = { sum : Bit, carry : Bit }
+
+fullAdder : Bit → Bit → Bit → FullAdderOut
+fullAdder a b cin =
+  let { sum = s1, carry = c1 } = halfAdder a b
+  let { sum = s2, carry = c2 } = halfAdder s1 cin
+  { sum = s2, carry = or_ c1 c2 }
+
+-- Ripple carry adder (simple but slow)
+rippleCarryAdder : BitVec n → BitVec n → Bit → (BitVec n, Bit)
+rippleCarryAdder [] [] cin = ([], cin)
+rippleCarryAdder (a:as) (b:bs) cin =
+  let { sum, carry } = fullAdder a b cin
+  let (rest, cout) = rippleCarryAdder as bs carry
+  (sum : rest, cout)
+
+-- Carry lookahead adder (fast)
+type CLA4 = {
+  generate : BitVec 4,  -- G_i = A_i AND B_i
+  propagate : BitVec 4, -- P_i = A_i XOR B_i
+  carries : BitVec 5    -- C_0 through C_4
+}
+
+carryLookahead4 : BitVec 4 → BitVec 4 → Bit → CLA4
+carryLookahead4 a b c0 =
+  let g = zipWith and_ a b
+  let p = zipWith xor_ a b
+  let c1 = or_ g[0] (and_ p[0] c0)
+  let c2 = or_ g[1] (and_ p[1] c1)
+  let c3 = or_ g[2] (and_ p[2] c2)
+  let c4 = or_ g[3] (and_ p[3] c3)
+  { generate = g, propagate = p, carries = [c0, c1, c2, c3, c4] }
+
+-- Multiplier
+type MultiplierOut (n : Nat) = BitVec (2 * n)
+
+arrayMultiplier : BitVec n → BitVec n → MultiplierOut n
+arrayMultiplier a b = 
+  let partials = map (λ bi → if bi then a else zeros) b
+  let shifted = zipWith shiftLeft partials [0..n-1]
+  foldl add zeros shifted
+
+-- ============================================================================
+-- PART IV: MEMORY ELEMENTS
+-- ============================================================================
+
+-- SR Latch (asynchronous)
+type SRLatch = {
+  state : Bit,
+  set : Bit → SRLatch,
+  reset : Bit → SRLatch
+}
+
+srLatch : Bit → SRLatch
+srLatch initial = {
+  state = initial,
+  set = λ s → if s then srLatch High else srLatch initial,
+  reset = λ r → if r then srLatch Low else srLatch initial
+}
+
+-- D Flip-Flop (edge-triggered)
+type DFlipFlop = {
+  q : Bit,
+  clock : Bit → DFlipFlop → DFlipFlop
+}
+
+dFlipFlop : Bit → DFlipFlop
+dFlipFlop initial = {
+  q = initial,
+  clock = λ d prev → 
+    -- Only update on rising edge
+    if rising_edge then dFlipFlop d
+    else prev
+}
+
+-- Register: Array of flip-flops
+type Register (n : Nat) = {
+  value : BitVec n,
+  write : BitVec n → Clock → Register n,
+  read : BitVec n
+}
+
+register : BitVec n → Register n
+register initial = {
+  value = initial,
+  write = λ data clk → register data,
+  read = initial
+}
+
+-- Register file
+type RegisterFile (n : Nat) (w : Nat) = {
+  registers : Vec (Register w) n,
+  read : Fin n → BitVec w,
+  write : Fin n → BitVec w → ()
+}
+
+-- Memory
+type Memory (addr : Nat) (data : Nat) = {
+  cells : Vec (BitVec data) (2^addr),
+  read : BitVec addr → BitVec data,
+  write : BitVec addr → BitVec data → Memory addr data
+}
+
+-- ============================================================================
+-- PART V: COMBINATIONAL CIRCUITS
+-- ============================================================================
+
+-- Multiplexer
+mux2 : Bit → Bit → Bit → Bit
+mux2 sel a b = or_ (and_ (not_ sel) a) (and_ sel b)
+
+mux4 : BitVec 2 → BitVec 4 → Bit
+mux4 sel inputs = 
+  let m01 = mux2 sel[0] inputs[0] inputs[1]
+  let m23 = mux2 sel[0] inputs[2] inputs[3]
+  mux2 sel[1] m01 m23
+
+muxN : BitVec (log2 n) → BitVec n → Bit
+muxN sel inputs = foldTree mux2 sel inputs
+
+-- Demultiplexer
+demux2 : Bit → Bit → BitVec 2
+demux2 sel input = [and_ (not_ sel) input, and_ sel input]
+
+-- Decoder
+decoder : BitVec n → BitVec (2^n)
+decoder bits = 
+  let idx = toNat bits
+  tabulate (λ i → if i = idx then High else Low)
+
+-- Encoder (priority)
+priorityEncoder : BitVec n → BitVec (log2 n)
+priorityEncoder inputs = 
+  fromNat (findLastHigh inputs)
+
+-- ALU
+type ALUOp = Add | Sub | And | Or | Xor | Shl | Shr | Cmp
+
+type ALUOut (n : Nat) = {
+  result : BitVec n,
+  zero : Bit,
+  negative : Bit,
+  carry : Bit,
+  overflow : Bit
+}
+
+alu : ALUOp → BitVec n → BitVec n → ALUOut n
+alu op a b = case op of
+  Add → 
+    let (sum, c) = rippleCarryAdder a b Low
+    { result = sum, zero = isZero sum, negative = head sum,
+      carry = c, overflow = overflowAdd a b sum }
+  Sub →
+    let (diff, c) = rippleCarryAdder a (bvNot b) High
+    { result = diff, zero = isZero diff, negative = head diff,
+      carry = c, overflow = overflowSub a b diff }
+  And → 
+    { result = bvAnd a b, zero = isZero (bvAnd a b), 
+      negative = Low, carry = Low, overflow = Low }
+  Or →
+    { result = bvOr a b, zero = isZero (bvOr a b),
+      negative = Low, carry = Low, overflow = Low }
+  -- ... other operations
+
+-- ============================================================================
+-- PART VI: PROCESSOR ARCHITECTURE
+-- ============================================================================
+
+-- Simple RISC instruction set
+type Instruction =
+  | ADD  { rd : Reg, rs1 : Reg, rs2 : Reg }
+  | SUB  { rd : Reg, rs1 : Reg, rs2 : Reg }
+  | AND  { rd : Reg, rs1 : Reg, rs2 : Reg }
+  | OR   { rd : Reg, rs1 : Reg, rs2 : Reg }
+  | LW   { rd : Reg, rs1 : Reg, imm : Imm12 }  -- Load word
+  | SW   { rs1 : Reg, rs2 : Reg, imm : Imm12 } -- Store word
+  | BEQ  { rs1 : Reg, rs2 : Reg, imm : Imm12 } -- Branch if equal
+  | JAL  { rd : Reg, imm : Imm20 }             -- Jump and link
+  | ADDI { rd : Reg, rs1 : Reg, imm : Imm12 }  -- Add immediate
+
+type Reg = Fin 32
+type Imm12 = BitVec 12
+type Imm20 = BitVec 20
+
+-- Processor state
+type CPUState = {
+  pc : Word32,
+  registers : RegisterFile 32 32,
+  memory : Memory 32 32,
+  halted : Bool
+}
+
+-- Single-cycle processor
+fetch : CPUState → Instruction
+fetch cpu = decode (cpu.memory.read cpu.pc)
+
+decode : Word32 → Instruction
+decode bits = 
+  let opcode = bits[6..0]
+  case opcode of
+    0b0110011 → -- R-type
+      let funct3 = bits[14..12]
+      let funct7 = bits[31..25]
+      case (funct3, funct7) of
+        (0b000, 0b0000000) → ADD { rd = bits[11..7], rs1 = bits[19..15], rs2 = bits[24..20] }
+        (0b000, 0b0100000) → SUB { rd = bits[11..7], rs1 = bits[19..15], rs2 = bits[24..20] }
+        -- ... other R-type instructions
+    0b0000011 → -- Load
+      LW { rd = bits[11..7], rs1 = bits[19..15], imm = bits[31..20] }
+    0b0100011 → -- Store
+      SW { rs1 = bits[19..15], rs2 = bits[24..20], imm = bits[31..25] ++ bits[11..7] }
+    -- ... other opcodes
+
+execute : CPUState → Instruction → CPUState
+execute cpu instr = case instr of
+  ADD { rd, rs1, rs2 } →
+    let a = cpu.registers.read rs1
+    let b = cpu.registers.read rs2
+    let result = alu Add a b
+    { cpu | 
+      registers = cpu.registers.write rd result.result,
+      pc = cpu.pc + 4 }
+  
+  LW { rd, rs1, imm } →
+    let addr = cpu.registers.read rs1 + signExtend imm
+    let data = cpu.memory.read addr
+    { cpu |
+      registers = cpu.registers.write rd data,
+      pc = cpu.pc + 4 }
+  
+  BEQ { rs1, rs2, imm } →
+    let a = cpu.registers.read rs1
+    let b = cpu.registers.read rs2
+    if a == b 
+    then { cpu | pc = cpu.pc + signExtend imm }
+    else { cpu | pc = cpu.pc + 4 }
+  
+  -- ... other instructions
+
+-- Run processor
+step : CPUState → CPUState
+step cpu = execute cpu (fetch cpu)
+
+run : CPUState → Nat → CPUState
+run cpu 0 = cpu
+run cpu n = run (step cpu) (n - 1)
+
+-- ============================================================================
+-- PART VII: PIPELINING
+-- ============================================================================
+
+-- 5-stage pipeline
+type PipelineStage = IF | ID | EX | MEM | WB
+
+type PipelineReg (from : PipelineStage) (to : PipelineStage) = 
+  case (from, to) of
+    (IF, ID)   → { pc : Word32, instruction : Word32 }
+    (ID, EX)   → { pc : Word32, rs1_val : Word32, rs2_val : Word32, 
+                   rd : Reg, imm : Word32, aluOp : ALUOp }
+    (EX, MEM)  → { pc : Word32, alu_result : Word32, rs2_val : Word32,
+                   rd : Reg, memRead : Bool, memWrite : Bool }
+    (MEM, WB)  → { rd : Reg, data : Word32, regWrite : Bool }
+
+type PipelinedCPU = {
+  if_id : PipelineReg IF ID,
+  id_ex : PipelineReg ID EX,
+  ex_mem : PipelineReg EX MEM,
+  mem_wb : PipelineReg MEM WB,
+  registers : RegisterFile 32 32,
+  memory : Memory 32 32,
+  pc : Word32
+}
+
+-- Hazard detection
+type Hazard = DataHazard | ControlHazard | StructuralHazard
+
+detectDataHazard : PipelinedCPU → Option Hazard
+detectDataHazard cpu =
+  -- RAW hazard: instruction in ID needs result from EX or MEM
+  let ex_rd = cpu.id_ex.rd
+  let mem_rd = cpu.ex_mem.rd
+  let id_rs1 = decode(cpu.if_id.instruction).rs1
+  let id_rs2 = decode(cpu.if_id.instruction).rs2
+  if (ex_rd == id_rs1 || ex_rd == id_rs2 || mem_rd == id_rs1 || mem_rd == id_rs2)
+  then Some DataHazard
+  else None
+
+-- Forwarding unit
+type ForwardSel = NoForward | ForwardFromEX | ForwardFromMEM
+
+forwardingUnit : PipelinedCPU → Reg → ForwardSel
+forwardingUnit cpu reg =
+  if cpu.ex_mem.regWrite && cpu.ex_mem.rd == reg then ForwardFromMEM
+  else if cpu.mem_wb.regWrite && cpu.mem_wb.rd == reg then ForwardFromWB
+  else NoForward
+
+-- Pipeline with forwarding
+pipelineStep : PipelinedCPU → PipelinedCPU
+pipelineStep cpu =
+  -- All stages execute in parallel
+  let wb_out = writebackStage cpu
+  let mem_out = memoryStage cpu
+  let ex_out = executeStage cpu (forwardingUnit cpu)
+  let id_out = decodeStage cpu
+  let if_out = fetchStage cpu
+  
+  { cpu |
+    mem_wb = mem_out,
+    ex_mem = ex_out,
+    id_ex = id_out,
+    if_id = if_out,
+    pc = if detectBranch cpu then branchTarget else cpu.pc + 4
+  }
+
+-- ============================================================================
+-- PART VIII: FPGA SYNTHESIS
+-- ============================================================================
+
+-- Hardware description
+type HDL = Signal Bit | Signal (BitVec n) | Module [HDL]
+
+-- Synthesizable subset
+type Synthesizable a = {
+  combinational : a → HDL,
+  sequential : a → Clock → HDL,
+  timing : TimingConstraints
+}
+
+type TimingConstraints = {
+  maxFrequency : Frequency,
+  setupTime : Time,
+  holdTime : Time,
+  propagationDelay : Time
+}
+
+-- FPGA resources
+type FPGAResources = {
+  luts : Nat,          -- Lookup tables
+  ffs : Nat,           -- Flip-flops
+  brams : Nat,         -- Block RAMs
+  dsps : Nat,          -- DSP blocks
+  ios : Nat            -- I/O pins
+}
+
+-- Resource estimation
+estimateResources : HDL → FPGAResources
+estimateResources hdl = 
+  let luts = countCombinational hdl
+  let ffs = countSequential hdl
+  { luts = luts, ffs = ffs, brams = 0, dsps = 0, ios = countIO hdl }
+
+-- Place and route
+type Placement = Map Module Position
+type Routing = Map Signal Wire
+
+placeAndRoute : HDL → FPGAResources → (Placement, Routing)
+placeAndRoute hdl resources = 
+  let placement = place hdl resources
+  let routing = route hdl placement
+  (placement, routing)
+
+-- ============================================================================
+-- PART IX: VERIFICATION
+-- ============================================================================
+
+-- Property specification
+type Property = {
+  always : Formula,
+  eventually : Formula,
+  never : Formula
+}
+
+-- Assertions
+assert : Property → HDL → Proof
+assert prop hdl = modelCheck prop hdl
+
+-- Common properties
+noDeadlock : CPUState → Property
+noDeadlock cpu = always (canProgress cpu)
+
+dataIntegrity : Memory a d → Property
+dataIntegrity mem = always (λ addr → mem.read addr == lastWritten addr)
+
+-- Formal verification via SMT
+verifyALU : ALU → SMT Proof
+verifyALU alu = 
+  ∀ a b. alu Add a b == reference_add a b &&
+  ∀ a b. alu Sub a b == reference_sub a b
+
+-- ============================================================================
+-- PART X: COMPILE TARGETS
+-- ============================================================================
+
+-- Hardware compiles to:
+
+compile[Verilog] : HDL → VerilogModule
+  -- Synthesizable Verilog output
+  -- Timing annotations
+  -- Testbench generation
+
+compile[VHDL] : HDL → VHDLEntity
+  -- VHDL architecture
+  -- Configuration
+  -- Simulation models
+
+compile[Chisel] : HDL → ChiselModule
+  -- Scala-based hardware description
+  -- Parameterized generators
+
+compile[SystemVerilog] : HDL → SVModule
+  -- Assertions
+  -- Coverage
+  -- Interfaces
+
+compile[FPGA] : HDL → Bitstream
+  -- Xilinx/Intel/Lattice synthesis
+  -- Timing closure
+  -- Programming file
+
+compile[ASIC] : HDL → GDSII
+  -- Standard cell mapping
+  -- Physical design
+  -- Tape-out ready
+
+-- ============================================================================
+-- EXAMPLE: Complete RISC-V Core
+-- ============================================================================
+
+-- Minimal RISC-V implementation
+riscvCore : HDL
+riscvCore = module {
+  -- Program counter
+  pc : Register 32 = register 0x80000000
+  
+  -- Register file
+  regfile : RegisterFile 32 32 = registerFile 32
+  
+  -- Instruction memory
+  imem : Memory 12 32 = rom instructions
+  
+  -- Data memory
+  dmem : Memory 12 32 = ram 4096
+  
+  -- Datapath
+  instruction = imem.read pc.value
+  decoded = decode instruction
+  
+  -- ALU
+  alu_a = regfile.read decoded.rs1
+  alu_b = case decoded.type of
+    RType → regfile.read decoded.rs2
+    IType → signExtend decoded.imm
+  alu_result = alu decoded.aluOp alu_a alu_b
+  
+  -- Memory access
+  mem_data = dmem.read alu_result
+  
+  -- Writeback
+  wb_data = case decoded.type of
+    Load → mem_data
+    _    → alu_result
+  
+  -- Next PC
+  next_pc = case decoded.type of
+    Branch → if branchTaken then pc + decoded.imm else pc + 4
+    Jump   → alu_result
+    _      → pc + 4
+  
+  -- State update
+  on rising_edge(clk):
+    pc := next_pc
+    regfile.write decoded.rd wb_data
+    if decoded.type == Store:
+      dmem.write alu_result (regfile.read decoded.rs2)
+}
+
+-- Verify properties
+riscvVerified : Proof
+riscvVerified = verify riscvCore [
+  always (pc.value % 4 == 0),  -- PC aligned
+  always (regfile.read 0 == 0), -- x0 is always 0
+  noDeadlock riscvCore
+]
+
+-- ============================================================================
+-- THE BOTTOM LINE
+-- ============================================================================
+
+-- Hardware is typed computation frozen in silicon:
+-- • Gates are Boolean functions
+-- • Wires carry typed signals
+-- • Registers hold state across clock edges
+-- • Pipelines trade latency for throughput
+-- • Formal verification proves correctness
+
+-- Phi specifications become synthesizable hardware.

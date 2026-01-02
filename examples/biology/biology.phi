@@ -1,0 +1,594 @@
+-- ============================================================================
+-- BIOLOGY.PHI: Life Formalized in Phi
+-- ============================================================================
+-- From molecules to ecosystems, typed and compositional.
+-- DNA as programs, proteins as functions, cells as actors.
+-- ============================================================================
+
+-- ============================================================================
+-- PART I: MOLECULAR FOUNDATIONS
+-- ============================================================================
+
+-- Nucleotides: The alphabet of life
+type Nucleotide = A | T | G | C | U  -- U for RNA
+
+-- Base pairing (Watson-Crick) as a type relation
+type Complements : Nucleotide → Nucleotide → Type
+  | A-T : Complements A T
+  | T-A : Complements T A
+  | G-C : Complements G C
+  | C-G : Complements C G
+  
+-- DNA: Double helix with complementarity in types
+type DNA (n : Nat) = {
+  sense     : Vec Nucleotide n,
+  antisense : Vec Nucleotide n,
+  paired    : ∀ i. Complements (sense[i]) (antisense[i])  -- Type-level proof!
+}
+
+-- RNA: Single strand, U instead of T
+type RNA (n : Nat) = Vec Nucleotide n  -- where no T occurs
+
+-- Transcription: DNA → RNA
+transcribe : DNA n → RNA n
+transcribe dna = map (λ n → case n of T → U | x → x) dna.sense
+
+-- ============================================================================
+-- PART II: THE GENETIC CODE
+-- ============================================================================
+
+-- Codon: Triplet of nucleotides
+type Codon = (Nucleotide, Nucleotide, Nucleotide)
+
+-- Amino acids
+type AminoAcid =
+  | Ala | Arg | Asn | Asp | Cys | Gln | Glu | Gly
+  | His | Ile | Leu | Lys | Met | Phe | Pro | Ser
+  | Thr | Trp | Tyr | Val | Stop
+
+-- The genetic code as a pure function
+codonTable : Codon → AminoAcid
+codonTable = λ codon → case codon of
+  -- Start codon (also Methionine)
+  (A, U, G) → Met
+  
+  -- Stop codons
+  (U, A, A) → Stop
+  (U, A, G) → Stop
+  (U, G, A) → Stop
+  
+  -- Phenylalanine
+  (U, U, U) → Phe
+  (U, U, C) → Phe
+  
+  -- Leucine
+  (U, U, A) → Leu
+  (U, U, G) → Leu
+  (C, U, U) → Leu
+  (C, U, C) → Leu
+  (C, U, A) → Leu
+  (C, U, G) → Leu
+  
+  -- Isoleucine
+  (A, U, U) → Ile
+  (A, U, C) → Ile
+  (A, U, A) → Ile
+  
+  -- Valine
+  (G, U, U) → Val
+  (G, U, C) → Val
+  (G, U, A) → Val
+  (G, U, G) → Val
+  
+  -- Serine
+  (U, C, U) → Ser
+  (U, C, C) → Ser
+  (U, C, A) → Ser
+  (U, C, G) → Ser
+  (A, G, U) → Ser
+  (A, G, C) → Ser
+  
+  -- Proline
+  (C, C, U) → Pro
+  (C, C, C) → Pro
+  (C, C, A) → Pro
+  (C, C, G) → Pro
+  
+  -- Threonine
+  (A, C, U) → Thr
+  (A, C, C) → Thr
+  (A, C, A) → Thr
+  (A, C, G) → Thr
+  
+  -- Alanine
+  (G, C, U) → Ala
+  (G, C, C) → Ala
+  (G, C, A) → Ala
+  (G, C, G) → Ala
+  
+  -- Tyrosine
+  (U, A, U) → Tyr
+  (U, A, C) → Tyr
+  
+  -- Histidine
+  (C, A, U) → His
+  (C, A, C) → His
+  
+  -- Glutamine
+  (C, A, A) → Gln
+  (C, A, G) → Gln
+  
+  -- Asparagine
+  (A, A, U) → Asn
+  (A, A, C) → Asn
+  
+  -- Lysine
+  (A, A, A) → Lys
+  (A, A, G) → Lys
+  
+  -- Aspartate
+  (G, A, U) → Asp
+  (G, A, C) → Asp
+  
+  -- Glutamate
+  (G, A, A) → Glu
+  (G, A, G) → Glu
+  
+  -- Cysteine
+  (U, G, U) → Cys
+  (U, G, C) → Cys
+  
+  -- Tryptophan
+  (U, G, G) → Trp
+  
+  -- Arginine
+  (C, G, U) → Arg
+  (C, G, C) → Arg
+  (C, G, A) → Arg
+  (C, G, G) → Arg
+  (A, G, A) → Arg
+  (A, G, G) → Arg
+  
+  -- Glycine
+  (G, G, U) → Gly
+  (G, G, C) → Gly
+  (G, G, A) → Gly
+  (G, G, G) → Gly
+
+-- ============================================================================
+-- PART III: PROTEINS AS PROGRAMS
+-- ============================================================================
+
+-- Protein: Sequence of amino acids with 3D structure
+type Protein = {
+  sequence  : List AminoAcid,
+  structure : ProteinStructure
+}
+
+-- Protein structure hierarchy
+type ProteinStructure = {
+  primary   : List AminoAcid,              -- Linear sequence
+  secondary : List SecondaryStructure,     -- Local folding
+  tertiary  : SpatialConfiguration,        -- 3D shape
+  quaternary : Option (List ProteinUnit)   -- Multi-subunit complexes
+}
+
+type SecondaryStructure =
+  | AlphaHelix { start : Nat, end : Nat, residues : List AminoAcid }
+  | BetaSheet  { strands : List BetaStrand, parallel : Bool }
+  | Loop       { start : Nat, end : Nat }
+  | Turn       { position : Nat }
+
+type BetaStrand = { start : Nat, end : Nat, direction : Direction }
+type Direction = Parallel | Antiparallel
+
+-- 3D coordinates for atoms
+type Vec3 = (Float, Float, Float)
+type SpatialConfiguration = List (AminoAcid, Vec3)
+
+-- Translation: RNA → Protein
+translate : RNA n → Protein
+translate rna = {
+  sequence  = translateCodons (toTriplets rna),
+  structure = fold rna.sequence  -- Folding is the hard part!
+}
+
+-- Ribosome: The translation machine as a state machine
+type RibosomeState = {
+  mrna     : RNA n,
+  position : Nat,           -- Current codon position
+  tRNA     : Option AminoAcid,
+  chain    : List AminoAcid,
+  state    : RibosomePhase
+}
+
+type RibosomePhase = Initiation | Elongation | Termination
+
+step : RibosomeState → RibosomeState
+step r = case r.state of
+  Initiation →
+    -- Find start codon (AUG)
+    let pos = findStart r.mrna
+    { r | position = pos, state = Elongation }
+  
+  Elongation →
+    let codon = getCodon r.mrna r.position
+    let aa = codonTable codon
+    case aa of
+      Stop → { r | state = Termination }
+      _    → { r | 
+        position = r.position + 3,
+        chain = r.chain ++ [aa]
+      }
+  
+  Termination → r  -- Done!
+
+-- ============================================================================
+-- PART IV: ENZYME CATALYSIS
+-- ============================================================================
+
+-- Enzymes: Proteins that catalyze reactions
+type Enzyme (S : Type) (P : Type) = {
+  protein     : Protein,
+  activesite  : ActiveSite S,
+  catalyze    : S → P,
+  kcat        : Float,          -- Turnover number
+  km          : Float           -- Michaelis constant
+}
+
+type ActiveSite s = {
+  residues    : List (Nat, AminoAcid),  -- Position, residue
+  binds       : s → Bool,
+  orientation : s → SpatialConfiguration
+}
+
+-- Michaelis-Menten kinetics
+type MichaelisMenten = {
+  vmax : Float,        -- Maximum velocity
+  km   : Float,        -- Michaelis constant
+  velocity : Float → Float  -- v = Vmax * [S] / (Km + [S])
+}
+
+michaelisVelocity : Float → Float → Float → Float
+michaelisVelocity vmax km substrate = vmax * substrate / (km + substrate)
+
+-- Allosteric regulation
+type AllostericEnzyme s p r = {
+  enzyme     : Enzyme s p,
+  regulatory : List (RegulatorySite r),
+  modulate   : r → Enzyme s p → Enzyme s p
+}
+
+type RegulatorySite r = {
+  binds      : r → Bool,
+  effect     : ActivatorEffect | InhibitorEffect,
+  kd         : Float  -- Dissociation constant
+}
+
+type ActivatorEffect = { kcat_fold : Float, km_fold : Float }
+type InhibitorEffect = { kcat_fold : Float, km_fold : Float }
+
+-- ============================================================================
+-- PART V: CELLS AS ACTORS
+-- ============================================================================
+
+-- Cell: The fundamental unit of life as a concurrent actor
+type Cell = Actor {
+  -- Genome
+  genome : DNA n,
+  
+  -- Transcriptome
+  mrnas : Map Gene (RNA m),
+  
+  -- Proteome
+  proteins : Map Gene Protein,
+  
+  -- Metabolome
+  metabolites : Map Molecule Concentration,
+  
+  -- Organelles
+  organelles : List Organelle,
+  
+  -- Membrane
+  membrane : Membrane,
+  
+  -- Messages
+  receive : Signal → CellResponse
+}
+
+type Gene = String
+type Molecule = String
+type Concentration = Float
+
+type Organelle =
+  | Nucleus { genome : DNA n, nucleolus : Bool }
+  | Mitochondrion { mtDNA : DNA m, atpSynthase : Protein }
+  | Ribosome { large : RibosomalSubunit, small : RibosomalSubunit }
+  | ER { rough : Bool, proteins : List Protein }
+  | Golgi { cisternae : List Compartment }
+  | Lysosome { enzymes : List Enzyme a b, pH : Float }
+  | Chloroplast { cpDNA : DNA c, thylakoids : List Membrane }  -- Plants only
+
+-- Cell signaling
+type Signal =
+  | Hormone { molecule : Molecule, concentration : Float }
+  | GrowthFactor { type_ : GrowthFactorType, source : CellType }
+  | Neurotransmitter { type_ : NeurotransmitterType, vesicle : VesicleId }
+  | CellContact { adhesion : AdhesionMolecule, neighbor : CellId }
+  | Mechanical { stress : Vec3, strain : Float }
+
+type CellResponse =
+  | Express { genes : List Gene }
+  | Suppress { genes : List Gene }
+  | Divide { symmetric : Bool }
+  | Differentiate { into : CellType }
+  | Migrate { direction : Vec3, speed : Float }
+  | Apoptose  -- Programmed cell death
+  | DoNothing
+
+-- Signal transduction pathway
+type SignalPathway = {
+  receptor : Receptor,
+  cascade  : List SignalingMolecule,
+  target   : TranscriptionFactor
+}
+
+transduce : Signal → Cell → CellResponse
+transduce signal cell = 
+  let pathway = findPathway signal cell.membrane.receptors
+  let amplified = foldl activate pathway.cascade signal
+  respondTo amplified cell
+
+-- ============================================================================
+-- PART VI: GENETICS AND EVOLUTION
+-- ============================================================================
+
+-- Genome: Complete genetic information
+type Genome = {
+  chromosomes : List Chromosome,
+  ploidy      : Nat,  -- 1 = haploid, 2 = diploid
+  size        : Nat   -- Base pairs
+}
+
+type Chromosome = {
+  dna         : DNA n,
+  genes       : List GeneAnnotation,
+  centromere  : Nat,  -- Position
+  telomeres   : (Nat, Nat)
+}
+
+type GeneAnnotation = {
+  name   : String,
+  start  : Nat,
+  end    : Nat,
+  strand : Sense | Antisense,
+  exons  : List (Nat, Nat),
+  introns: List (Nat, Nat)
+}
+
+-- Mutations
+type Mutation =
+  | Substitution { position : Nat, from : Nucleotide, to : Nucleotide }
+  | Insertion { position : Nat, sequence : List Nucleotide }
+  | Deletion { start : Nat, end : Nat }
+  | Inversion { start : Nat, end : Nat }
+  | Duplication { start : Nat, end : Nat, copies : Nat }
+  | Translocation { from : ChromosomeId, to : ChromosomeId, region : (Nat, Nat) }
+
+mutate : Mutation → DNA n → DNA m  -- Note: length may change!
+mutate mutation dna = case mutation of
+  Substitution { position, from, to } →
+    dna.sense[position] := to  -- Must satisfy complement constraint
+  Insertion { position, sequence } →
+    splice dna position sequence
+  Deletion { start, end } →
+    remove dna start end
+  -- ... other mutations
+
+-- Natural selection
+type Fitness = Float  -- 0.0 to 1.0
+
+fitness : Genome → Environment → Fitness
+fitness genome env = 
+  let phenotype = express genome env
+  survivalProbability phenotype env * reproductiveSuccess phenotype
+
+-- Evolution as iterated selection
+evolve : Population → Environment → Nat → Population
+evolve pop env 0 = pop
+evolve pop env n =
+  let selected = select pop env
+  let offspring = reproduce selected
+  let mutated = map mutateRandom offspring
+  evolve mutated env (n - 1)
+
+-- Population genetics
+type Population = {
+  individuals : List Genome,
+  alleleFreqs : Map Locus (Map Allele Float)
+}
+
+type Locus = { chromosome : Nat, position : Nat }
+type Allele = DNA n
+
+-- Hardy-Weinberg equilibrium
+hardyWeinberg : Float → (Float, Float, Float)
+hardyWeinberg p = 
+  let q = 1 - p
+  (p * p, 2 * p * q, q * q)  -- AA, Aa, aa frequencies
+
+-- ============================================================================
+-- PART VII: DEVELOPMENTAL BIOLOGY
+-- ============================================================================
+
+-- Development: From zygote to organism
+type Development = Cofree[DevelopmentF, OrganismState]
+
+type DevelopmentF a = {
+  cell      : Cell,
+  divisions : List a,
+  fate      : CellFate
+}
+
+type CellFate =
+  | StemCell { potency : Potency }
+  | Progenitor { lineage : Lineage }
+  | Differentiated { type_ : CellType }
+  | Quiescent
+  | Senescent
+
+type Potency = Totipotent | Pluripotent | Multipotent | Oligopotent | Unipotent
+
+-- Morphogen gradients determine cell fate
+type Morphogen = { molecule : Molecule, source : Position, decay : Float }
+
+gradient : Morphogen → Position → Concentration
+gradient m pos = m.source.concentration * exp (-m.decay * distance m.source.pos pos)
+
+-- Positional information (French flag model)
+positionToFate : List (Morphogen, Float) → Position → CellFate
+positionToFate thresholds pos =
+  let concentrations = map (λ (m, _) → gradient m pos) thresholds
+  determineFate concentrations thresholds
+
+-- Gene regulatory networks
+type GRN = Graph Gene (Activation | Repression)
+
+type Activation = { strength : Float, cooperativity : Nat }
+type Repression = { strength : Float, mechanism : RepressionType }
+
+-- Boolean network dynamics
+booleanStep : GRN → Map Gene Bool → Map Gene Bool
+booleanStep grn state =
+  mapWithKey (λ gene _ → 
+    let activators = getActivators grn gene
+    let repressors = getRepressors grn gene
+    let activation = any (λ g → state[g]) activators
+    let repression = any (λ g → state[g]) repressors
+    activation && not repression
+  ) state
+
+-- ============================================================================
+-- PART VIII: ECOLOGY AND ECOSYSTEMS
+-- ============================================================================
+
+-- Ecosystem: Interacting organisms and environment
+type Ecosystem = {
+  populations : Map Species Population,
+  environment : Environment,
+  interactions: Graph Species Interaction
+}
+
+type Interaction =
+  | Predation { predator : Species, prey : Species, rate : Float }
+  | Competition { for : Resource, strength : Float }
+  | Mutualism { benefit1 : Float, benefit2 : Float }
+  | Parasitism { host : Species, damage : Float }
+  | Commensalism { beneficiary : Species }
+
+-- Lotka-Volterra predator-prey
+type LotkaVolterra = {
+  prey     : Float,      -- x
+  predator : Float,      -- y
+  alpha    : Float,      -- Prey growth rate
+  beta     : Float,      -- Predation rate
+  delta    : Float,      -- Predator efficiency
+  gamma    : Float       -- Predator death rate
+}
+
+lotkaVolterraStep : LotkaVolterra → Float → LotkaVolterra
+lotkaVolterraStep lv dt = {
+  prey = lv.prey + dt * (lv.alpha * lv.prey - lv.beta * lv.prey * lv.predator),
+  predator = lv.predator + dt * (lv.delta * lv.prey * lv.predator - lv.gamma * lv.predator),
+  alpha = lv.alpha, beta = lv.beta, delta = lv.delta, gamma = lv.gamma
+}
+
+-- Food web
+type FoodWeb = DAG Species TrophicRelation
+type TrophicRelation = { energy_transfer : Float, interaction : Predation }
+
+trophicLevel : FoodWeb → Species → Float
+trophicLevel web species =
+  let prey = getPrey web species
+  case prey of
+    [] → 1.0  -- Primary producer
+    _  → 1 + average (map (trophicLevel web) prey)
+
+-- ============================================================================
+-- PART IX: COMPILE TARGETS
+-- ============================================================================
+
+-- Biology simulations target multiple backends:
+
+compile[BioSimulator] : Biology → Simulation
+  -- Stochastic simulation (Gillespie algorithm)
+  -- Deterministic ODEs (mass action kinetics)
+  -- Agent-based models
+
+compile[ProteinFolder] : AminoAcid sequence → SpatialConfiguration
+  -- AlphaFold2 architecture
+  -- Rosetta force fields
+  -- Molecular dynamics
+
+compile[GenomeBrowser] : Genome → InteractiveVisualization
+  -- UCSC Genome Browser format
+  -- IGV format
+  -- Ensembl format
+
+compile[CRISPRDesigner] : Gene → GuideRNA
+  -- Optimal gRNA selection
+  -- Off-target analysis
+  -- PAM site identification
+
+compile[SynBio] : GeneticCircuit → DNA
+  -- BioBrick assembly
+  -- Golden Gate cloning
+  -- Gibson assembly
+
+-- ============================================================================
+-- EXAMPLE: Simple Gene Expression
+-- ============================================================================
+
+-- A complete example: lac operon
+lacOperon : GeneRegulatorSystem
+lacOperon = {
+  genes = [lacZ, lacY, lacA],
+  
+  promoter = {
+    sequence = "TTTACA...TATAAT",  -- -35 and -10 boxes
+    strength = 1.0
+  },
+  
+  operator = {
+    sequence = "AATTGTGAGCGGATAACAATT",
+    repressor = lacI
+  },
+  
+  regulation = λ lactose glucose →
+    let repressed = not lactose  -- LacI binds without lactose
+    let activated = not glucose   -- CAP-cAMP activates without glucose
+    if repressed then 0.0
+    else if activated then 1.0
+    else 0.2  -- Basal level
+}
+
+-- Simulate gene expression
+simulateLac : Float → Float → Float → List Float
+simulateLac lactose glucose time =
+  let expression = lacOperon.regulation lactose glucose
+  integrate (λ mrna → expression - 0.1 * mrna) 0 time
+
+-- ============================================================================
+-- THE BOTTOM LINE
+-- ============================================================================
+
+-- Life is computation:
+-- • DNA is source code
+-- • RNA is intermediate representation  
+-- • Proteins are executables
+-- • Cells are actors
+-- • Evolution is optimization
+-- • Development is compilation
+-- • Ecology is distributed systems
+
+-- Phi captures it all with types.
