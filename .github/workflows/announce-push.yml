@@ -1,0 +1,85 @@
+name: Announce Push
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Get commit info
+        id: commit
+        run: |
+          echo "message=$(git log -1 --pretty=%s)" >> $GITHUB_OUTPUT
+          echo "author=$(git log -1 --pretty=%an)" >> $GITHUB_OUTPUT
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          
+          # Get changed files summary
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | head -5 | tr '\n' ', ' | sed 's/,$//')
+          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
+
+      - name: Post to Twitter
+        if: ${{ vars.TWITTER_ENABLED == 'true' }}
+        uses: nearform-actions/github-action-notify-twitter@v1
+        with:
+          message: |
+            🔄 Push to ${{ github.repository }}
+            
+            ${{ steps.commit.outputs.message }}
+            
+            by ${{ steps.commit.outputs.author }}
+            
+            ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          twitter-app-key: ${{ secrets.TWITTER_API_KEY }}
+          twitter-app-secret: ${{ secrets.TWITTER_API_SECRET }}
+          twitter-access-token: ${{ secrets.TWITTER_ACCESS_TOKEN }}
+          twitter-access-token-secret: ${{ secrets.TWITTER_ACCESS_SECRET }}
+
+      - name: Post to Mastodon
+        if: ${{ vars.MASTODON_ENABLED == 'true' }}
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.MASTODON_TOKEN }}" \
+            -F "status=🔄 Push to ${{ github.repository }}
+
+          ${{ steps.commit.outputs.message }}
+
+          by ${{ steps.commit.outputs.author }}
+
+          ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}" \
+            "${{ vars.MASTODON_INSTANCE }}/api/v1/statuses"
+
+      - name: Post to Bluesky
+        if: ${{ vars.BLUESKY_ENABLED == 'true' }}
+        run: |
+          # Get session
+          SESSION=$(curl -s -X POST "https://bsky.social/xrpc/com.atproto.server.createSession" \
+            -H "Content-Type: application/json" \
+            -d "{\"identifier\": \"${{ secrets.BLUESKY_HANDLE }}\", \"password\": \"${{ secrets.BLUESKY_APP_PASSWORD }}\"}")
+          
+          ACCESS_TOKEN=$(echo $SESSION | jq -r '.accessJwt')
+          DID=$(echo $SESSION | jq -r '.did')
+          
+          # Create post
+          curl -s -X POST "https://bsky.social/xrpc/com.atproto.repo.createRecord" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"repo\": \"$DID\",
+              \"collection\": \"app.bsky.feed.post\",
+              \"record\": {
+                \"text\": \"🔄 Push to ${{ github.repository }}\n\n${{ steps.commit.outputs.message }}\n\nby ${{ steps.commit.outputs.author }}\n\n${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}\",
+                \"createdAt\": \"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\"
+              }
+            }"
+
+      - name: Notify phi-autonomous
+        run: |
+          echo "📢 Push announced: ${{ steps.commit.outputs.message }}"
+          echo "Changed files: ${{ steps.commit.outputs.changed }}"
