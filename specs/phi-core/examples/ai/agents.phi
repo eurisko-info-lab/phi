@@ -1,0 +1,506 @@
+-- AI Agents: A Unified Type Theory
+-- 
+-- All 8 types of LLMs used in AI agents, unified under Cofree comonads.
+-- GPT, MoE, LRM, VLM, SLM, LAM, HLM, LCM - all are the same structure.
+--
+-- The insight: Every AI agent is Cofree[F, A] where:
+--   - A is the "annotation" (embeddings, activations, concepts)
+--   - F is the "shape" (attention, routing, hierarchy)
+--
+-- Grammar = Implementation. This spec compiles to CUDA, ONNX, Metal.
+
+module Phi.AI.Agents where
+
+-- =============================================================================
+-- FOUNDATIONAL TYPES
+-- =============================================================================
+
+-- Tensors with compile-time shape checking
+Tensor : (shape : List Nat) → Type → Type
+Tensor [] a = a
+Tensor (n :: ns) a = Vec n (Tensor ns a)
+
+-- The universal embedding space
+Embedding : Nat → Type
+Embedding d = Tensor [d] Float
+
+-- Attention: the fundamental operation
+Attention : (d_model : Nat) → (n_heads : Nat) → Type
+Attention d_model n_heads = {
+  query  : Tensor [n_heads, d_model / n_heads] Float,
+  key    : Tensor [n_heads, d_model / n_heads] Float,
+  value  : Tensor [n_heads, d_model / n_heads] Float,
+  output : Tensor [d_model] Float
+}
+
+-- Softmax-scaled dot product attention
+attention : ∀ d n. Attention d n → Tensor [d] Float
+attention {query, key, value} = 
+  let scores = softmax (query · transpose key / sqrt d_k)
+  in scores · value
+
+-- =============================================================================
+-- THE UNIVERSAL AGENT: Cofree[F, Embedding]
+-- =============================================================================
+
+-- Every AI agent is a Cofree comonad over some functor F
+-- The "head" is the current embedding/concept
+-- The "tail" is how to get more structure
+
+Agent : (F : Type → Type) → (d : Nat) → Type
+Agent F d = Cofree F (Embedding d)
+
+-- Extract current representation
+extract : ∀ F d. Agent F d → Embedding d
+extract (Cofree a _) = a
+
+-- Extend computation across structure
+extend : ∀ F d e. (Agent F d → Embedding e) → Agent F d → Agent F e
+extend f agent@(Cofree _ tail) = 
+  Cofree (f agent) (fmap (extend f) tail)
+
+-- =============================================================================
+-- 1. GPT: Generative Pretrained Transformer
+-- =============================================================================
+
+-- GPT's functor: sequential autoregressive structure
+GPTLayer : Type → Type
+GPTLayer a = {
+  attention : a,           -- Self-attention output
+  ffn       : a,           -- Feed-forward output  
+  next      : Maybe a      -- Next token (autoregressive)
+}
+
+GPT : Nat → Nat → Type
+GPT d_model n_layers = Agent GPTLayer d_model
+
+-- GPT forward pass
+gpt_forward : ∀ d n. Tensor [seq_len, d] Float → GPT d n → Tensor [d] Float
+gpt_forward input model = 
+  let embedded = input + positional_encoding
+      processed = fold_layers model.layers embedded
+  in extract (last processed)
+
+-- Causal mask ensures autoregressive property
+causal_mask : (seq_len : Nat) → Tensor [seq_len, seq_len] Float
+causal_mask n = generate (λ i j. if i >= j then 0.0 else -∞)
+
+-- =============================================================================
+-- 2. MoE: Mixture of Experts
+-- =============================================================================
+
+-- MoE's functor: routing to specialized experts
+MoELayer : (n_experts : Nat) → Type → Type
+MoELayer n a = {
+  router   : Tensor [n] Float,     -- Gating weights
+  experts  : Vec n a,              -- Expert outputs
+  selected : Vec top_k Nat         -- Active expert indices
+}
+
+MoE : Nat → Nat → Nat → Type
+MoE d_model n_experts n_layers = Agent (MoELayer n_experts) d_model
+
+-- Sparse routing: only top-k experts activate
+route : ∀ n k. Tensor [n] Float → Vec k (Nat × Float)
+route logits = 
+  let probs = softmax logits
+      top_k = take k (sortBy snd (indexed probs))
+  in normalize top_k
+
+-- MoE forward: weighted sum of expert outputs  
+moe_forward : ∀ d n k. Embedding d → MoE d n k → Embedding d
+moe_forward input model =
+  let weights = route model.router
+      outputs = map (λ (i, w). w * model.experts[i] input) weights
+  in sum outputs
+
+-- Load balancing loss prevents expert collapse
+load_balance_loss : ∀ n. Vec n Float → Float
+load_balance_loss usage = 
+  let target = 1.0 / n
+      deviation = map (λ u. (u - target)²) usage
+  in sum deviation
+
+-- =============================================================================
+-- 3. LRM: Large Reasoning Model (with RAG)
+-- =============================================================================
+
+-- LRM's functor: chain-of-thought with retrieval
+LRMStep : Type → Type
+LRMStep a = {
+  thought    : a,                    -- Current reasoning step
+  retrieved  : List a,               -- Retrieved context
+  next_step  : Maybe a,              -- Continue reasoning?
+  confidence : Float                 -- Step confidence
+}
+
+LRM : Nat → Type  
+LRM d_model = Agent LRMStep d_model
+
+-- Reasoning as iterated refinement
+reason : ∀ d. Query d → LRM d → List (Embedding d)
+reason query model = unfold step (init query model)
+  where
+    step state = 
+      if state.confidence > threshold 
+      then (state.thought, Nothing)
+      else (state.thought, Just (refine state))
+
+-- RAG: Retrieve-Augment-Generate
+rag : ∀ d. VectorDB d → Query d → LRM d → Response d
+rag db query model =
+  let retrieved = db.search query top_k
+      augmented = concat [query, retrieved]
+      response  = reason augmented model
+  in last response
+
+-- Chain-of-thought decomposition
+chain_of_thought : ∀ d. Problem d → LRM d → Solution d
+chain_of_thought problem model =
+  let steps = unfold decompose problem
+      solutions = map (solve model) steps
+  in compose solutions
+
+-- =============================================================================
+-- 4. VLM: Vision-Language Model
+-- =============================================================================
+
+-- VLM's functor: multimodal fusion
+VLMLayer : Type → Type
+VLMLayer a = {
+  vision    : a,           -- Image patch embeddings (ViT)
+  language  : a,           -- Text token embeddings
+  fused     : a,           -- Cross-modal attention output
+  modality  : Modality     -- Current modality focus
+}
+
+Modality = Vision | Language | Fused
+
+VLM : Nat → Type
+VLM d_model = Agent VLMLayer d_model
+
+-- Vision Transformer: patches → embeddings
+vit : ∀ h w p d. Image h w → Tensor [h*w/p², d] Float
+vit image = 
+  let patches = split_patches image patch_size
+      embedded = map patch_embed patches
+  in transformer embedded
+
+-- Cross-modal attention
+cross_attention : ∀ d. Embedding d → Embedding d → Embedding d
+cross_attention vision language =
+  attention {
+    query = project_q language,
+    key   = project_k vision,
+    value = project_v vision
+  }
+
+-- VLM forward: staged processing (from image)
+vlm_forward : ∀ d. Image h w → Text → VLM d → Response
+vlm_forward image text model =
+  -- Stage 1: Vision preprocessing (ViT)
+  let vision_emb = vit image
+  -- Stage 2: Language processing  
+      text_emb = embed_text text
+  -- Stage 3: Multimodal fusion
+      fused = cross_attention vision_emb text_emb
+  in generate model fused
+
+-- =============================================================================
+-- 5. SLM: Small Language Model
+-- =============================================================================
+
+-- SLM's functor: efficient compact structure
+SLMLayer : Type → Type  
+SLMLayer a = {
+  grouped_query : a,       -- GQA: fewer KV heads
+  swiglu_ffn    : a,       -- Efficient activation
+  rope_pos      : a        -- Rotary position encoding
+}
+
+SLM : Nat → Nat → Type
+SLM d_model n_layers = Agent SLMLayer d_model
+
+-- Grouped Query Attention: share KV heads
+grouped_query_attention : ∀ d n_q n_kv. 
+  (n_kv divides n_q) → 
+  Tensor [n_q, d/n_q] Float → 
+  Tensor [n_kv, d/n_kv] Float → 
+  Tensor [d] Float
+grouped_query_attention query key value =
+  let groups = n_q / n_kv
+      expanded_kv = repeat groups (key, value)
+  in multi_head_attention query expanded_kv
+
+-- SwiGLU: Swish-Gated Linear Unit
+swiglu : ∀ d. Embedding d → Embedding d
+swiglu x = 
+  let gate = swish (W_gate · x)
+      up   = W_up · x
+  in W_down · (gate ⊙ up)
+
+-- RoPE: Rotary Position Embedding
+rope : ∀ d. Nat → Embedding d → Embedding d
+rope pos emb = 
+  let θ = generate (λ i. pos / 10000^(2i/d))
+  in emb ⊙ cos θ + rotate emb ⊙ sin θ
+
+-- =============================================================================
+-- 6. LAM: Large Action Model
+-- =============================================================================
+
+-- LAM's functor: action-oriented with environment
+LAMStep : Type → Type
+LAMStep a = {
+  observation : a,         -- Current state embedding
+  action      : Action,    -- Chosen action
+  reward      : Float,     -- Immediate reward
+  next_state  : Maybe a    -- Resulting state
+}
+
+Action = 
+  | Click : Point → Action
+  | Type  : String → Action
+  | Scroll : Direction → Action
+  | Navigate : URL → Action
+  | APICall : Endpoint → Params → Action
+
+LAM : Nat → Type
+LAM d_model = Agent LAMStep d_model
+
+-- Policy: state → action distribution
+policy : ∀ d. Embedding d → LAM d → Distribution Action
+policy state model =
+  let logits = model.action_head state
+  in categorical (softmax logits)
+
+-- Environment interaction loop
+act : ∀ d. Environment → LAM d → IO Result
+act env model = loop
+  where
+    loop = do
+      obs ← env.observe
+      let action = sample (policy (embed obs) model)
+      reward ← env.step action
+      if env.done 
+        then return (Success reward)
+        else loop
+
+-- ReAct: Reasoning + Acting
+react : ∀ d. Task → LAM d → LRM d → IO Result
+react task action_model reasoning_model = do
+  thought ← reason task reasoning_model
+  action  ← policy thought action_model
+  result  ← execute action
+  if complete result
+    then return result
+    else react (update task result) action_model reasoning_model
+
+-- =============================================================================
+-- 7. HLM: Hierarchical Language Model
+-- =============================================================================
+
+-- HLM's functor: two-level hierarchy
+HLMLayer : Type → Type
+HLMLayer a = {
+  upper : a,               -- High-level planner
+  lower : a,               -- Low-level executor
+  plan  : List a           -- Decomposed subtasks
+}
+
+HLM : Nat → Nat → Type
+HLM d_upper d_lower = {
+  upper_model : Agent HLMLayer d_upper,
+  lower_model : Agent HLMLayer d_lower,
+  interface   : Embedding d_upper → List (Embedding d_lower)
+}
+
+-- Hierarchical planning
+plan : ∀ du dl. Task → HLM du dl → List Subtask
+plan task model =
+  let high_level = model.upper_model.forward task
+      subtasks   = model.interface high_level
+  in subtasks
+
+-- Execute with lower model
+execute_plan : ∀ du dl. HLM du dl → List Subtask → Response
+execute_plan model subtasks =
+  let responses = map model.lower_model.forward subtasks
+  in aggregate responses
+
+-- Matryoshka: nested representations at multiple scales
+matryoshka : ∀ d. List Nat → Embedding d → List (Embedding _)
+matryoshka scales emb = map (λ s. truncate s emb) scales
+
+-- =============================================================================
+-- 8. LCM: Large Concept Model
+-- =============================================================================
+
+-- LCM's functor: concept-level abstraction
+LCMLayer : Type → Type
+LCMLayer a = {
+  concept   : a,           -- Abstract concept embedding
+  instances : List a,      -- Concrete instances
+  relations : Graph a      -- Concept relationships
+}
+
+Concept : Nat → Type
+Concept d = {
+  embedding : Embedding d,
+  name      : String,
+  children  : List (Concept d),
+  parents   : List (Concept d)
+}
+
+LCM : Nat → Type
+LCM d_model = Agent LCMLayer d_model
+
+-- Concept abstraction: instances → concept
+abstract : ∀ d. List (Embedding d) → LCM d → Concept d
+abstract instances model =
+  let pooled = mean instances
+      refined = model.concept_head pooled
+  in Concept refined
+
+-- Concept instantiation: concept → instances
+instantiate : ∀ d. Concept d → LCM d → List (Embedding d)
+instantiate concept model =
+  model.decoder concept.embedding
+
+-- Analogical reasoning: A:B :: C:?
+analogy : ∀ d. Concept d → Concept d → Concept d → LCM d → Concept d
+analogy a b c model =
+  let relation = b.embedding - a.embedding
+      result   = c.embedding + relation
+  in nearest_concept model result
+
+-- =============================================================================
+-- THE GRAND UNIFICATION: All Agents are Cofree
+-- =============================================================================
+
+-- Every agent type is just Cofree with a different functor!
+-- This means we can transform between them:
+
+-- Transformer that converts any agent to any other
+AgentTransform : (F G : Type → Type) → (d e : Nat) → Type
+AgentTransform F G d e = Agent F d → Agent G e
+
+-- GPT → MoE: Add expert routing
+gpt_to_moe : ∀ d n. GPT d n → MoE d 8 n
+gpt_to_moe gpt = extend add_routing gpt
+  where add_routing layer = replicate 8 layer  -- Simple: all experts same
+
+-- MoE → LRM: Add reasoning steps
+moe_to_lrm : ∀ d n. MoE d n _ → LRM d
+moe_to_lrm moe = extend add_reasoning moe
+  where add_reasoning state = { thought = state, retrieved = [], confidence = 0.5 }
+
+-- Any → VLM: Add vision encoder
+add_vision : ∀ F d. Agent F d → VLM d
+add_vision agent = extend fuse_modalities agent
+  where fuse_modalities a = { vision = zero, language = extract a, fused = extract a }
+
+-- The universal agent combinator
+UniversalAgent : Nat → Type
+UniversalAgent d = ∀ F. Functor F ⇒ Agent F d
+
+-- =============================================================================
+-- COMPOSITION: Building Complex Agents
+-- =============================================================================
+
+-- Sequential composition: run agents in sequence
+(>>>) : ∀ F G d. Agent F d → Agent G d → Agent (F ∘ G) d
+(>>>) a1 a2 = Cofree (extract a1) (fmap (>>> a2) (unwrap a1))
+
+-- Parallel composition: run agents in parallel, merge results
+(|||) : ∀ F G d. Agent F d → Agent G d → Agent (F × G) d
+(|||) a1 a2 = Cofree (merge (extract a1) (extract a2)) (unwrap a1, unwrap a2)
+
+-- Conditional composition: choose agent based on input
+branch : ∀ F G d. (Embedding d → Bool) → Agent F d → Agent G d → Agent (F + G) d
+branch pred a1 a2 input = 
+  if pred input then Left (a1 input) else Right (a2 input)
+
+-- Example: VLM with reasoning (combines LRM + VLM)
+VisionReasoner : Nat → Type
+VisionReasoner d = VLM d ||| LRM d
+
+-- Example: Hierarchical MoE (combines HLM + MoE)  
+HierarchicalMoE : Nat → Nat → Type
+HierarchicalMoE d n = HLM d d >>> MoE d n _
+
+-- =============================================================================
+-- COMPILATION TARGETS
+-- =============================================================================
+
+-- All agents compile to the same targets:
+
+-- → CUDA: Parallel tensor operations
+compile_cuda : ∀ F d. Agent F d → CUDA.Kernel
+compile_cuda agent = cuda_codegen (trace agent)
+
+-- → ONNX: Portable inference
+compile_onnx : ∀ F d. Agent F d → ONNX.Model  
+compile_onnx agent = onnx_export (trace agent)
+
+-- → Metal: Apple GPU
+compile_metal : ∀ F d. Agent F d → Metal.Shader
+compile_metal agent = metal_codegen (trace agent)
+
+-- → WebGPU: Browser inference
+compile_webgpu : ∀ F d. Agent F d → WGSL.Shader
+compile_webgpu agent = wgsl_codegen (trace agent)
+
+-- =============================================================================
+-- EXAMPLES
+-- =============================================================================
+
+-- A complete vision-language reasoner with actions
+CompleteAgent : Type
+CompleteAgent = VLM 768 ||| LRM 768 ||| LAM 768
+
+-- Usage:
+example_agent : CompleteAgent
+example_agent = {
+  vision   = load_model "vit-base",
+  reasoner = load_model "reasoning-7b", 
+  actor    = load_model "action-model"
+}
+
+-- Process a task
+process : Image → Text → CompleteAgent → IO Response
+process image query agent = do
+  -- Vision understanding
+  let visual = vlm_forward image query agent.vision
+  -- Reasoning about what to do
+  let plan = reason (concat [visual, embed query]) agent.reasoner
+  -- Take action if needed
+  if needs_action plan
+    then act env agent.actor
+    else return (generate_response plan)
+
+-- =============================================================================
+-- THE INSIGHT
+-- =============================================================================
+
+-- All 8 LLM types share the same structure:
+--
+--   GPT  = Cofree (Sequential)    Embedding  -- Autoregressive
+--   MoE  = Cofree (Routing n)     Embedding  -- Expert selection
+--   LRM  = Cofree (Reasoning)     Embedding  -- Chain-of-thought
+--   VLM  = Cofree (Multimodal)    Embedding  -- Vision + Language
+--   SLM  = Cofree (Efficient)     Embedding  -- Compressed
+--   LAM  = Cofree (Action)        Embedding  -- Environment interaction
+--   HLM  = Cofree (Hierarchical)  Embedding  -- Multi-scale
+--   LCM  = Cofree (Conceptual)    Embedding  -- Abstract reasoning
+--
+-- The Cofree comonad provides:
+--   - extract: Get current representation
+--   - extend:  Propagate computation
+--   - fmap:    Transform structure
+--
+-- This is why Phi can unify all AI architectures:
+-- They're all the same mathematical object with different functors.
+--
+-- Grammar = Implementation.
+-- One spec, all agents, all platforms.
