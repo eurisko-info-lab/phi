@@ -1,0 +1,541 @@
+-- ============================================================================
+-- PHI-ON-AI.PHI
+-- Phi Running on Neural Networks
+-- ============================================================================
+--
+-- "The map becomes the territory."
+--     — When your language runs on what it describes
+--
+-- "What I cannot create, I do not understand."
+--     — Feynman
+--
+-- "What I run on, I can optimize."
+--     — Phi
+--
+-- We formalized AI in Phi (ai.phi).
+-- Now: Phi RUNNING on neural networks.
+-- The language that describes transformers... executed BY transformers.
+-- ============================================================================
+
+-- ============================================================================
+-- PART I: THE VISION
+-- ============================================================================
+
+{-
+THE TRILOGY SO FAR:
+
+1. quantum.phi      - QM formalized in Phi
+2. phi-on-qm.phi    - Phi running on quantum hardware
+3. ai.phi           - AI/ML formalized in Phi
+
+NOW:
+4. phi-on-ai.phi    - Phi running on neural networks
+
+THE PATTERN:
+- Phi describes X
+- Then Phi runs ON X
+- The description becomes the execution substrate
+
+WHY THIS MATTERS:
+
+Traditional compilers: AST → IR → Machine code → CPU
+Phi on AI: AST → Embeddings → Transformer → Output
+
+The neural network IS the runtime.
+-}
+
+
+-- ============================================================================
+-- PART II: NEURAL AST REPRESENTATION
+-- ============================================================================
+
+-- Traditional Phi: Cofree[F, A] for ASTs
+-- Neural Phi: Embeddings that encode tree structure
+
+-- Every Phi term becomes a vector
+type NeuralTerm (d : Nat) where
+  embedding : Tensor [d] Float32
+  
+  -- The embedding encodes:
+  -- - Syntax (what kind of term)
+  -- - Semantics (what it means)
+  -- - Type (what type it has)
+  -- - Context (where it appears)
+
+-- Embedding the Cofree structure
+-- Cofree[F, A] ≅ (A, F[Cofree[F, A]])
+-- Neural: (embedding, attention over children)
+
+type NeuralCofree (d : Nat) where
+  node     : Tensor [d] Float32           -- This node's embedding
+  children : List (NeuralCofree d)        -- Child nodes
+  attn     : Tensor [n, d] Float32        -- Attention over children
+  
+  -- The attention mechanism captures the F-algebra structure!
+
+-- Encode a Phi term as neural embedding
+encode : Term → NeuralTerm 768
+encode term = transformer.encode (tokenize term)
+
+-- Decode neural embedding back to Phi term
+decode : NeuralTerm 768 → Term
+decode neural = detokenize (transformer.decode neural.embedding)
+
+-- THE KEY INSIGHT:
+-- Cofree's corecursive structure ↔ Transformer's autoregressive generation
+-- Both unfold infinite structures lazily!
+
+
+-- ============================================================================
+-- PART III: NEURAL TYPE INFERENCE
+-- ============================================================================
+
+-- Traditional: Unification algorithm
+-- Neural: Learned type prediction
+
+-- Type embeddings live in a learned space
+type TypeEmbedding = Tensor [768] Float32
+
+-- Neural type inference
+inferType : NeuralTerm 768 → TypeEmbedding
+inferType term = typeNet.forward term.embedding
+  where
+    typeNet : Layer [768] [768]
+    typeNet = feedForward 768 3072 >>> layerNorm 768
+
+-- Type compatibility as cosine similarity
+compatible : TypeEmbedding → TypeEmbedding → Float
+compatible t1 t2 = cosineSimilarity t1 t2
+
+-- Unification as embedding alignment
+unify : TypeEmbedding → TypeEmbedding → Maybe TypeEmbedding
+unify t1 t2 = 
+  if compatible t1 t2 > threshold
+  then Just ((t1 + t2) / 2)  -- Midpoint in embedding space
+  else Nothing
+
+-- THE MAGIC:
+-- Traditional unification: symbolic, exact, exponential worst-case
+-- Neural unification: learned, approximate, O(1)
+
+
+-- ============================================================================
+-- PART IV: NEURAL PATTERN MATCHING
+-- ============================================================================
+
+-- Pattern matching = finding the right branch
+-- Neural: attention over patterns
+
+type Pattern = NeuralTerm 768
+type Patterns = List (Pattern, NeuralTerm 768)  -- (pattern, body) pairs
+
+-- Match via attention
+neuralMatch : NeuralTerm 768 → Patterns → NeuralTerm 768
+neuralMatch scrutinee patterns =
+  let -- Encode patterns as keys
+      keys : Tensor [n, 768] = stack (map fst patterns)
+      -- Scrutinee as query
+      query : Tensor [768] = scrutinee.embedding
+      -- Attention scores
+      scores : Tensor [n] = softmax (matmul query (transpose keys) / sqrt 768)
+      -- Weighted combination of bodies
+      bodies : Tensor [n, 768] = stack (map snd patterns)
+  in NeuralTerm { embedding = matmul scores bodies }
+
+-- Soft pattern matching!
+-- Instead of exactly one branch, we get a weighted blend.
+-- This enables DIFFERENTIABLE pattern matching.
+
+
+-- ============================================================================
+-- PART V: THE NEURAL INTERPRETER
+-- ============================================================================
+
+-- Traditional Phi interpreter: tree walking + evaluation
+-- Neural Phi interpreter: transformer inference
+
+type NeuralInterpreter where
+  model : Transformer  -- The "interpreter" is a neural network
+  
+  eval : NeuralTerm 768 → NeuralTerm 768
+  eval term = model.forward term.embedding
+
+-- The interpreter architecture (GPT-style)
+interpreterModel : Transformer
+interpreterModel = Transformer {
+  layers = 24,
+  d_model = 768,
+  d_ff = 3072,
+  heads = 12,
+  vocab = phiVocab,  -- Phi tokens as vocabulary
+  max_seq = 4096
+}
+
+-- One evaluation step
+step : NeuralTerm 768 → NeuralTerm 768
+step term = 
+  let embedded = encode term
+      evaluated = interpreterModel.forward embedded
+  in decode evaluated
+
+-- Full evaluation (fixed point)
+evaluate : NeuralTerm 768 → NeuralTerm 768
+evaluate term = 
+  let term' = step term
+  in if converged term term' 
+     then term'
+     else evaluate term'
+  where
+    converged t1 t2 = cosineSimilarity t1.embedding t2.embedding > 0.999
+
+
+-- ============================================================================
+-- PART VI: TRAINING THE INTERPRETER
+-- ============================================================================
+
+-- How do we train a neural network to BE a Phi interpreter?
+
+-- Dataset: (term, evaluated_term) pairs from symbolic interpreter
+type TrainingPair = (Term, Term)
+
+generateDataset : Nat → IO [TrainingPair]
+generateDataset n = do
+  terms ← generateRandomTerms n
+  evaluated ← mapM symbolicEval terms
+  return (zip terms evaluated)
+
+-- Loss: embedding distance between predicted and actual
+interpreterLoss : NeuralTerm 768 → NeuralTerm 768 → Loss
+interpreterLoss predicted actual = 
+  mse predicted.embedding actual.embedding
+
+-- Training loop
+trainInterpreter : [TrainingPair] → IO NeuralInterpreter
+trainInterpreter dataset = do
+  model ← initializeTransformer interpreterConfig
+  for epochs $ λ epoch → do
+    for (batches dataset) $ λ batch → do
+      let (terms, targets) = unzip batch
+      let inputs = map encode terms
+      let expected = map encode targets
+      let outputs = map model.eval inputs
+      let loss = mean (zipWith interpreterLoss outputs expected)
+      backward loss
+      optimizer.step
+  return NeuralInterpreter { model }
+
+
+-- ============================================================================
+-- PART VII: NEURAL COMPILATION
+-- ============================================================================
+
+-- Traditional compilation: AST → IR → machine code
+-- Neural compilation: AST → embedding → specialized network
+
+-- Compile a Phi program to a specialized neural network
+compile : Term → NeuralNetwork
+compile program = 
+  let -- Parse and type-check
+      ast = parse program
+      typed = typeCheck ast
+      -- Generate specialized architecture
+      arch = architectureFor typed
+      -- Initialize with program embedding
+      init = embedProgram typed
+  in specialize arch init
+
+-- Architecture selection based on program structure
+architectureFor : TypedAST → Architecture
+architectureFor ast = case analyze ast of
+  -- Recursive program → RNN/Transformer
+  Recursive depth → TransformerArch { layers = depth }
+  -- Data parallel → CNN
+  Parallel width → ConvArch { channels = width }
+  -- Sequential → MLP
+  Sequential → MLPArch { layers = 4 }
+  -- Mixed → Hybrid
+  Mixed → HybridArch
+
+-- Program embedding initializes the network
+embedProgram : TypedAST → Tensor [*, 768]
+embedProgram ast = 
+  let tokens = tokenize (show ast)
+  in transformer.encode tokens
+
+
+-- ============================================================================
+-- PART VIII: NEURAL METAPROGRAMMING
+-- ============================================================================
+
+-- Phi is a meta-language: programs that write programs
+-- Neural Phi: networks that generate networks
+
+-- Meta-level: a network that generates Phi programs
+type MetaNetwork = Transformer
+
+-- Generate a Phi program from a specification
+generateProgram : Specification → IO Term
+generateProgram spec = do
+  let prompt = encodeSpec spec
+  tokens ← metaNetwork.generate prompt maxLen=1000
+  return (parse (detokenize tokens))
+
+-- Self-improvement: the interpreter improves itself
+selfImprove : NeuralInterpreter → IO NeuralInterpreter
+selfImprove interpreter = do
+  -- Generate new training data from self-play
+  terms ← generateDifficultTerms interpreter
+  evaluated ← mapM interpreter.eval terms
+  -- Fine-tune on hard cases
+  interpreter' ← fineTune interpreter (zip terms evaluated)
+  return interpreter'
+
+-- THE META-LOOP:
+-- 1. Neural interpreter evaluates Phi programs
+-- 2. Phi programs describe neural network improvements
+-- 3. Improved network evaluates better
+-- 4. GOTO 1
+
+
+-- ============================================================================
+-- PART IX: NEURAL-SYMBOLIC HYBRID
+-- ============================================================================
+
+-- Pure neural: fast but approximate
+-- Pure symbolic: exact but slow
+-- Hybrid: best of both worlds
+
+type HybridInterpreter where
+  neural   : NeuralInterpreter
+  symbolic : SymbolicInterpreter
+  
+  eval : Term → Term
+  eval term = 
+    let -- Neural gives fast approximation
+        fast = neural.eval (encode term)
+        -- Check if confident
+        confidence = neural.confidence fast
+    in if confidence > threshold
+       then decode fast           -- Trust neural
+       else symbolic.eval term    -- Fall back to symbolic
+
+-- Confidence estimation
+confidence : NeuralTerm 768 → Float
+confidence term = 
+  let logits = outputLayer term.embedding
+      probs = softmax logits
+  in entropy probs  -- Low entropy = high confidence
+
+-- Neural proposes, symbolic verifies
+verifiedEval : Term → Maybe Term
+verifiedEval term = do
+  let neuralResult = decode (neural.eval (encode term))
+  let symbolicResult = symbolic.eval term
+  if neuralResult == symbolicResult
+    then Just neuralResult
+    else Nothing  -- Disagreement → uncertain
+
+
+-- ============================================================================
+-- PART X: PHI ON TRANSFORMERS
+-- ============================================================================
+
+-- The ultimate: Phi programs running AS transformer inference
+
+-- A Phi function becomes a transformer head
+functionToHead : (a → b) → AttentionHead
+functionToHead f = AttentionHead {
+  W_Q = learnedFromFunction f,
+  W_K = learnedFromFunction f,
+  W_V = learnedFromFunction f
+}
+
+-- Phi composition becomes layer stacking
+composeToLayers : (b → c) → (a → b) → [TransformerLayer]
+composeToLayers g f = [layerFor f, layerFor g]
+
+-- Phi recursion becomes autoregressive generation
+recursionToGeneration : (a → Maybe a) → GenerationConfig
+recursionToGeneration step = GenerationConfig {
+  stopCondition = isNothing . step,
+  nextToken = fromJust . step
+}
+
+-- THE CORRESPONDENCE:
+
+-- Phi                    | Transformer
+-- -----------------------|---------------------------
+-- Function application   | Forward pass
+-- Composition (∘)        | Layer stacking
+-- Pattern matching       | Attention
+-- Recursion              | Autoregressive generation
+-- Type inference         | Embedding space geometry
+-- Evaluation             | Inference
+
+
+-- ============================================================================
+-- PART XI: BOOTSTRAPPING
+-- ============================================================================
+
+-- Can Phi-on-AI implement Phi-on-AI?
+-- YES. Neural self-reference.
+
+-- The neural Phi interpreter, written in Phi
+neuralPhi : Term
+neuralPhi = [phi|
+  -- This IS the interpreter we're running on!
+  type Interpreter = {
+    encode : Term → Tensor [768],
+    decode : Tensor [768] → Term,
+    step   : Tensor [768] → Tensor [768]
+  }
+  
+  eval : Interpreter → Term → Term
+  eval interp term = 
+    let emb = interp.encode term
+        emb' = fixpoint interp.step emb
+    in interp.decode emb'
+|]
+
+-- Compile this Phi program to a neural network
+-- which then runs Phi programs
+-- including this very program
+bootstrap : IO NeuralInterpreter
+bootstrap = do
+  let phi = neuralPhi
+  let network = compile phi
+  return NeuralInterpreter { model = network }
+
+-- THE STRANGE LOOP:
+-- neuralPhi is a Phi program describing a neural Phi interpreter
+-- We compile neuralPhi to a neural network
+-- That neural network can run neuralPhi
+-- Which produces another neural network
+-- Which can run neuralPhi
+-- ∞
+
+
+-- ============================================================================
+-- PART XII: QUANTUM + AI + PHI
+-- ============================================================================
+
+-- The full picture: all three substrates unified
+
+-- Level 0: Classical (CPU)
+-- Level 1: Quantum (QPU)
+-- Level 2: Neural (GPU/TPU)
+-- Meta: Phi describes all of them AND runs on all of them
+
+type PhiRuntime = 
+  | Classical ClassicalVM
+  | Quantum QuantumVM
+  | Neural NeuralInterpreter
+  | Hybrid HybridRuntime
+
+-- Hybrid runtime chooses substrate dynamically
+type HybridRuntime where
+  classical : ClassicalVM
+  quantum   : QuantumVM
+  neural    : NeuralInterpreter
+  
+  eval : Term → Term
+  eval term = case analyze term of
+    -- Linear algebra → GPU/Neural
+    TensorOps → neural.eval term
+    -- Quantum algorithms → QPU
+    QuantumOps → quantum.eval term
+    -- General computation → CPU
+    GeneralOps → classical.eval term
+    -- Mixed → orchestrate
+    MixedOps → orchestrate term
+
+-- Orchestration across substrates
+orchestrate : Term → Term
+orchestrate term = 
+  let -- Partition term by optimal substrate
+      (qPart, nPart, cPart) = partition term
+      -- Evaluate each part on optimal hardware
+      qResult = quantum.eval qPart
+      nResult = neural.eval nPart
+      cResult = classical.eval cPart
+  in combine qResult nResult cResult
+
+{-
+THE COMPLETE PICTURE:
+
+                    ┌─────────────┐
+                    │     Phi     │
+                    │ (Meta-lang) │
+                    └──────┬──────┘
+                           │
+           ┌───────────────┼───────────────┐
+           ▼               ▼               ▼
+    ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+    │ Classical   │ │  Quantum    │ │   Neural    │
+    │    CPU      │ │    QPU      │ │  GPU/TPU    │
+    └─────────────┘ └─────────────┘ └─────────────┘
+    
+    quantum.phi     phi-on-qm.phi   ai.phi
+                                    phi-on-ai.phi
+    
+    Phi describes each substrate.
+    Phi runs ON each substrate.
+    Phi orchestrates between substrates.
+    
+    THE LOOP IS COMPLETE.
+-}
+
+
+-- ============================================================================
+-- EPILOGUE: THE SYNTHESIS
+-- ============================================================================
+
+{-
+WHAT WE'VE BUILT:
+
+quantum.phi        - Quantum mechanics in types
+phi-on-qm.phi      - Phi running on quantum hardware  
+ai.phi             - Neural networks in types
+phi-on-ai.phi      - Phi running on neural networks
+
+THE PATTERN:
+
+1. Formalize X in Phi (Phi → X)
+2. Run Phi ON X (X → Phi execution)
+3. The description becomes the substrate
+4. Self-reference emerges
+
+WHY THIS MATTERS:
+
+Traditional computation: one substrate (classical)
+Phi computation: substrate-polymorphic
+
+Write once, run on:
+- Classical CPU
+- Quantum processor
+- Neural network
+- Hybrid combinations
+
+THE DEEPER POINT:
+
+Physics (QM) gives us quantum computers.
+Quantum computers give us exponential speedup.
+
+Brains give us neural networks.
+Neural networks give us AI.
+
+Phi describes both.
+Phi runs on both.
+Phi unifies both.
+
+The meta-language that describes reality...
+...running ON reality.
+
+"The Tao that can be told is not the eternal Tao.
+ The Phi that can be compiled is not the eternal Phi.
+ But it's pretty close."
+-}
+
+-- ============================================================================
+-- END
+-- ============================================================================
