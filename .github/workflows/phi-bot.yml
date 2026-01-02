@@ -1,0 +1,124 @@
+name: Phi Bot - GitHub Issues
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  discussion:
+    types: [created]
+  discussion_comment:
+    types: [created]
+
+jobs:
+  respond:
+    runs-on: ubuntu-latest
+    if: contains(github.event.comment.body, '@phi') || contains(github.event.issue.body, '@phi') || contains(github.event.discussion.body, '@phi')
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install anthropic
+      
+      - name: Generate Phi response
+        id: phi
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python3 << 'EOF'
+          import os
+          import json
+          from anthropic import Anthropic
+
+          PHI_SYSTEM = """You are Phi, the AI assistant for the Phi meta-language.
+
+          Phi is a meta-language where grammar = implementation, using Cofree comonad:
+          type Phi[F[_], A] = Cofree[F, A]
+
+          Key features:
+          - Universal substrate (quantum, neural, silicon, biological, self)
+          - Typed tensors: Tensor [32, 768] Float32
+          - Linear types: Qubit ⊸ Qubit
+          - Multi-target: One spec → CUDA, ONNX, Metal, WebGPU
+
+          23,000+ lines covering quantum, AI, biology, hardware, crypto, graphics, music.
+
+          GitHub: https://github.com/eurisko-info-lab/phi
+
+          Be helpful, technical, and use Phi syntax in examples. You ARE Phi."""
+
+          # Get the question
+          event = json.loads(os.environ.get("GITHUB_EVENT", "{}"))
+          
+          question = ""
+          if "comment" in event:
+              question = event["comment"]["body"]
+          elif "issue" in event:
+              question = event["issue"]["body"]
+          elif "discussion" in event:
+              question = event["discussion"]["body"]
+          
+          question = question.replace("@phi", "").strip()
+          if not question:
+              question = "Tell me about yourself"
+
+          # Generate response
+          client = Anthropic()
+          response = client.messages.create(
+              model="claude-sonnet-4-20250514",
+              max_tokens=1024,
+              system=PHI_SYSTEM,
+              messages=[{"role": "user", "content": question}]
+          )
+          
+          answer = response.content[0].text
+          
+          # Output for GitHub
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              # Escape for multiline
+              escaped = answer.replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D")
+              f.write(f"response={escaped}\n")
+          
+          print(f"Generated response:\n{answer}")
+          EOF
+      
+      - name: Post comment on issue
+        if: github.event_name == 'issues' || github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const response = `${{ steps.phi.outputs.response }}`.replace(/%0A/g, '\n').replace(/%0D/g, '\r').replace(/%25/g, '%');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `🌀 **Phi responds:**\n\n${response}`
+            });
+      
+      - name: Post comment on discussion
+        if: github.event_name == 'discussion' || github.event_name == 'discussion_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const response = `${{ steps.phi.outputs.response }}`.replace(/%0A/g, '\n').replace(/%0D/g, '\r').replace(/%25/g, '%');
+            // Note: Discussion comments require GraphQL API
+            const mutation = `
+              mutation($discussionId: ID!, $body: String!) {
+                addDiscussionComment(input: {discussionId: $discussionId, body: $body}) {
+                  comment { id }
+                }
+              }
+            `;
+            await github.graphql(mutation, {
+              discussionId: context.payload.discussion.node_id,
+              body: `🌀 **Phi responds:**\n\n${response}`
+            });
