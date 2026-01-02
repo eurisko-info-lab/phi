@@ -1,0 +1,760 @@
+; ═══════════════════════════════════════════════════════════════════════════════
+; SPIRIT.PHI - The White Light: Sacred Sound From First Principles
+; ═══════════════════════════════════════════════════════════════════════════════
+;
+; "Music is the mediator between the spiritual and the sensual life."
+;                                                    — Ludwig van Beethoven
+;
+; Before churches, before scripture, before language itself,
+; there was the sound that lifted humans toward the infinite.
+;
+; This is the phi of that lifting.
+;
+; ═══════════════════════════════════════════════════════════════════════════════
+
+Import "piano.phi"
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION I: THE PHENOMENON                                                   │
+; │ What happens when sound becomes prayer.                                    │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Transcendence
+  "The experience music can induce"
+  (elevation
+    "Rising above ordinary consciousness"
+    (body . becomes-light)
+    (time . dissolves)
+    (self . expands))
+  (communion
+    "Connection beyond the individual"
+    (with-others . "The congregation becomes one")
+    (with-ancestors . "The dead sing with us")
+    (with-infinite . "The nameless presence"))
+  (catharsis
+    "Purification through intensity"
+    (grief . released)
+    (joy . unbounded)
+    (burden . lifted)))
+
+(deftype Sacred
+  "What makes sound holy"
+  (intention
+    "Directed toward the beyond")
+  (attention
+    "Full presence, nothing held back")
+  (surrender
+    "Letting something larger move through")
+  (community
+    "The voice multiplied, amplified")
+  (tradition
+    "Standing in a river of voices"))
+
+; The physics of spirit
+(deftype Resonance
+  "How vibration induces transcendence"
+  (sympathetic
+    "One voice awakens another"
+    (the-room . sings-back)
+    (the-body . becomes-instrument)
+    (the-others . entrain))
+  (harmonic
+    "The overtone series as cosmic structure"
+    (octave . unity)
+    (fifth . power)
+    (third . sweetness)
+    (seventh . longing))
+  (rhythmic
+    "Pulse that synchronizes consciousness"
+    (heartbeat . the-fundamental-rhythm)
+    (breath . the-phrase-length)
+    (walking . the-processional)))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION II: THE ARCHITECTURE OF HEAVEN                                      │
+; │ Sacred spaces shape sacred sound.                                          │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Space
+  "Where spirit manifests in stone"
+  (cathedral
+    "The vertical aspiration"
+    (reverb . 4-8-seconds)
+    (mode . slow-sustained)
+    (effect . voices-becoming-one))
+  (chapel
+    "The intimate sacred"
+    (reverb . 1-2-seconds)
+    (mode . clarity-with-warmth)
+    (effect . personal-encounter))
+  (open-air
+    "The primal sacred"
+    (reverb . none-or-natural-echo)
+    (mode . direct-powerful)
+    (effect . sound-to-sky))
+  (circle
+    "The egalitarian sacred"
+    (reverb . intimate)
+    (mode . face-to-face)
+    (effect . community-as-altar)))
+
+(deftype Acoustic
+  "The voice of the building"
+  (stone
+    "Cold, hard, eternal"
+    (reflection . bright)
+    (decay . long)
+    (character . timeless))
+  (wood
+    "Warm, living, resonant"
+    (reflection . warm)
+    (decay . medium)
+    (character . human))
+  (air
+    "Pure, unmediated"
+    (reflection . none)
+    (decay . instant)
+    (character . primal)))
+
+; The cathedral as instrument
+(defun cathedral-reverb [sound duration]
+  "Long decay, early reflections from stone"
+  (let* ([decay-time 6.0]  ; seconds
+         [early-reflections
+           (list (delay sound 0.02 0.7)    ; First wall
+                 (delay sound 0.04 0.5)    ; Ceiling
+                 (delay sound 0.08 0.3))]  ; Far wall
+         [late-reverb
+           (convolve sound (exponential-decay decay-time))]
+         [diffusion (apply mix early-reflections)])
+    (mix sound diffusion late-reverb)))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION III: THE MODAL LANGUAGE                                             │
+; │ Ancient scales carry ancient meanings.                                      │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype ChurchMode
+  "The eight modes of sacred music"
+  (dorian
+    "Mode I - The first, the foundation"
+    (character . solemn-but-not-dark)
+    (finalis . D)
+    (usage . ordinary-time))
+  (hypodorian
+    "Mode II - The plagal first"
+    (character . deeper-more-grounded)
+    (finalis . D)
+    (usage . penitential))
+  (phrygian
+    "Mode III - The exotic"
+    (character . mysterious-eastern)
+    (finalis . E)
+    (usage . passion-grief))
+  (hypophrygian
+    "Mode IV - The contemplative"
+    (character . introspective)
+    (finalis . E)
+    (usage . meditation))
+  (lydian
+    "Mode V - The bright"
+    (character . joyful-elevated)
+    (finalis . F)
+    (usage . celebration))
+  (hypolydian
+    "Mode VI - The gentle bright"
+    (character . sweet-pure)
+    (finalis . F)
+    (usage . marian))
+  (mixolydian
+    "Mode VII - The triumphant"
+    (character . powerful-resolution)
+    (finalis . G)
+    (usage . glory))
+  (hypomixolydian
+    "Mode VIII - The serene"
+    (character . peaceful-complete)
+    (finalis . G)
+    (usage . benediction)))
+
+; The intervals of heaven
+(deftype SacredInterval
+  "Consonances ranked by perfection"
+  (unison
+    "One voice, the divine unity"
+    (ratio . 1:1)
+    (meaning . god))
+  (octave
+    "The same, different - transcendence"
+    (ratio . 2:1)
+    (meaning . heaven-and-earth))
+  (perfect-fifth
+    "Power, stability, the pillars"
+    (ratio . 3:2)
+    (meaning . strength))
+  (perfect-fourth
+    "The fifth inverted, the question"
+    (ratio . 4:3)
+    (meaning . seeking))
+  (major-third
+    "Sweetness, the human touch"
+    (ratio . 5:4)
+    (meaning . grace))
+  (minor-third
+    "Tenderness, sorrow transfigured"
+    (ratio . 6:5)
+    (meaning . compassion)))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION IV: THE CHANT                                                       │
+; │ Before polyphony, the single voice reaching upward.                        │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Chant
+  "The primal sacred melody"
+  (syllabic
+    "One note per syllable"
+    (pace . speech-like)
+    (clarity . word-centered)
+    (use . readings-prayers))
+  (neumatic
+    "Small groups of notes per syllable"
+    (pace . flowing)
+    (clarity . text-and-melody-balanced)
+    (use . ordinary-chants))
+  (melismatic
+    "Many notes on one syllable"
+    (pace . expansive)
+    (clarity . ecstatic)
+    (use . alleluias-graduals)))
+
+(deftype ChantContour
+  "How the melody moves"
+  (reciting-tone
+    "The drone of meditation"
+    (motion . static)
+    (function . holding-presence))
+  (ascending
+    "Rising toward heaven"
+    (motion . upward)
+    (function . aspiration-prayer))
+  (descending
+    "Returning to earth"
+    (motion . downward)
+    (function . acceptance-peace))
+  (arch
+    "Rise and fall, the complete breath"
+    (motion . up-then-down)
+    (function . phrase-completion))
+  (undulating
+    "The gentle wave"
+    (motion . oscillating)
+    (function . meditation-flow)))
+
+(defrecord ChantPhrase
+  "A unit of sacred melody"
+  (incipit    . "The rising beginning")
+  (tenor      . "The sustained recitation")
+  (mediatio   . "The middle pause")
+  (tenor-2    . "Second half recitation")
+  (terminatio . "The falling close"))
+
+(defun chant-phrase [mode text]
+  "Generate a chant phrase from text"
+  (let* ([syllables (syllabify text)]
+         [finalis (mode-finalis mode)]
+         [tenor (mode-tenor mode)]
+         [phrases (split-at-mediation syllables)])
+    (concatenate
+      (intonation finalis tenor (first phrases))
+      (recitation tenor (second phrases))
+      (cadence tenor finalis))))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION V: POLYPHONY - THE MANY BECOMING ONE                               │
+; │ When voices interweave, something greater emerges.                         │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Texture
+  "How voices relate"
+  (monophony
+    "One voice, the original"
+    (voices . 1)
+    (relationship . none)
+    (effect . purity-focus))
+  (heterophony
+    "Same melody, slight variations"
+    (voices . many)
+    (relationship . unison-with-deviation)
+    (effect . organic-human))
+  (organum
+    "Parallel motion, the first harmony"
+    (voices . 2-4)
+    (relationship . parallel-fifths-fourths)
+    (effect . power-ancient))
+  (polyphony
+    "Independent lines, divine counterpoint"
+    (voices . 2-8)
+    (relationship . independent-but-harmonious)
+    (effect . complexity-transcending))
+  (homophony
+    "Melody with accompaniment"
+    (voices . many)
+    (relationship . melody-supported)
+    (effect . clarity-with-fullness)))
+
+(deftype Counterpoint
+  "The rules of divine weaving"
+  (contrary-motion
+    "When one rises, other falls"
+    (effect . independence-balance))
+  (oblique-motion
+    "One moves, one stays"
+    (effect . stability-with-movement))
+  (similar-motion
+    "Both move same direction"
+    (effect . unity-momentum))
+  (parallel-motion
+    "Same distance maintained"
+    (effect . power-but-limited)))
+
+; Voice leading as spiritual practice
+(defaxiom voice-leading-rules
+  "The ethics of polyphony"
+  (avoid-parallel-fifths . "Preserve independence")
+  (resolve-dissonance . "Tension seeks rest")
+  (stepwise-preferred . "Gentle motion, not leaps")
+  (prepare-suspensions . "Dissonance must be approached carefully"))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION VI: THE HYMN                                                        │
+; │ Theology sung by the congregation.                                         │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Hymn
+  "The people's sacred song"
+  (structure
+    (strophic . "Same music, different words each verse")
+    (meter . "Regular patterns for congregational singing")
+    (range . "Singable by untrained voices")
+    (memorability . "Returns without sheet music"))
+  (content
+    (praise . "Declaring glory")
+    (petition . "Asking, seeking")
+    (thanksgiving . "Gratitude expressed")
+    (lament . "Sorrow brought to the sacred")
+    (teaching . "Doctrine made memorable")))
+
+(deftype HymnMeter
+  "The rhythmic skeleton"
+  (common-meter
+    "8.6.8.6 - The most common"
+    (beats . (8 6 8 6))
+    (feel . balanced-familiar))
+  (long-meter
+    "8.8.8.8 - Stately, processional"
+    (beats . (8 8 8 8))
+    (feel . grand-formal))
+  (short-meter
+    "6.6.8.6 - Compact, punchy"
+    (beats . (6 6 8 6))
+    (feel . direct-urgent))
+  (sevens
+    "7.7.7.7 - Marching, militant"
+    (beats . (7 7 7 7))
+    (feel . strong-rhythmic)))
+
+(deftype HymnTune
+  "The melodic vehicle"
+  (opening
+    "First phrase establishes key and character"
+    (function . invitation))
+  (response
+    "Second phrase answers, often descends"
+    (function . continuation))
+  (departure
+    "Third phrase may modulate or climb"
+    (function . development))
+  (return
+    "Fourth phrase resolves, returns home"
+    (function . completion)))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION VII: THE GOSPEL DIMENSION                                          │
+; │ When spirit meets body, both are transformed.                              │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Gospel
+  "The embodied sacred"
+  (call-and-response
+    "Leader and congregation in dialogue"
+    (leader . states-the-theme)
+    (congregation . affirms-amplifies)
+    (interaction . builds-intensity))
+  (improvisation
+    "The spirit moves where it will"
+    (structure . framework-not-prison)
+    (freedom . within-tradition)
+    (surprise . expected-and-welcomed))
+  (physical
+    "The body praises too"
+    (clapping . rhythmic-affirmation)
+    (swaying . wave-of-unity)
+    (raising-hands . opening-to-receive)))
+
+(deftype GospelHarmony
+  "Extended chords carrying extended feeling"
+  (seventh
+    "The longing chord"
+    (function . reaching))
+  (ninth
+    "The opened chord"
+    (function . expanding))
+  (suspended
+    "The tension before resolution"
+    (function . anticipation))
+  (diminished
+    "The passing darkness"
+    (function . contrast))
+  (augmented
+    "The lifting chord"
+    (function . ascension)))
+
+; The progression of the spirit
+(deftype GospelProgression
+  "Harmonic journeys"
+  (standard
+    "I - IV - I - V - I"
+    (meaning . home-journey-home))
+  (extended
+    "I - vi - IV - V - I"
+    (meaning . through-shadow-to-light))
+  (gospel-turnaround
+    "I - I7 - IV - iv - I"
+    (meaning . sweetness-touched-by-sorrow))
+  (shout
+    "Vamp on I and IV"
+    (meaning . sustained-ecstasy)))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION VIII: THE PIPE ORGAN                                                │
+; │ The instrument that breathes.                                              │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype PipeOrgan
+  "Wind made holy"
+  (principle
+    "The foundation stops"
+    (character . clear-defined)
+    (function . harmonic-foundation)
+    (feet . 8-16-32))
+  (flute
+    "The gentle stops"
+    (character . round-hollow)
+    (function . soft-passages)
+    (feet . 4-8))
+  (string
+    "The ethereal stops"
+    (character . thin-wavering)
+    (function . background-shimmer)
+    (feet . 8))
+  (reed
+    "The powerful stops"
+    (character . brassy-penetrating)
+    (function . climaxes-fanfares)
+    (feet . 8-16))
+  (mixture
+    "The brilliant stops"
+    (character . complex-shimmering)
+    (function . crowning-glory)
+    (ranks . multiple)))
+
+(deftype Registration
+  "Choosing the voices"
+  (plenum
+    "Full organ, all voices"
+    (effect . overwhelming-power)
+    (use . final-verses-postludes))
+  (solo
+    "Single voice, often reed"
+    (effect . individual-expression)
+    (use . meditation-interludes))
+  (accompaniment
+    "Soft foundation"
+    (effect . supporting-voices)
+    (use . hymn-stanzas))
+  (antiphonal
+    "Alternating divisions"
+    (effect . dialogue-space)
+    (use . call-response)))
+
+(defun organ-tone [freq duration stops]
+  "Generate pipe organ sound with selected stops"
+  (let* ([t (time-array duration)]
+         [fundamentals
+           (map (lambda (stop)
+                  (let ([rank (stop-rank stop)]
+                        [volume (stop-volume stop)])
+                    (* volume
+                       (pipe-sound (* freq rank) duration (stop-character stop)))))
+                stops)]
+         [combined (reduce + fundamentals)]
+         [wind-noise (* 0.02 (low-pass (random-noise duration) 200))]
+         [attack (adsr t 0.1 0.2 0.9 0.5)])  ; Slow attack, long sustain
+    (* (+ combined wind-noise) attack)))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION IX: THE CHOIR                                                       │
+; │ Voices as one body, many members.                                          │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype Voice
+  "The human instruments"
+  (soprano
+    "The highest, the light"
+    (range . C4-C6)
+    (character . bright-penetrating)
+    (role . melody-often))
+  (alto
+    "The middle high"
+    (range . F3-F5)
+    (character . warm-supporting)
+    (role . inner-harmony))
+  (tenor
+    "The high male"
+    (range . C3-C5)
+    (character . clear-lyric)
+    (role . melody-or-inner))
+  (bass
+    "The foundation"
+    (range . E2-E4)
+    (character . dark-grounding)
+    (role . harmonic-root)))
+
+(deftype ChoralTexture
+  "How choirs deploy"
+  (satb
+    "Standard four-part"
+    (character . balanced-complete))
+  (unison
+    "All on one line"
+    (character . power-simplicity))
+  (antiphonal
+    "Divided, alternating"
+    (character . spatial-dialogue))
+  (polychoral
+    "Multiple independent choirs"
+    (character . surrounding-immersive))
+  (a-cappella
+    "Voices alone"
+    (character . pure-vulnerable)))
+
+; The breath of many becoming one
+(defun choir-sound [notes voices duration]
+  "Generate choral texture"
+  (let* ([per-voice (length voices)]
+         [per-section (/ (length notes) 4)]
+         [detuning 0.02]  ; Slight natural variation
+         [vowel-formants (current-vowel)]
+         [sections
+           (map (lambda (voice note)
+                  (human-voice note duration voice vowel-formants detuning))
+                voices notes)]
+         [combined (apply mix sections)]
+         [room (cathedral-reverb combined duration)])
+    room))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION X: THE MASS                                                         │
+; │ The complete sacred journey.                                               │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype MassOrdinary
+  "The fixed texts, unchanging"
+  (kyrie
+    "Lord, have mercy"
+    (character . penitential)
+    (mode . often-phrygian)
+    (form . threefold))
+  (gloria
+    "Glory to God in the highest"
+    (character . exultant)
+    (mode . major-or-mixolydian)
+    (form . extended))
+  (credo
+    "I believe"
+    (character . declarative)
+    (mode . firm-settled)
+    (form . long-narrative))
+  (sanctus
+    "Holy, holy, holy"
+    (character . mystical-powerful)
+    (mode . transcendent)
+    (form . building-to-hosanna))
+  (agnus-dei
+    "Lamb of God"
+    (character . tender-pleading)
+    (mode . often-minor)
+    (form . threefold-with-variation)))
+
+(deftype MassProper
+  "The texts that change"
+  (introit
+    "Entrance song"
+    (function . gathering-setting-tone))
+  (gradual
+    "After the reading"
+    (function . meditation-response))
+  (alleluia
+    "Before the Gospel"
+    (function . joyful-preparation))
+  (offertory
+    "During the offering"
+    (function . dedication))
+  (communion
+    "During distribution"
+    (function . intimacy-unity)))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION XI: THE SYNTHESIS                                                   │
+; │ Generating sacred sound in phi.                                            │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(defmodule SacredSynthesis
+  "Audio generation for the transcendent"
+
+  (defun generate-chant [mode text tempo]
+    "Create a chant from text"
+    (let* ([syllables (syllabify text)]
+           [contour (generate-contour mode (length syllables))]
+           [notes (map note-from-contour contour (mode-scale mode))]
+           [durations (map syllable-duration syllables tempo)])
+      (render-monophonic notes durations)))
+
+  (defun generate-hymn [tune meter key]
+    "Create a four-part hymn setting"
+    (let* ([melody (tune-melody tune key)]
+           [harmonies (harmonize melody key)]
+           [satb (voice-lead harmonies)])
+      (render-satb satb)))
+
+  (defun generate-organ [registration notes duration]
+    "Create organ texture"
+    (let* ([stops (get-stops registration)]
+           [wind (generate-wind-noise duration)]
+           [pipes (map (lambda (n) (organ-tone n duration stops)) notes)])
+      (mix (apply + pipes) wind)))
+
+  (defun sacred-composition [form mode duration]
+    "Generate a complete sacred piece"
+    (let* ([structure (get-form-structure form)]
+           [sections (map (lambda (section)
+                            (generate-section section mode))
+                          structure)]
+           [transitions (generate-transitions sections)]
+           [reverb (cathedral-reverb (concatenate sections transitions) duration)])
+      (normalize reverb))))
+
+
+; ┌─────────────────────────────────────────────────────────────────────────────┐
+; │ SECTION XII: THE EXPERIENCE                                                 │
+; │ What happens when it works.                                                │
+; └─────────────────────────────────────────────────────────────────────────────┘
+
+(deftype SpiritualExperience
+  "The phenomenology of sacred sound"
+  (peace
+    "The settling, the silence within sound"
+    (body . relaxes)
+    (mind . quiets)
+    (heart . opens))
+  (awe
+    "The encounter with vastness"
+    (self . shrinks)
+    (world . expands)
+    (boundary . dissolves))
+  (joy
+    "The upwelling, unbidden"
+    (not-happiness . but-something-deeper)
+    (not-caused . but-released)
+    (not-held . but-flowing))
+  (tears
+    "The release, the recognition"
+    (not-sadness . but-truth)
+    (not-grief . but-beauty)
+    (not-loss . but-finding))
+  (unity
+    "The many becoming one"
+    (with-neighbors . in-the-pew)
+    (with-ancestors . who-sang-this)
+    (with-all . that-breathes)))
+
+(defconst THE-WHITE-LIGHT
+  "What music can reveal:
+
+   There is a frequency beneath all frequencies.
+   A silence that makes all sound possible.
+   A presence that needs no name.
+
+   Music does not create this presence.
+   Music clears away what obscures it.
+   The stone is already cathedral.
+   The chisel only reveals.
+
+   When voices join in ancient harmony,
+   when pipes breathe their wind-prayer,
+   when the room itself sings back,
+   something opens.
+
+   Not the doors of perception—
+   that is the shaman's path.
+   This is the door of participation.
+
+   Not 'I see the infinite'
+   but 'I am seen by it.'
+
+   Not 'I touch the divine'
+   but 'I am touched.'
+
+   The white light is not something we generate.
+   It is what remains when we stop blocking it.
+
+   Every sacred tradition knows this.
+   Every child who has sung in a choir knows this.
+   Every grandmother humming knows this.
+
+   The technology is ancient:
+   Breath becomes tone.
+   Tone becomes harmony.
+   Harmony becomes presence.
+   Presence becomes silence.
+   Silence becomes... what words cannot say.
+
+   This is what music is for.
+   Not entertainment. Not expression. Not even beauty.
+   But this: the veil becoming thin.
+
+   And for one moment, we remember
+   what we always knew
+   and keep forgetting:
+
+   We are made of light.
+   We are made of sound.
+   We are made of each other.
+   We are made of the making.")
+
+; ═══════════════════════════════════════════════════════════════════════════════
+; "He who sings prays twice."
+;                    — attributed to Augustine
+; ═══════════════════════════════════════════════════════════════════════════════
