@@ -17,11 +17,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         
       - name: Build
-        working-directory: ports/rust/tools/rvm
+        working-directory: specs/phi-core/ports/rust/tools/rvm
         run: cargo build --release
         
       - name: Test
-        working-directory: ports/rust/tools/rvm
+        working-directory: specs/phi-core/ports/rust/tools/rvm
         run: cargo test
 
   scala:
@@ -40,7 +40,7 @@ jobs:
         uses: sbt/setup-sbt@v1
           
       - name: Build & Test
-        working-directory: ports/scala/tools/phi
+        working-directory: specs/phi-core/ports/scala/tools/phi
         run: sbt compile test
 
   haskell:
@@ -51,12 +51,23 @@ jobs:
       
       - name: Set up Haskell
         uses: haskell-actions/setup@v2
+        id: setup-haskell
         with:
-          ghc-version: '9.8'
+          ghc-version: '9.6'
           cabal-version: '3.10'
           
+      - name: Cache cabal
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.setup-haskell.outputs.cabal-store }}
+            specs/phi-core/ports/haskell/tools/phi/dist-newstyle
+          key: ${{ runner.os }}-ghc-${{ steps.setup-haskell.outputs.ghc-version }}-cabal-${{ hashFiles('**/phi.cabal') }}
+          restore-keys: |
+            ${{ runner.os }}-ghc-${{ steps.setup-haskell.outputs.ghc-version }}-
+          
       - name: Build & Test
-        working-directory: ports/haskell/tools/phi
+        working-directory: specs/phi-core/ports/haskell/tools/phi
         run: |
           cabal update
           cabal build
