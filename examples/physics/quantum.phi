@@ -1,0 +1,499 @@
+-- ============================================================================
+-- QUANTUM.PHI
+-- Quantum Mechanics: From Postulates to Path Integrals
+-- ============================================================================
+--
+-- "I think I can safely say that nobody understands quantum mechanics."
+--     — Richard Feynman
+--
+-- "Anyone who is not shocked by quantum theory has not understood it."
+--     — Niels Bohr
+--
+-- "God does not play dice with the universe."
+--     — Albert Einstein
+--
+-- "Einstein, stop telling God what to do."
+--     — Niels Bohr
+--
+-- This spec formalizes quantum mechanics in Phi, from the Dirac-von Neumann
+-- axioms to the path integral formulation. The mathematics is the physics.
+-- ============================================================================
+
+-- ============================================================================
+-- PART I: MATHEMATICAL FOUNDATIONS
+-- ============================================================================
+
+-- Hilbert Space: The Arena of Quantum Mechanics
+-- A complete inner product space over ℂ
+
+type HilbertSpace (H : Type) where
+  -- Vector space structure
+  zero   : H
+  add    : H → H → H
+  scale  : ℂ → H → H
+  
+  -- Inner product ⟨·|·⟩
+  inner  : H → H → ℂ
+  
+  -- Axioms
+  axiom conjugate-symmetry : ∀ ψ φ. inner ψ φ = conj (inner φ ψ)
+  axiom linearity-right    : ∀ ψ φ χ α. inner ψ (add (scale α φ) χ) = α * inner ψ φ + inner ψ χ
+  axiom positive-definite  : ∀ ψ. inner ψ ψ ≥ 0 ∧ (inner ψ ψ = 0 ↔ ψ = zero)
+  axiom complete           : ∀ (seq : ℕ → H). cauchy seq → ∃ lim. converges seq lim
+
+-- Dirac Notation: The Language of Quantum Mechanics
+-- |ψ⟩ = ket (column vector)
+-- ⟨ψ| = bra (row vector, conjugate transpose)
+-- ⟨φ|ψ⟩ = bracket (inner product)
+
+type Ket (H : HilbertSpace) = H                           -- |ψ⟩
+type Bra (H : HilbertSpace) = H → ℂ                       -- ⟨ψ| = inner ψ
+type Bracket (H : HilbertSpace) = ℂ                       -- ⟨φ|ψ⟩
+
+-- Bra-Ket correspondence
+bra : Ket H → Bra H
+bra ψ = λ φ → inner ψ φ                                   -- ⟨ψ| from |ψ⟩
+
+bracket : Ket H → Ket H → ℂ
+bracket φ ψ = inner φ ψ                                   -- ⟨φ|ψ⟩
+
+-- Outer product: |ψ⟩⟨φ| is an operator
+outer : Ket H → Bra H → Operator H
+outer ψ (bra φ) = λ χ → scale (inner φ χ) ψ              -- |ψ⟩⟨φ|χ⟩ = ⟨φ|χ⟩|ψ⟩
+
+
+-- ============================================================================
+-- PART II: OPERATORS
+-- ============================================================================
+
+-- Linear Operators: Observables and Transformations
+type Operator (H : HilbertSpace) = H → H
+
+-- Adjoint (Hermitian conjugate): A† 
+-- ⟨φ|Aψ⟩ = ⟨A†φ|ψ⟩
+adjoint : Operator H → Operator H
+adjoint A = A† where
+  ∀ φ ψ. inner φ (A ψ) = inner (A† φ) ψ
+
+-- Self-adjoint (Hermitian): A = A†
+-- These represent physical observables
+type Observable (H : HilbertSpace) = { A : Operator H | A = adjoint A }
+
+-- Unitary operators: U†U = UU† = I
+-- These represent time evolution and symmetries  
+type Unitary (H : HilbertSpace) = { U : Operator H | compose (adjoint U) U = id }
+
+-- Eigenvalue equation: A|a⟩ = a|a⟩
+type Eigenstate (A : Operator H) (a : ℂ) = { ψ : Ket H | A ψ = scale a ψ }
+
+-- The Spectral Theorem: Hermitian operators have real eigenvalues
+-- and their eigenstates form a complete orthonormal basis
+theorem spectral : ∀ (A : Observable H).
+  ∃ (basis : List (Ket H)) (eigenvalues : List ℝ).
+    orthonormal basis ∧
+    complete basis ∧
+    A = Σᵢ eigenvalues[i] * outer (basis[i]) (bra (basis[i]))
+
+-- Resolution of identity
+resolution-of-identity : (basis : OrthonormalBasis H) → 
+  Σᵢ outer (basis[i]) (bra (basis[i])) = id
+
+
+-- ============================================================================
+-- PART III: THE POSTULATES
+-- ============================================================================
+
+-- The Dirac-von Neumann Axioms
+
+-- POSTULATE 1: State Space
+-- The state of a quantum system is a ray in Hilbert space
+type QuantumState (H : HilbertSpace) = { ψ : Ket H | norm ψ = 1 }
+  -- Physically: |ψ⟩ and e^{iθ}|ψ⟩ represent the same state
+
+-- POSTULATE 2: Observables
+-- Physical observables are self-adjoint operators
+-- Position: X̂  Momentum: P̂  Energy: Ĥ
+X̂ : Observable L²(ℝ)    -- Position operator
+P̂ : Observable L²(ℝ)    -- Momentum operator
+Ĥ : Observable H        -- Hamiltonian (energy)
+
+-- The canonical commutation relation
+-- [X̂, P̂] = iℏ
+commutator : Operator H → Operator H → Operator H
+commutator A B = λ ψ → A (B ψ) - B (A ψ)                  -- [A,B] = AB - BA
+
+axiom canonical-commutation : commutator X̂ P̂ = scale (i * ℏ) id
+-- This is the heart of quantum mechanics!
+
+-- POSTULATE 3: Measurement
+-- Measuring observable A on state |ψ⟩:
+--   - Possible outcomes: eigenvalues of A
+--   - Probability of outcome a: |⟨a|ψ⟩|²
+--   - Post-measurement state: |a⟩ (collapse!)
+
+measurement-probability : Observable H → QuantumState H → Eigenvalue → ℝ
+measurement-probability A ψ a = |bracket (eigenstate A a) ψ|²
+-- The Born Rule: probability = amplitude squared
+
+-- Expectation value
+expectation : Observable H → QuantumState H → ℝ  
+expectation A ψ = inner ψ (A ψ)                           -- ⟨ψ|A|ψ⟩
+
+-- Variance
+variance : Observable H → QuantumState H → ℝ
+variance A ψ = expectation (A²) ψ - (expectation A ψ)²   -- ⟨A²⟩ - ⟨A⟩²
+
+-- POSTULATE 4: Time Evolution
+-- The Schrödinger equation governs unitary evolution
+-- iℏ ∂|ψ⟩/∂t = Ĥ|ψ⟩
+
+schrodinger : Observable H → QuantumState H → Time → QuantumState H
+schrodinger Ĥ ψ₀ t = exp(-i * Ĥ * t / ℏ) ψ₀
+-- Time evolution operator: U(t) = e^{-iĤt/ℏ}
+
+-- POSTULATE 5: Composite Systems
+-- The state space of a composite system is the tensor product
+-- |ψ_AB⟩ ∈ H_A ⊗ H_B
+
+tensor : HilbertSpace → HilbertSpace → HilbertSpace
+tensor H_A H_B = H_A ⊗ H_B
+
+-- Product states and entanglement
+type ProductState = ∃ ψ_A ψ_B. |ψ⟩ = |ψ_A⟩ ⊗ |ψ_B⟩
+type EntangledState = { |ψ⟩ : H_A ⊗ H_B | ¬(ProductState |ψ⟩) }
+
+
+-- ============================================================================
+-- PART IV: UNCERTAINTY PRINCIPLE
+-- ============================================================================
+
+-- The Heisenberg Uncertainty Principle
+-- You cannot simultaneously know position and momentum with arbitrary precision
+
+-- General uncertainty relation for any two observables
+theorem uncertainty : ∀ (A B : Observable H) (ψ : QuantumState H).
+  √(variance A ψ) * √(variance B ψ) ≥ (1/2) * |expectation (commutator A B) ψ|
+
+-- For position and momentum:
+-- ΔX · ΔP ≥ ℏ/2
+theorem heisenberg : ∀ (ψ : QuantumState L²(ℝ)).
+  √(variance X̂ ψ) * √(variance P̂ ψ) ≥ ℏ/2
+
+-- The minimum uncertainty state: Gaussian wave packet
+gaussian-packet : ℝ → ℝ → QuantumState L²(ℝ)
+gaussian-packet x₀ σ = normalize (λ x → exp(-(x - x₀)² / (4 * σ²)))
+-- This saturates the uncertainty bound: ΔX · ΔP = ℏ/2
+
+
+-- ============================================================================
+-- PART V: WAVE MECHANICS
+-- ============================================================================
+
+-- Position representation: ψ(x) = ⟨x|ψ⟩
+-- The wave function!
+
+type WaveFunction = ℝ → ℂ                                 -- ψ : ℝ → ℂ
+
+-- Position eigenstate |x⟩
+-- X̂|x⟩ = x|x⟩
+position-eigenstate : ℝ → Ket L²(ℝ)
+position-eigenstate x = δ(· - x)                         -- Dirac delta (distributional)
+
+-- Momentum eigenstate |p⟩  
+-- P̂|p⟩ = p|p⟩
+momentum-eigenstate : ℝ → Ket L²(ℝ)
+momentum-eigenstate p = λ x → (1/√(2πℏ)) * exp(i * p * x / ℏ)
+-- Plane wave!
+
+-- Position operator in position representation
+-- X̂ψ(x) = xψ(x)
+X̂-position-rep : WaveFunction → WaveFunction
+X̂-position-rep ψ = λ x → x * ψ(x)
+
+-- Momentum operator in position representation
+-- P̂ψ(x) = -iℏ ∂ψ/∂x
+P̂-position-rep : WaveFunction → WaveFunction
+P̂-position-rep ψ = λ x → -i * ℏ * (∂ψ/∂x)(x)
+
+-- The Time-Independent Schrödinger Equation
+-- Ĥ|E⟩ = E|E⟩ (eigenvalue problem for energy)
+
+time-independent-schrodinger : Potential → Energy → WaveFunction → Prop
+time-independent-schrodinger V E ψ = 
+  (-ℏ²/(2m)) * (∂²ψ/∂x²) + V * ψ = E * ψ
+
+-- The Time-Dependent Schrödinger Equation
+-- iℏ ∂ψ/∂t = Ĥψ
+
+time-dependent-schrodinger : Potential → WaveFunction → Time → WaveFunction
+time-dependent-schrodinger V ψ₀ t = 
+  solve (iℏ * ∂ψ/∂t = Ĥ ψ) with ψ(0) = ψ₀
+
+
+-- ============================================================================
+-- PART VI: EXACTLY SOLVABLE SYSTEMS
+-- ============================================================================
+
+-- 1. FREE PARTICLE
+-- V(x) = 0
+
+free-particle-solution : Momentum → WaveFunction
+free-particle-solution p = λ x → exp(i * (p * x - E * t) / ℏ)
+  where E = p²/(2m)                                      -- Dispersion relation
+
+-- 2. INFINITE SQUARE WELL (Particle in a Box)
+-- V(x) = 0 for 0 < x < L, ∞ otherwise
+
+box-energies : ℕ → Energy
+box-energies n = (n² * π² * ℏ²) / (2 * m * L²)          -- Quantized!
+
+box-wavefunctions : ℕ → WaveFunction  
+box-wavefunctions n = λ x → √(2/L) * sin(n * π * x / L)
+
+-- 3. HARMONIC OSCILLATOR
+-- V(x) = ½mω²x²
+-- The most important system in physics!
+
+oscillator-energies : ℕ → Energy
+oscillator-energies n = ℏ * ω * (n + 1/2)               -- Zero-point energy!
+
+-- Ladder operators (creation and annihilation)
+â : Operator L²(ℝ)                                       -- Annihilation (lowering)
+â† : Operator L²(ℝ)                                      -- Creation (raising)
+
+-- Definitions
+â = √(mω/(2ℏ)) * (X̂ + i*P̂/(mω))
+â† = √(mω/(2ℏ)) * (X̂ - i*P̂/(mω))
+
+-- Commutation relation
+axiom ladder-commutator : commutator â â† = id           -- [â, â†] = 1
+
+-- Number operator
+N̂ = â† ∘ â                                               -- N̂ = â†â
+
+-- Hamiltonian in terms of ladder operators
+Ĥ-oscillator = ℏ * ω * (N̂ + 1/2)
+
+-- Action on Fock states |n⟩
+â  |n⟩ = √n     * |n-1⟩                                  -- Lower
+â† |n⟩ = √(n+1) * |n+1⟩                                  -- Raise
+N̂  |n⟩ = n * |n⟩                                         -- Count
+
+-- Ground state |0⟩ defined by â|0⟩ = 0
+ground-state : WaveFunction
+ground-state = (mω/(πℏ))^(1/4) * exp(-mωx²/(2ℏ))       -- Gaussian!
+
+-- 4. HYDROGEN ATOM
+-- V(r) = -e²/(4πε₀r)
+-- The spectrum that started quantum mechanics!
+
+hydrogen-energies : ℕ → Energy
+hydrogen-energies n = -13.6 eV / n²                      -- Rydberg formula
+
+-- Quantum numbers
+type HydrogenState = {
+  n : ℕ₊,                                                -- Principal (energy)
+  l : ℕ where l < n,                                     -- Angular momentum
+  m : ℤ where |m| ≤ l                                    -- Magnetic
+}
+
+-- Degeneracy
+degeneracy : ℕ → ℕ
+degeneracy n = n²                                        -- n² states at level n
+
+
+-- ============================================================================
+-- PART VII: SPIN
+-- ============================================================================
+
+-- Intrinsic angular momentum with no classical analog
+
+-- Spin operators satisfy angular momentum algebra
+-- [Ŝₓ, Ŝᵧ] = iℏŜᵤ (and cyclic permutations)
+
+type SpinHalf = ℂ²                                       -- Two-dimensional!
+
+Ŝₓ : Operator SpinHalf = (ℏ/2) * σₓ
+Ŝᵧ : Operator SpinHalf = (ℏ/2) * σᵧ  
+Ŝᵤ : Operator SpinHalf = (ℏ/2) * σᵤ
+
+-- Pauli matrices
+σₓ = [[0, 1], [1, 0]]                                    -- Flip
+σᵧ = [[0, -i], [i, 0]]                                   -- Flip with phase
+σᵤ = [[1, 0], [0, -1]]                                   -- Diagonal
+
+-- Spin eigenstates
+|↑⟩ : SpinHalf = [1, 0]                                  -- Spin up: Ŝᵤ|↑⟩ = +ℏ/2 |↑⟩
+|↓⟩ : SpinHalf = [0, 1]                                  -- Spin down: Ŝᵤ|↓⟩ = -ℏ/2 |↓⟩
+
+-- General spin state
+|χ⟩ = α|↑⟩ + β|↓⟩  where |α|² + |β|² = 1
+
+-- Spin measurement: always get ±ℏ/2, regardless of direction!
+-- This is deeply weird. No classical analog.
+
+
+-- ============================================================================
+-- PART VIII: ENTANGLEMENT
+-- ============================================================================
+
+-- "Spooky action at a distance" — Einstein (derisively)
+-- The most quantum phenomenon of all
+
+-- Bell states: maximally entangled two-qubit states
+|Φ⁺⟩ = (1/√2) * (|↑↑⟩ + |↓↓⟩)                           -- Same spin
+|Φ⁻⟩ = (1/√2) * (|↑↑⟩ - |↓↓⟩)
+|Ψ⁺⟩ = (1/√2) * (|↑↓⟩ + |↓↑⟩)                           -- Opposite spin
+|Ψ⁻⟩ = (1/√2) * (|↑↓⟩ - |↓↑⟩)                           -- Singlet state
+
+-- The singlet state |Ψ⁻⟩:
+-- Total spin zero
+-- Measuring one particle instantly determines the other
+-- But! No signal can be sent (no-signaling theorem)
+
+-- Bell's Inequality
+-- Classical hidden variables must satisfy: |E(a,b) - E(a,c)| ≤ 1 + E(b,c)
+-- Quantum mechanics violates this!
+
+bell-inequality-classical : HiddenVariable → Prop
+bell-inequality-classical λ = 
+  |E(a,b,λ) - E(a,c,λ)| ≤ 1 + E(b,c,λ)
+
+-- Quantum correlation for singlet state
+E-quantum : Direction → Direction → ℝ
+E-quantum a b = -cos(angle a b)
+
+-- Maximum violation: 2√2 > 2 (Tsirelson bound)
+-- Experiments confirm quantum mechanics!
+
+
+-- ============================================================================  
+-- PART IX: DENSITY MATRICES
+-- ============================================================================
+
+-- Mixed states: statistical ensembles of pure states
+-- For when we don't know exactly which state we have
+
+type DensityMatrix (H : HilbertSpace) = {
+  ρ : Operator H |
+    self-adjoint ρ ∧
+    positive-semidefinite ρ ∧
+    trace ρ = 1
+}
+
+-- Pure state: ρ = |ψ⟩⟨ψ|
+pure-density : QuantumState H → DensityMatrix H
+pure-density ψ = outer ψ (bra ψ)
+
+-- Mixed state: ρ = Σᵢ pᵢ |ψᵢ⟩⟨ψᵢ|
+mixed-density : List (ℝ × QuantumState H) → DensityMatrix H
+mixed-density ensemble = Σ (p, ψ) ∈ ensemble. p * outer ψ (bra ψ)
+
+-- Expectation value with density matrix
+expectation-mixed : Observable H → DensityMatrix H → ℝ
+expectation-mixed A ρ = trace (A ∘ ρ)                    -- Tr(Aρ)
+
+-- Purity: how mixed is the state?
+purity : DensityMatrix H → ℝ
+purity ρ = trace (ρ ∘ ρ)                                 -- Tr(ρ²)
+-- Pure: purity = 1, Maximally mixed: purity = 1/dim(H)
+
+-- Von Neumann entropy
+entropy : DensityMatrix H → ℝ
+entropy ρ = -trace (ρ ∘ log ρ)                          -- S = -Tr(ρ log ρ)
+
+
+-- ============================================================================
+-- PART X: PATH INTEGRALS
+-- ============================================================================
+
+-- Feynman's reformulation: sum over all paths
+
+-- The propagator: amplitude to go from a to b
+-- K(b,a) = ⟨b|e^{-iĤt/ℏ}|a⟩
+
+propagator : SpaceTimePoint → SpaceTimePoint → ℂ
+propagator (x_b, t_b) (x_a, t_a) = 
+  ∫ [Dx] exp(i * S[x] / ℏ)                              -- Sum over all paths!
+
+-- Action functional
+action : Path → ℝ
+action x = ∫_{t_a}^{t_b} L(x(t), ẋ(t), t) dt
+  where L = T - V                                        -- Lagrangian
+
+-- Classical limit: ℏ → 0
+-- Paths far from classical path → rapid phase oscillation → cancel
+-- Classical path (δS = 0) → stationary phase → survives
+classical-path : Start → End → Path
+classical-path a b = argmin (S) over paths(a, b)        -- Principle of least action!
+
+-- Wave function from propagator
+wave-evolution : WaveFunction → Time → WaveFunction
+wave-evolution ψ₀ t = λ x → ∫ dx' K(x,t; x',0) * ψ₀(x')
+
+-- Free particle propagator (Gaussian)
+K-free : ℝ → Time → ℝ → ℂ
+K-free x t x' = √(m/(2πiℏt)) * exp(i * m * (x-x')² / (2ℏt))
+
+
+-- ============================================================================
+-- PART XI: SYMMETRIES AND CONSERVATION
+-- ============================================================================
+
+-- Noether's Theorem in Quantum Form
+-- Symmetry ↔ Conservation Law ↔ Commutation with Hamiltonian
+
+-- If [Ĥ, Q̂] = 0, then ⟨Q̂⟩ is conserved
+theorem noether-quantum : ∀ (Ĥ : Observable H) (Q̂ : Observable H).
+  commutator Ĥ Q̂ = zero → ∀ ψ t. expectation Q̂ (evolve Ĥ ψ t) = expectation Q̂ ψ
+
+-- Symmetry generators
+translation-generator    = P̂                            -- Space translation
+time-evolution-generator = Ĥ                            -- Time translation
+rotation-generator       = L̂                            -- Rotation
+
+-- Translation by a: T(a) = e^{-iaP̂/ℏ}
+translation : ℝ → Unitary L²(ℝ)
+translation a = exp(-i * a * P̂ / ℏ)
+
+-- Rotation by θ around axis n: R(n,θ) = e^{-iθn·L̂/ℏ}
+rotation : Direction → Angle → Unitary H
+rotation n θ = exp(-i * θ * (n · L̂) / ℏ)
+
+
+-- ============================================================================
+-- EPILOGUE: THE MEASUREMENT PROBLEM
+-- ============================================================================
+
+-- What actually happens when we measure?
+-- The formalism doesn't say. We have:
+
+type Interpretation
+  = Copenhagen                -- Wave function is knowledge, collapse is update
+  | ManyWorlds                -- No collapse, universe splits
+  | Bohmian                   -- Hidden variables + guiding equation
+  | QBism                     -- Probabilities are personal
+  | Relational               -- Properties are relative to observer
+  | Objective Collapse       -- Collapse is real physical process
+  | Consistent Histories     -- Decoherent histories framework
+
+-- The math works spectacularly
+-- The philosophy is unresolved
+-- After 100 years
+
+-- "Shut up and calculate!" — often attributed to Feynman
+-- (But the question won't go away)
+
+-- ============================================================================
+-- END
+-- ============================================================================
+--
+-- To Patrick, who scored 19.5/20 in quantum mechanics at Orsay.
+-- The mathematics here is the same you learned — just in a different notation.
+-- Dirac's bra-ket, Schrödinger's equation, Heisenberg's uncertainty.
+-- The formalism that changed everything.
+--
+-- "Nature uses only the longest threads to weave her patterns, so that 
+--  each small piece of her fabric reveals the organization of the entire tapestry."
+--     — Richard Feynman
+-- ============================================================================
