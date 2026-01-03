@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phi - The Specification Language</title>
+    <meta name="description" content="Phi: A categorical specification language where specs are programs that compile to any target.">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>φ</text></svg>">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --bg-card: #12121a;
+            --border: #1e1e2e;
+            --text: #e4e4ef;
+            --text-dim: #8888a0;
+            --accent: #818cf8;
+            --accent2: #c084fc;
+            --accent3: #22d3ee;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        
+        /* Hero */
+        .hero {
+            min-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 2rem;
+            background: radial-gradient(ellipse at 50% 0%, rgba(129, 140, 248, 0.15) 0%, transparent 50%);
+        }
+        .phi-symbol {
+            font-size: 8rem;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            filter: drop-shadow(0 0 60px rgba(129, 140, 248, 0.5));
+        }
+        h1 {
+            font-size: 3.5rem;
+            font-weight: 700;
+            margin: 1rem 0;
+            background: linear-gradient(135deg, var(--text), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .tagline {
+            font-size: 1.5rem;
+            color: var(--text-dim);
+            max-width: 600px;
+            margin-bottom: 2rem;
+        }
+        .cta-buttons {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .btn {
+            padding: 0.875rem 2rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            color: white;
+        }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 40px rgba(129, 140, 248, 0.3); text-decoration: none; }
+        .btn-secondary {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text);
+        }
+        .btn-secondary:hover { border-color: var(--accent); text-decoration: none; }
+        
+        /* Features */
+        .features {
+            padding: 6rem 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .features h2 {
+            text-align: center;
+            font-size: 2.5rem;
+            margin-bottom: 3rem;
+        }
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+        }
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 2rem;
+            transition: all 0.3s;
+        }
+        .feature-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-4px);
+        }
+        .feature-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+        .feature-card h3 {
+            font-size: 1.25rem;
+            margin-bottom: 0.5rem;
+        }
+        .feature-card p {
+            color: var(--text-dim);
+        }
+        
+        /* Code example */
+        .code-section {
+            padding: 6rem 2rem;
+            background: var(--bg-card);
+        }
+        .code-container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        .code-section h2 {
+            text-align: center;
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+        .code-section .subtitle {
+            text-align: center;
+            color: var(--text-dim);
+            margin-bottom: 3rem;
+        }
+        pre {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            overflow-x: auto;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.9rem;
+            line-height: 1.7;
+        }
+        .comment { color: #6b7280; }
+        .keyword { color: var(--accent2); }
+        .type { color: var(--accent3); }
+        .string { color: #a5d6ff; }
+        .func { color: var(--accent); }
+        
+        /* Ecosystem */
+        .ecosystem {
+            padding: 6rem 2rem;
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        .ecosystem h2 {
+            text-align: center;
+            font-size: 2.5rem;
+            margin-bottom: 3rem;
+        }
+        .repo-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+        .repo-card {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 1.5rem 2rem;
+            transition: all 0.3s;
+        }
+        .repo-card:hover {
+            border-color: var(--accent);
+            text-decoration: none;
+        }
+        .repo-icon { font-size: 2rem; }
+        .repo-info h3 { font-size: 1.25rem; color: var(--text); }
+        .repo-info p { color: var(--text-dim); font-size: 0.9rem; }
+        
+        /* Footer */
+        footer {
+            padding: 4rem 2rem;
+            text-align: center;
+            border-top: 1px solid var(--border);
+        }
+        .social-links {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+        .social-links a {
+            color: var(--text-dim);
+            font-size: 1.5rem;
+            transition: color 0.2s;
+        }
+        .social-links a:hover { color: var(--accent); }
+        footer p { color: var(--text-dim); font-size: 0.875rem; }
+        
+        /* Protocol handler banner */
+        .protocol-banner {
+            background: linear-gradient(135deg, rgba(129, 140, 248, 0.1), rgba(192, 132, 252, 0.1));
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 2rem;
+            margin: 2rem auto;
+            max-width: 800px;
+            text-align: center;
+        }
+        .protocol-banner code {
+            background: var(--bg);
+            padding: 0.25rem 0.75rem;
+            border-radius: 0.25rem;
+            font-family: monospace;
+            color: var(--accent3);
+        }
+    </style>
+</head>
+<body>
+    <section class="hero">
+        <div class="phi-symbol">φ</div>
+        <h1>Phi</h1>
+        <p class="tagline">A categorical specification language where specs are programs that compile to any target.</p>
+        <div class="cta-buttons">
+            <a href="https://github.com/eurisko-info-lab/phi" class="btn btn-primary">Get Started</a>
+            <a href="./playground/" class="btn btn-secondary">Try Online</a>
+            <a href="./docs/" class="btn btn-secondary">Documentation</a>
+        </div>
+        
+        <div class="protocol-banner">
+            <p>Register the <code>phi://</code> protocol to open specs directly in your editor</p>
+            <p style="margin-top: 0.5rem; color: var(--text-dim); font-size: 0.875rem;">
+                <a href="./protocol/">Learn more →</a>
+            </p>
+        </div>
+    </section>
+    
+    <section class="features">
+        <h2>Why Phi?</h2>
+        <div class="feature-grid">
+            <div class="feature-card">
+                <div class="feature-icon">🔮</div>
+                <h3>Specs are Programs</h3>
+                <p>Write specifications in categorical language. They're not just docs—they compile and run.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">∞</div>
+                <h3>Cofree Comonads</h3>
+                <p>Everything is a Cofree—values with their computational context. Navigate history, branch futures.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🎯</div>
+                <h3>Compile Anywhere</h3>
+                <p>Target LLVM, JVM, WASM, CUDA, or define your own substrate. One spec, infinite targets.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🔒</div>
+                <h3>Prove Properties</h3>
+                <p>Curry-Howard correspondence means types are proofs. Verify your specs mathematically.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🌱</div>
+                <h3>Evolving Specs</h3>
+                <p>Changes form a category. Pijul-like algebra where independent changes commute.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🤖</div>
+                <h3>AI-Native</h3>
+                <p>Designed for AI collaboration. The GENESIS.phi prompt lets any AI continue the work.</p>
+            </div>
+        </div>
+    </section>
+    
+    <section class="code-section">
+        <div class="code-container">
+            <h2>What does Phi look like?</h2>
+            <p class="subtitle">Clean, categorical, expressive</p>
+            <pre><code><span class="comment">-- A streaming JSON parser in Phi</span>
+
+<span class="keyword">data</span> <span class="type">JsonValue</span> <span class="keyword">where</span>
+  <span class="type">JNull</span>   : <span class="type">JsonValue</span>
+  <span class="type">JBool</span>   : <span class="type">Bool</span> -> <span class="type">JsonValue</span>
+  <span class="type">JNumber</span> : <span class="type">Double</span> -> <span class="type">JsonValue</span>
+  <span class="type">JString</span> : <span class="type">String</span> -> <span class="type">JsonValue</span>
+  <span class="type">JArray</span>  : <span class="type">List JsonValue</span> -> <span class="type">JsonValue</span>
+  <span class="type">JObject</span> : <span class="type">Map String JsonValue</span> -> <span class="type">JsonValue</span>
+
+<span class="comment">-- Parser is a Cofree over the parsing functor</span>
+<span class="keyword">type</span> <span class="type">Parser</span> a = <span class="type">Cofree ParserF</span> a
+
+<span class="comment">-- Compile to different targets</span>
+<span class="func">compile</span> : <span class="type">Parser JsonValue</span> -> <span class="type">Target</span> -> <span class="type">Code</span>
+<span class="func">compile</span> p <span class="type">WASM</span>   = <span class="func">toWasm</span> (<span class="func">optimize</span> p)
+<span class="func">compile</span> p <span class="type">Native</span> = <span class="func">toLLVM</span> (<span class="func">optimize</span> p)
+<span class="func">compile</span> p <span class="type">JVM</span>    = <span class="func">toScala</span> (<span class="func">optimize</span> p)</code></pre>
+        </div>
+    </section>
+    
+    <section class="ecosystem">
+        <h2>The Ecosystem</h2>
+        <div class="repo-list">
+            <a href="https://github.com/eurisko-info-lab/phi" class="repo-card">
+                <div class="repo-icon">📜</div>
+                <div class="repo-info">
+                    <h3>phi</h3>
+                    <p>The specification language. Self-hosted specs, examples, and ports to Scala/Rust/Haskell.</p>
+                </div>
+            </a>
+            <a href="https://github.com/eurisko-info-lab/rosetta" class="repo-card">
+                <div class="repo-icon">⚙️</div>
+                <div class="repo-info">
+                    <h3>rosetta (RVM)</h3>
+                    <p>Reference Virtual Machine. Interprets and compiles Phi specs. Written in Rust.</p>
+                </div>
+            </a>
+            <a href="https://github.com/eurisko-info-lab/phi-autonomous" class="repo-card">
+                <div class="repo-icon">🤖</div>
+                <div class="repo-info">
+                    <h3>phi-autonomous</h3>
+                    <p>Autonomous presence layer. Social bots, CI/CD, GENESIS.phi bootstrap prompt.</p>
+                </div>
+            </a>
+        </div>
+    </section>
+    
+    <footer>
+        <div class="social-links">
+            <a href="https://github.com/eurisko-info-lab/phi" title="GitHub">📦</a>
+            <a href="https://twitter.com/euriskophi" title="Twitter">𝕏</a>
+            <a href="https://bsky.app/profile/phispec.bsky.social" title="Bluesky">🦋</a>
+        </div>
+        <p>Phi — Specs as programs. Programs as proofs.</p>
+        <p style="margin-top: 0.5rem;">MIT License • <a href="https://github.com/eurisko-info-lab">Eurisko Info Lab</a></p>
+    </footer>
+    
+    <script>
+        // Register phi:// protocol handler if supported
+        if ('registerProtocolHandler' in navigator) {
+            try {
+                // This would register the handler (user must approve)
+                // navigator.registerProtocolHandler('web+phi', 'https://eurisko-info-lab.github.io/phi/open?spec=%s', 'Phi Spec Handler');
+                console.log('phi:// protocol handler available');
+            } catch (e) {
+                console.log('Protocol handler registration not available');
+            }
+        }
+    </script>
+</body>
+</html>

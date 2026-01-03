@@ -1,0 +1,381 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- phi-scheme.phi - The phi:// URL Scheme Specification
+-- ═══════════════════════════════════════════════════════════════════════════
+--
+-- This defines the phi:// URL scheme for addressing Phi specifications,
+-- enabling direct linking, editor integration, and cross-tool interop.
+--
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         URL SCHEME GRAMMAR                               │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+{-
+  The phi:// scheme follows RFC 3986 with domain-specific semantics.
+  
+  Grammar (ABNF):
+  
+    phi-uri     = "phi://" authority "/" path [ "?" query ] [ "#" fragment ]
+    
+    authority   = registry / repo / local
+    registry    = "registry" / domain
+    repo        = owner "/" repo-name [ "@" ref ]
+    local       = "local"
+    
+    path        = spec-path / symbol-path
+    spec-path   = *( "/" segment ) ".phi"
+    symbol-path = spec-path ":" symbol-name
+    
+    query       = param *( "&" param )
+    param       = key "=" value
+    
+    fragment    = line-ref / symbol-ref
+    line-ref    = "L" line-number [ "-L" line-number ]
+    symbol-ref  = symbol-name
+
+  Examples:
+  
+    phi://eurisko-info-lab/phi/specs/phi-core/specs/phi.phi
+    phi://eurisko-info-lab/phi@main/specs/meta.phi#L42
+    phi://eurisko-info-lab/phi/specs/phi.phi:Cofree
+    phi://registry/std/prelude.phi
+    phi://local/my-project/types.phi#Monad
+    phi://registry/std/category.phi?target=scala
+-}
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         TYPE DEFINITIONS                                 │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+-- A Phi URI parsed into components
+data PhiUri where
+  PhiUri : {
+    authority : Authority,
+    path      : SpecPath,
+    symbol    : Maybe SymbolName,
+    query     : Map String String,
+    fragment  : Maybe Fragment
+  } -> PhiUri
+
+-- Where the spec lives
+data Authority where
+  -- GitHub repository: owner/repo@ref
+  GitHubRepo : { owner : String, repo : String, ref : Maybe GitRef } -> Authority
+  
+  -- GitLab, Bitbucket, etc.
+  GitRepo : { host : String, owner : String, repo : String, ref : Maybe GitRef } -> Authority
+  
+  -- Central registry (phi://registry/...)
+  Registry : Authority
+  
+  -- Local filesystem (phi://local/...)
+  Local : Authority
+  
+  -- IPFS content-addressed (phi://ipfs/Qm...)
+  IPFS : { cid : CID } -> Authority
+
+-- Git reference
+data GitRef where
+  Branch : String -> GitRef
+  Tag    : String -> GitRef
+  Commit : Hash -> GitRef
+
+-- Path to a spec file
+type SpecPath = List String  -- ["specs", "phi-core", "phi.phi"]
+
+-- Symbol within a spec
+type SymbolName = String
+
+-- Fragment reference
+data Fragment where
+  LineRef   : { start : Nat, end : Maybe Nat } -> Fragment
+  SymbolRef : SymbolName -> Fragment
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         PARSING                                          │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+-- Parse a phi:// URI string
+parse : String -> Either ParseError PhiUri
+parse uri = do
+  -- Must start with phi://
+  rest <- stripPrefix "phi://" uri
+          `orElse` Left (InvalidScheme uri)
+  
+  -- Split authority from path
+  (authority, pathAndRest) <- parseAuthority rest
+  
+  -- Split path, query, fragment
+  (path, symbol, query, fragment) <- parsePathQF pathAndRest
+  
+  pure (PhiUri authority path symbol query fragment)
+
+-- Parse the authority component
+parseAuthority : String -> Either ParseError (Authority, String)
+parseAuthority s
+  | startsWith "registry/" s = 
+      Right (Registry, drop 9 s)
+  | startsWith "local/" s = 
+      Right (Local, drop 6 s)
+  | startsWith "ipfs/" s = 
+      let cid = takeWhile (/= '/') (drop 5 s)
+      in Right (IPFS cid, drop (5 + length cid + 1) s)
+  | otherwise = 
+      -- GitHub shorthand: owner/repo[@ref]/path
+      parseGitHubAuthority s
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         RESOLUTION                                       │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+-- Resolve a PhiUri to actual content
+resolve : PhiUri -> IO (Either ResolveError SpecContent)
+resolve uri = case uri.authority of
+  GitHubRepo { owner, repo, ref } -> do
+    let branch = fromMaybe "main" (gitRefToBranch ref)
+    let url = githubRawUrl owner repo branch uri.path
+    fetchSpec url
+    
+  Registry -> do
+    let url = registryUrl uri.path
+    fetchSpec url
+    
+  Local -> do
+    let filepath = joinPath uri.path
+    readLocalSpec filepath
+    
+  IPFS { cid } -> do
+    let url = ipfsGatewayUrl cid uri.path
+    fetchSpec url
+
+-- GitHub raw content URL
+githubRawUrl : String -> String -> String -> SpecPath -> String
+githubRawUrl owner repo branch path =
+  "https://raw.githubusercontent.com/" <> owner <> "/" <> repo <> "/" 
+  <> branch <> "/" <> joinPath path
+
+-- Central registry URL
+registryUrl : SpecPath -> String
+registryUrl path =
+  "https://phi.dev/registry/" <> joinPath path
+
+-- IPFS gateway
+ipfsGatewayUrl : CID -> SpecPath -> String
+ipfsGatewayUrl cid path =
+  "https://ipfs.io/ipfs/" <> cid <> "/" <> joinPath path
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         OPERATIONS                                       │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+-- Navigate to a symbol within a resolved spec
+navigateToSymbol : SpecContent -> SymbolName -> Maybe Location
+navigateToSymbol content sym =
+  findSymbol sym (parse content)
+
+-- Get the canonical URI for a spec (normalized form)
+canonical : PhiUri -> PhiUri
+canonical uri = uri {
+  path = normalizePath uri.path,
+  query = sortMap uri.query
+}
+
+-- Check if two URIs refer to the same spec
+sameSpec : PhiUri -> PhiUri -> Bool
+sameSpec a b = canonical a == canonical b
+
+-- Convert to HTTPS URL (for web browsers)
+toHttpsUrl : PhiUri -> String
+toHttpsUrl uri = case uri.authority of
+  GitHubRepo { owner, repo, ref } ->
+    let branch = fromMaybe "main" (gitRefToBranch ref)
+    in "https://github.com/" <> owner <> "/" <> repo <> "/blob/" 
+       <> branch <> "/" <> joinPath uri.path
+       <> maybe "" (\f -> "#" <> fragmentToString f) uri.fragment
+  
+  Registry ->
+    "https://phi.dev/registry/" <> joinPath uri.path
+  
+  Local ->
+    "file://" <> joinPath uri.path
+  
+  IPFS { cid } ->
+    "https://ipfs.io/ipfs/" <> cid <> "/" <> joinPath uri.path
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         EDITOR INTEGRATION                               │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+{-
+  The phi:// scheme can be registered as a protocol handler in:
+  
+  1. VS Code
+     - Extension registers `phi` protocol
+     - Opens specs in editor, navigates to symbol/line
+     
+  2. Web Browsers
+     - Register via navigator.registerProtocolHandler()
+     - Note: Browsers require 'web+phi' prefix for custom schemes
+     
+  3. Desktop
+     - macOS: Info.plist CFBundleURLSchemes
+     - Linux: .desktop file with MimeType
+     - Windows: Registry HKEY_CLASSES_ROOT\phi
+     
+  4. CLI
+     - `phi open phi://eurisko-info-lab/phi/specs/phi.phi`
+     - Resolves and opens in $EDITOR
+-}
+
+-- VS Code URI handler interface
+interface VSCodeUriHandler where
+  handleUri : Uri -> IO ()
+
+-- Implementation for Phi
+instance VSCodeUriHandler PhiHandler where
+  handleUri uri = do
+    phiUri <- parse (uriToString uri)
+    content <- resolve phiUri
+    case phiUri.fragment of
+      Just (LineRef { start, end }) -> 
+        openAtLine content.path start
+      Just (SymbolRef sym) ->
+        openAtSymbol content.path sym
+      Nothing ->
+        openFile content.path
+
+-- CLI command
+phiOpen : String -> IO ()
+phiOpen uriString = do
+  uri <- parse uriString
+  content <- resolve uri
+  editor <- getEnv "EDITOR" `orElse` pure "code"
+  
+  case uri.fragment of
+    Just (LineRef { start }) ->
+      exec editor [content.localPath <> ":" <> show start]
+    _ ->
+      exec editor [content.localPath]
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         REGISTRY                                         │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+{-
+  The Phi Registry (phi://registry/...) provides:
+  
+  1. Standard Library
+     phi://registry/std/prelude.phi     -- Default imports
+     phi://registry/std/category.phi    -- Category theory primitives
+     phi://registry/std/data.phi        -- Common data types
+     
+  2. Published Packages
+     phi://registry/pkg/json-parser/1.0.0/parser.phi
+     phi://registry/pkg/http-client/latest/client.phi
+     
+  3. Examples
+     phi://registry/examples/hello.phi
+     phi://registry/examples/streaming.phi
+     
+  Registry is hosted at https://phi.dev/registry/
+  Content-addressed via IPFS for permanence.
+-}
+
+-- Registry entry metadata
+data RegistryEntry where
+  RegistryEntry : {
+    name        : String,
+    version     : SemVer,
+    description : String,
+    authors     : List String,
+    license     : String,
+    repository  : Maybe PhiUri,
+    dependencies: Map String VersionConstraint,
+    entrypoint  : SpecPath,
+    published   : Timestamp,
+    ipfsCid     : Maybe CID  -- Content-addressed backup
+  } -> RegistryEntry
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         EXAMPLES                                         │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+examples : List (String, String)
+examples = [
+  -- Basic spec reference
+  ("phi://eurisko-info-lab/phi/specs/phi-core/specs/phi.phi",
+   "The Phi language spec in the phi repo"),
+  
+  -- With git ref
+  ("phi://eurisko-info-lab/phi@v0.1.0/specs/phi.phi",
+   "Phi spec at version 0.1.0 tag"),
+  
+  -- With line reference
+  ("phi://eurisko-info-lab/phi/specs/phi.phi#L42-L50",
+   "Lines 42-50 of phi.phi"),
+  
+  -- With symbol reference
+  ("phi://eurisko-info-lab/phi/specs/phi.phi:Cofree",
+   "The Cofree definition in phi.phi"),
+  
+  -- Registry standard library
+  ("phi://registry/std/prelude.phi",
+   "Standard prelude"),
+  
+  -- Local development
+  ("phi://local/my-project/types.phi",
+   "Local spec (resolved relative to workspace)"),
+  
+  -- IPFS permanent reference
+  ("phi://ipfs/QmX.../specs/phi.phi",
+   "Content-addressed permanent reference"),
+  
+  -- With query parameters
+  ("phi://eurisko-info-lab/phi/specs/phi.phi?target=wasm&optimize=true",
+   "Request WASM compilation with optimization")
+]
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         WEB HANDLER                                      │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+-- For web browsers, we use web+phi:// (required by spec)
+-- The handler redirects to the web UI
+
+-- HTML handler page (embedded in website)
+webHandlerHtml : String
+webHandlerHtml = """
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Phi Protocol Handler</title>
+  <script>
+    // Parse the incoming URI
+    const url = new URL(window.location.href);
+    const specUri = url.searchParams.get('spec');
+    
+    if (specUri) {
+      // Convert phi:// to browsable URL
+      const parsed = parsePhiUri(specUri);
+      if (parsed.authority.type === 'github') {
+        window.location.href = parsed.toGitHubUrl();
+      } else if (parsed.authority.type === 'registry') {
+        window.location.href = 'https://phi.dev/registry/' + parsed.path;
+      }
+    }
+    
+    function parsePhiUri(uri) {
+      // ... parsing logic
+    }
+  </script>
+</head>
+<body>
+  <p>Redirecting to spec...</p>
+</body>
+</html>
+"""
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- END phi-scheme.phi
+-- ═══════════════════════════════════════════════════════════════════════════

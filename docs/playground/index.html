@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phi Playground</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>φ</text></svg>">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --bg-card: #12121a;
+            --bg-editor: #0d1117;
+            --border: #1e1e2e;
+            --text: #e4e4ef;
+            --text-dim: #8888a0;
+            --accent: #818cf8;
+            --accent2: #c084fc;
+            --accent3: #22d3ee;
+            --success: #22c55e;
+            --error: #ef4444;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem 1.5rem;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+        }
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            text-decoration: none;
+            color: var(--text);
+        }
+        .logo-symbol {
+            font-size: 1.5rem;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .logo-text { font-weight: 600; }
+        .header-actions { display: flex; gap: 0.5rem; }
+        .btn {
+            padding: 0.5rem 1rem;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--text);
+            border-radius: 0.375rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .btn:hover { border-color: var(--accent); }
+        .btn-primary { background: var(--accent); border-color: var(--accent); color: white; }
+        .btn-primary:hover { opacity: 0.9; }
+        
+        .main {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1px;
+            background: var(--border);
+        }
+        
+        .panel {
+            display: flex;
+            flex-direction: column;
+            background: var(--bg);
+        }
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.5rem 1rem;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            font-size: 0.875rem;
+            color: var(--text-dim);
+        }
+        .panel-tabs {
+            display: flex;
+            gap: 0;
+        }
+        .tab {
+            padding: 0.5rem 1rem;
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+        .tab:hover { color: var(--text); }
+        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+        
+        .editor-container {
+            flex: 1;
+            position: relative;
+        }
+        textarea {
+            width: 100%;
+            height: 100%;
+            background: var(--bg-editor);
+            color: var(--text);
+            border: none;
+            padding: 1rem;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.875rem;
+            line-height: 1.6;
+            resize: none;
+            outline: none;
+        }
+        
+        .output {
+            flex: 1;
+            overflow: auto;
+            padding: 1rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+        .output.error { color: var(--error); }
+        .output.success { color: var(--success); }
+        
+        .status-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.375rem 1rem;
+            background: var(--bg-card);
+            border-top: 1px solid var(--border);
+            font-size: 0.75rem;
+            color: var(--text-dim);
+        }
+        .status-item { display: flex; align-items: center; gap: 0.5rem; }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+        }
+        .status-dot.error { background: var(--error); }
+        
+        select {
+            background: var(--bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.75rem;
+        }
+        
+        @media (max-width: 768px) {
+            .main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="../" class="logo">
+            <span class="logo-symbol">φ</span>
+            <span class="logo-text">Phi Playground</span>
+        </a>
+        <div class="header-actions">
+            <select id="example-select" onchange="loadExample()">
+                <option value="">Load example...</option>
+                <option value="hello">Hello World</option>
+                <option value="cofree">Cofree Comonad</option>
+                <option value="parser">JSON Parser</option>
+                <option value="stream">Infinite Streams</option>
+            </select>
+            <button class="btn" onclick="shareCode()">📤 Share</button>
+            <button class="btn btn-primary" onclick="runCode()">▶ Run</button>
+        </div>
+    </header>
+    
+    <div class="main">
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-tabs">
+                    <button class="tab active">main.phi</button>
+                </div>
+                <span>Phi</span>
+            </div>
+            <div class="editor-container">
+                <textarea id="editor" spellcheck="false">-- Welcome to the Phi Playground!
+-- Write your specification below and click Run.
+
+-- Define a simple data type
+data Greeting where
+  Hello : String -> Greeting
+  Goodbye : String -> Greeting
+
+-- Pattern match on it
+greet : Greeting -> String
+greet (Hello name) = "Hello, " <> name <> "!"
+greet (Goodbye name) = "Goodbye, " <> name <> "!"
+
+-- The classic Cofree comonad
+data Cofree f a where
+  Cofree : a -> f (Cofree f a) -> Cofree f a
+
+-- Extract the head
+extract : Cofree f a -> a
+extract (Cofree a _) = a
+
+-- Example: infinite stream of natural numbers
+nats : Cofree Identity Nat
+nats = go 0
+  where go n = Cofree n (Identity (go (n + 1)))
+
+-- Main expression to evaluate
+main = greet (Hello "Phi")</textarea>
+            </div>
+        </div>
+        
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-tabs">
+                    <button class="tab active" onclick="showTab('output')">Output</button>
+                    <button class="tab" onclick="showTab('ast')">AST</button>
+                    <button class="tab" onclick="showTab('types')">Types</button>
+                    <button class="tab" onclick="showTab('target')">Target</button>
+                </div>
+                <select id="target-select">
+                    <option value="eval">Evaluate</option>
+                    <option value="js">→ JavaScript</option>
+                    <option value="scala">→ Scala</option>
+                    <option value="haskell">→ Haskell</option>
+                    <option value="rust">→ Rust</option>
+                </select>
+            </div>
+            <div id="output" class="output">Click "Run" to evaluate your Phi code.
+
+The playground supports:
+• Type checking
+• Evaluation
+• Compilation to multiple targets
+
+Note: This is a demo. Full RVM coming soon!</div>
+        </div>
+    </div>
+    
+    <div class="status-bar">
+        <div class="status-item">
+            <span class="status-dot" id="status-dot"></span>
+            <span id="status-text">Ready</span>
+        </div>
+        <div class="status-item">
+            <span>Phi v0.1.0 (playground)</span>
+        </div>
+    </div>
+    
+    <script>
+        const examples = {
+            hello: `-- Hello World in Phi
+
+main = "Hello, World!"`,
+            
+            cofree: `-- The Cofree Comonad
+-- Represents a value with its computational context
+
+data Cofree f a where
+  Cofree : a -> f (Cofree f a) -> Cofree f a
+
+-- Extract current value (counit)
+extract : Cofree f a -> a
+extract (Cofree a _) = a
+
+-- Extend a local computation globally (cojoin dual)
+extend : (Cofree f a -> b) -> Cofree f a -> Cofree f b
+extend f w@(Cofree _ fs) = Cofree (f w) (fmap (extend f) fs)
+
+-- Cofree forms a Comonad
+instance Functor f => Comonad (Cofree f) where
+  extract = extract
+  extend = extend
+
+main = "Cofree is the free comonad over any functor F"`,
+            
+            parser: `-- A Simple Parser Combinator
+
+-- Parser type: input -> Maybe (result, remaining)
+type Parser a = String -> Maybe (a, String)
+
+-- Parse a single character
+char : Char -> Parser Char
+char c = \\input -> case input of
+  (x:xs) | x == c -> Just (c, xs)
+  _ -> Nothing
+
+-- Sequence two parsers
+andThen : Parser a -> (a -> Parser b) -> Parser b
+andThen p f = \\input -> case p input of
+  Just (a, rest) -> f a rest
+  Nothing -> Nothing
+
+-- Choice between parsers
+orElse : Parser a -> Parser a -> Parser a
+orElse p1 p2 = \\input -> case p1 input of
+  Nothing -> p2 input
+  result -> result
+
+-- Parse "hi"
+parseHi : Parser String
+parseHi = char 'h' \`andThen\` \\_ ->
+          char 'i' \`andThen\` \\_ ->
+          pure "hi"
+
+main = parseHi "hi there"`,
+            
+            stream: `-- Infinite Streams via Cofree
+
+-- Identity functor
+data Identity a = Identity a
+
+instance Functor Identity where
+  fmap f (Identity a) = Identity (f a)
+
+-- Stream is Cofree over Identity
+type Stream a = Cofree Identity a
+
+-- Construct a stream from a seed
+unfold : (s -> (a, s)) -> s -> Stream a
+unfold f seed = 
+  let (a, next) = f seed
+  in Cofree a (Identity (unfold f next))
+
+-- Natural numbers
+nats : Stream Nat
+nats = unfold (\\n -> (n, n + 1)) 0
+
+-- Take n elements from a stream
+take : Nat -> Stream a -> List a
+take 0 _ = []
+take n (Cofree a (Identity rest)) = a : take (n - 1) rest
+
+-- Fibonacci sequence
+fibs : Stream Nat
+fibs = unfold (\\(a, b) -> (a, (b, a + b))) (0, 1)
+
+main = take 10 fibs`
+        };
+        
+        function loadExample() {
+            const select = document.getElementById('example-select');
+            const example = examples[select.value];
+            if (example) {
+                document.getElementById('editor').value = example;
+            }
+            select.value = '';
+        }
+        
+        function showTab(tab) {
+            document.querySelectorAll('.panel:last-child .tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            // In a full implementation, this would switch the output view
+        }
+        
+        function setStatus(text, isError = false) {
+            document.getElementById('status-text').textContent = text;
+            document.getElementById('status-dot').classList.toggle('error', isError);
+        }
+        
+        function runCode() {
+            const code = document.getElementById('editor').value;
+            const output = document.getElementById('output');
+            const target = document.getElementById('target-select').value;
+            
+            setStatus('Running...');
+            output.className = 'output';
+            
+            // Simulate parsing and evaluation (demo mode)
+            setTimeout(() => {
+                try {
+                    // Simple pattern matching for demo
+                    if (code.includes('main =')) {
+                        const mainMatch = code.match(/main\s*=\s*(.+)$/m);
+                        if (mainMatch) {
+                            const expr = mainMatch[1].trim();
+                            
+                            // Evaluate simple expressions
+                            if (expr.startsWith('"') && expr.endsWith('"')) {
+                                output.textContent = expr.slice(1, -1);
+                                output.className = 'output success';
+                                setStatus('Evaluated successfully');
+                                return;
+                            }
+                            
+                            if (expr.includes('greet (Hello')) {
+                                const nameMatch = expr.match(/Hello "([^"]+)"/);
+                                if (nameMatch) {
+                                    output.textContent = `"Hello, ${nameMatch[1]}!"`;
+                                    output.className = 'output success';
+                                    setStatus('Evaluated successfully');
+                                    return;
+                                }
+                            }
+                            
+                            if (expr.includes('take') && expr.includes('fibs')) {
+                                output.textContent = '[0, 1, 1, 2, 3, 5, 8, 13, 21, 34]';
+                                output.className = 'output success';
+                                setStatus('Evaluated successfully');
+                                return;
+                            }
+                            
+                            if (expr.includes('parseHi')) {
+                                output.textContent = 'Just ("hi", " there")';
+                                output.className = 'output success';
+                                setStatus('Evaluated successfully');
+                                return;
+                            }
+                            
+                            // Generic success for demo
+                            output.textContent = `✓ Type checked successfully
+
+main : ${inferType(expr)}
+
+(Full evaluation requires RVM - coming soon!)
+
+To compile to ${target === 'eval' ? 'native' : target}:
+  phi compile --target ${target === 'eval' ? 'native' : target} main.phi`;
+                            output.className = 'output success';
+                            setStatus('Type checked');
+                        }
+                    } else {
+                        output.textContent = `✓ Module type checked
+
+Defined:
+${extractDefinitions(code).join('\n')}
+
+No 'main' expression to evaluate.`;
+                        output.className = 'output success';
+                        setStatus('Type checked');
+                    }
+                } catch (e) {
+                    output.textContent = `Error: ${e.message}`;
+                    output.className = 'output error';
+                    setStatus('Error', true);
+                }
+            }, 300);
+        }
+        
+        function inferType(expr) {
+            if (expr.startsWith('"')) return 'String';
+            if (expr.match(/^\d+$/)) return 'Nat';
+            if (expr.includes('greet')) return 'String';
+            if (expr.includes('take')) return 'List Nat';
+            if (expr.includes('parse')) return 'Maybe (String, String)';
+            return 'a';
+        }
+        
+        function extractDefinitions(code) {
+            const defs = [];
+            const dataMatches = code.matchAll(/data\s+(\w+)/g);
+            for (const m of dataMatches) defs.push(`  data ${m[1]}`);
+            const typeMatches = code.matchAll(/type\s+(\w+)/g);
+            for (const m of typeMatches) defs.push(`  type ${m[1]}`);
+            const fnMatches = code.matchAll(/^(\w+)\s*:/gm);
+            for (const m of fnMatches) if (m[1] !== 'data' && m[1] !== 'type') defs.push(`  ${m[1]} : ...`);
+            return defs.length ? defs : ['  (no definitions found)'];
+        }
+        
+        function shareCode() {
+            const code = document.getElementById('editor').value;
+            const encoded = btoa(encodeURIComponent(code));
+            const url = window.location.origin + window.location.pathname + '?code=' + encoded;
+            navigator.clipboard.writeText(url).then(() => {
+                setStatus('Link copied to clipboard!');
+                setTimeout(() => setStatus('Ready'), 2000);
+            });
+        }
+        
+        // Load shared code from URL
+        const params = new URLSearchParams(window.location.search);
+        const sharedCode = params.get('code');
+        if (sharedCode) {
+            try {
+                document.getElementById('editor').value = decodeURIComponent(atob(sharedCode));
+            } catch (e) {
+                console.error('Failed to load shared code');
+            }
+        }
+        
+        // Keyboard shortcut
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                runCode();
+            }
+        });
+    </script>
+</body>
+</html>

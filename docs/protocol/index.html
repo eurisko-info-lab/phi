@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>phi:// Protocol - Phi Specification Language</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>φ</text></svg>">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --bg-card: #12121a;
+            --border: #1e1e2e;
+            --text: #e4e4ef;
+            --text-dim: #8888a0;
+            --accent: #818cf8;
+            --accent2: #c084fc;
+            --accent3: #22d3ee;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 2rem;
+        }
+        .container { max-width: 900px; margin: 0 auto; }
+        a { color: var(--accent); }
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .subtitle { color: var(--text-dim); margin-bottom: 2rem; }
+        h2 { margin: 2rem 0 1rem; font-size: 1.5rem; }
+        h3 { margin: 1.5rem 0 0.5rem; font-size: 1.1rem; color: var(--accent3); }
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            margin: 1rem 0;
+        }
+        code {
+            background: var(--bg);
+            padding: 0.2rem 0.5rem;
+            border-radius: 0.25rem;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--accent3);
+        }
+        pre {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            overflow-x: auto;
+            margin: 1rem 0;
+        }
+        pre code { background: none; padding: 0; }
+        .example-list { list-style: none; }
+        .example-list li {
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .example-list li:last-child { border-bottom: none; }
+        .example-uri {
+            font-family: monospace;
+            color: var(--accent);
+            word-break: break-all;
+        }
+        .example-desc { color: var(--text-dim); font-size: 0.9rem; margin-top: 0.25rem; }
+        .btn {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-size: 1rem;
+            margin: 0.5rem 0.5rem 0.5rem 0;
+        }
+        .btn:hover { opacity: 0.9; text-decoration: none; }
+        .btn-secondary {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text);
+        }
+        .status { padding: 1rem; border-radius: 0.5rem; margin: 1rem 0; }
+        .status.success { background: rgba(34, 197, 94, 0.1); border: 1px solid #22c55e; }
+        .status.warning { background: rgba(234, 179, 8, 0.1); border: 1px solid #eab308; }
+        .status.error { background: rgba(239, 68, 68, 0.1); border: 1px solid #ef4444; }
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
+        th { color: var(--text-dim); font-weight: 500; }
+        .back-link { display: inline-block; margin-bottom: 1rem; color: var(--text-dim); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="../" class="back-link">← Back to Phi</a>
+        
+        <h1>phi:// Protocol</h1>
+        <p class="subtitle">A URL scheme for addressing Phi specifications</p>
+        
+        <div class="card">
+            <h3>Try It</h3>
+            <p>Enter a phi:// URI to resolve:</p>
+            <input type="text" id="uri-input" placeholder="phi://eurisko-info-lab/phi/specs/phi-core/specs/phi.phi" 
+                   style="width: 100%; padding: 0.75rem; margin: 0.5rem 0; background: var(--bg); border: 1px solid var(--border); border-radius: 0.5rem; color: var(--text); font-family: monospace;">
+            <button class="btn" onclick="resolveUri()">Resolve</button>
+            <button class="btn btn-secondary" onclick="registerHandler()">Register Handler</button>
+            <div id="result"></div>
+        </div>
+        
+        <h2>Scheme Format</h2>
+        <pre><code>phi://[authority]/[path][?query][#fragment]
+
+authority:
+  owner/repo[@ref]     GitHub repository
+  registry             Central phi registry
+  local                Local filesystem
+  ipfs/[cid]           IPFS content-addressed
+
+path:
+  path/to/spec.phi     Spec file path
+  path/to/spec.phi:Symbol  Symbol within spec
+
+fragment:
+  #L42                 Line 42
+  #L10-L20             Lines 10-20
+  #SymbolName          Jump to symbol</code></pre>
+        
+        <h2>Examples</h2>
+        <div class="card">
+            <ul class="example-list">
+                <li>
+                    <div class="example-uri">phi://eurisko-info-lab/phi/specs/phi-core/specs/phi.phi</div>
+                    <div class="example-desc">The Phi language specification</div>
+                </li>
+                <li>
+                    <div class="example-uri">phi://eurisko-info-lab/phi@main/specs/phi-core/specs/meta.phi#L42</div>
+                    <div class="example-desc">Line 42 of meta.phi on main branch</div>
+                </li>
+                <li>
+                    <div class="example-uri">phi://eurisko-info-lab/phi/specs/phi-core/specs/phi.phi:Cofree</div>
+                    <div class="example-desc">The Cofree type definition</div>
+                </li>
+                <li>
+                    <div class="example-uri">phi://registry/std/prelude.phi</div>
+                    <div class="example-desc">Standard library prelude</div>
+                </li>
+                <li>
+                    <div class="example-uri">phi://local/my-project/types.phi</div>
+                    <div class="example-desc">Local spec (resolved relative to workspace)</div>
+                </li>
+            </ul>
+        </div>
+        
+        <h2>Integration</h2>
+        
+        <h3>VS Code Extension</h3>
+        <p>The Phi VS Code extension registers a URI handler for <code>phi://</code> links:</p>
+        <pre><code>// In extension.ts
+vscode.window.registerUriHandler({
+  handleUri(uri: vscode.Uri): vscode.ProviderResult&lt;void&gt; {
+    const phiUri = parsePhiUri(uri.toString());
+    // Open spec, navigate to symbol/line
+  }
+});</code></pre>
+        
+        <h3>Web Browser</h3>
+        <p>Register <code>web+phi://</code> as a protocol handler:</p>
+        <pre><code>navigator.registerProtocolHandler(
+  'web+phi',
+  'https://eurisko-info-lab.github.io/phi/protocol/open?uri=%s',
+  'Phi Specs'
+);</code></pre>
+        
+        <h3>Desktop (macOS)</h3>
+        <pre><code>&lt;!-- Info.plist --&gt;
+&lt;key&gt;CFBundleURLTypes&lt;/key&gt;
+&lt;array&gt;
+  &lt;dict&gt;
+    &lt;key&gt;CFBundleURLSchemes&lt;/key&gt;
+    &lt;array&gt;&lt;string&gt;phi&lt;/string&gt;&lt;/array&gt;
+  &lt;/dict&gt;
+&lt;/array&gt;</code></pre>
+        
+        <h3>Desktop (Linux)</h3>
+        <pre><code># phi.desktop
+[Desktop Entry]
+Name=Phi Handler
+Exec=phi-open %u
+MimeType=x-scheme-handler/phi;</code></pre>
+        
+        <h3>CLI</h3>
+        <pre><code># Open a phi:// URI in your editor
+phi open phi://eurisko-info-lab/phi/specs/phi.phi#Cofree</code></pre>
+        
+        <h2>Resolution</h2>
+        <table>
+            <tr>
+                <th>Authority</th>
+                <th>Resolution</th>
+            </tr>
+            <tr>
+                <td><code>owner/repo</code></td>
+                <td>GitHub raw content API</td>
+            </tr>
+            <tr>
+                <td><code>registry</code></td>
+                <td>https://phi.dev/registry/</td>
+            </tr>
+            <tr>
+                <td><code>local</code></td>
+                <td>Local filesystem</td>
+            </tr>
+            <tr>
+                <td><code>ipfs/[cid]</code></td>
+                <td>IPFS gateway</td>
+            </tr>
+        </table>
+        
+        <h2>Specification</h2>
+        <p>The formal spec is defined in Phi itself:</p>
+        <p><a href="https://github.com/eurisko-info-lab/phi/blob/main/specs/phi-core/specs/phi-scheme.phi">
+            phi://eurisko-info-lab/phi/specs/phi-core/specs/phi-scheme.phi
+        </a></p>
+    </div>
+    
+    <script>
+        function parsePhiUri(uri) {
+            const match = uri.match(/^phi:\/\/([^\/]+)\/(.+?)(?:\?(.*))?(?:#(.*))?$/);
+            if (!match) return null;
+            
+            const [, authority, path, query, fragment] = match;
+            
+            // Parse authority
+            let authorityParsed;
+            if (authority === 'registry') {
+                authorityParsed = { type: 'registry' };
+            } else if (authority === 'local') {
+                authorityParsed = { type: 'local' };
+            } else if (authority.startsWith('ipfs/')) {
+                authorityParsed = { type: 'ipfs', cid: authority.slice(5) };
+            } else {
+                // GitHub: owner/repo[@ref]
+                const ghMatch = authority.match(/^([^@]+)(?:@(.+))?$/);
+                if (ghMatch) {
+                    const [ownerRepo, ref] = [ghMatch[1], ghMatch[2]];
+                    const [owner, repo] = ownerRepo.split('/');
+                    authorityParsed = { type: 'github', owner, repo, ref: ref || 'main' };
+                }
+            }
+            
+            // Parse path for symbol
+            let specPath = path;
+            let symbol = null;
+            if (path.includes(':') && !path.endsWith('.phi')) {
+                const colonIdx = path.lastIndexOf(':');
+                specPath = path.slice(0, colonIdx);
+                symbol = path.slice(colonIdx + 1);
+            }
+            
+            return { authority: authorityParsed, path: specPath, symbol, query, fragment };
+        }
+        
+        function toGitHubUrl(parsed) {
+            if (parsed.authority.type !== 'github') return null;
+            const { owner, repo, ref } = parsed.authority;
+            let url = `https://github.com/${owner}/${repo}/blob/${ref}/${parsed.path}`;
+            if (parsed.fragment) {
+                if (parsed.fragment.match(/^L\d+/)) {
+                    url += '#' + parsed.fragment;
+                }
+            }
+            return url;
+        }
+        
+        function resolveUri() {
+            const input = document.getElementById('uri-input').value.trim();
+            const result = document.getElementById('result');
+            
+            if (!input) {
+                result.innerHTML = '<div class="status warning">Enter a phi:// URI</div>';
+                return;
+            }
+            
+            const parsed = parsePhiUri(input);
+            if (!parsed) {
+                result.innerHTML = '<div class="status error">Invalid phi:// URI</div>';
+                return;
+            }
+            
+            let html = '<div class="status success">';
+            html += `<strong>Parsed:</strong><br>`;
+            html += `Authority: ${JSON.stringify(parsed.authority)}<br>`;
+            html += `Path: ${parsed.path}<br>`;
+            if (parsed.symbol) html += `Symbol: ${parsed.symbol}<br>`;
+            if (parsed.fragment) html += `Fragment: ${parsed.fragment}<br>`;
+            
+            const ghUrl = toGitHubUrl(parsed);
+            if (ghUrl) {
+                html += `<br><a href="${ghUrl}" target="_blank">Open on GitHub →</a>`;
+            }
+            
+            html += '</div>';
+            result.innerHTML = html;
+        }
+        
+        function registerHandler() {
+            if ('registerProtocolHandler' in navigator) {
+                try {
+                    navigator.registerProtocolHandler(
+                        'web+phi',
+                        window.location.origin + '/phi/protocol/open?uri=%s',
+                        'Phi Specs'
+                    );
+                    document.getElementById('result').innerHTML = 
+                        '<div class="status success">Protocol handler registered! Try clicking web+phi:// links.</div>';
+                } catch (e) {
+                    document.getElementById('result').innerHTML = 
+                        '<div class="status error">Failed to register: ' + e.message + '</div>';
+                }
+            } else {
+                document.getElementById('result').innerHTML = 
+                    '<div class="status warning">Your browser does not support registerProtocolHandler</div>';
+            }
+        }
+        
+        // Handle incoming protocol redirects
+        const params = new URLSearchParams(window.location.search);
+        const incomingUri = params.get('uri');
+        if (incomingUri) {
+            document.getElementById('uri-input').value = incomingUri;
+            resolveUri();
+        }
+    </script>
+</body>
+</html>
