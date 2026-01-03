@@ -17,11 +17,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         
       - name: Build
-        working-directory: specs/phi-core/ports/rust/tools/rvm
+        working-directory: ports/rust/tools/rvm
         run: cargo build --release
         
       - name: Test
-        working-directory: specs/phi-core/ports/rust/tools/rvm
+        working-directory: ports/rust/tools/rvm
         run: cargo test
 
   scala:
@@ -40,5 +40,5 @@ jobs:
         uses: sbt/setup-sbt@v1
           
       - name: Build & Test
-        working-directory: specs/phi-core/ports/scala/tools/phi
+        working-directory: ports/scala/tools/phi
         run: sbt compile test
