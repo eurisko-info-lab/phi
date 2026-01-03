@@ -1,0 +1,444 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- wasm.phi - WebAssembly Target Specification
+-- ═══════════════════════════════════════════════════════════════════════════
+--
+-- Defines the compilation target for WebAssembly, enabling Phi to run
+-- in browsers, Node.js, and other WASM runtimes.
+--
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         WASM TYPES                                       │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+-- WebAssembly value types
+data WasmType where
+  I32 : WasmType
+  I64 : WasmType
+  F32 : WasmType
+  F64 : WasmType
+  V128 : WasmType           -- SIMD vector
+  FuncRef : WasmType        -- Function reference
+  ExternRef : WasmType      -- External reference
+
+-- WebAssembly instructions (subset)
+data WasmInstr where
+  -- Constants
+  I32Const : Int32 -> WasmInstr
+  I64Const : Int64 -> WasmInstr
+  F32Const : Float32 -> WasmInstr
+  F64Const : Float64 -> WasmInstr
+  
+  -- Arithmetic
+  I32Add : WasmInstr
+  I32Sub : WasmInstr
+  I32Mul : WasmInstr
+  I32DivS : WasmInstr
+  I32DivU : WasmInstr
+  I64Add : WasmInstr
+  I64Sub : WasmInstr
+  F64Add : WasmInstr
+  F64Sub : WasmInstr
+  F64Mul : WasmInstr
+  F64Div : WasmInstr
+  
+  -- Comparison
+  I32Eqz : WasmInstr
+  I32Eq : WasmInstr
+  I32Ne : WasmInstr
+  I32LtS : WasmInstr
+  I32GtS : WasmInstr
+  
+  -- Control flow
+  Block : WasmBlockType -> List WasmInstr -> WasmInstr
+  Loop : WasmBlockType -> List WasmInstr -> WasmInstr
+  If : WasmBlockType -> List WasmInstr -> List WasmInstr -> WasmInstr
+  Br : LabelIndex -> WasmInstr
+  BrIf : LabelIndex -> WasmInstr
+  Return : WasmInstr
+  Call : FuncIndex -> WasmInstr
+  CallIndirect : TypeIndex -> TableIndex -> WasmInstr
+  
+  -- Local/Global
+  LocalGet : LocalIndex -> WasmInstr
+  LocalSet : LocalIndex -> WasmInstr
+  LocalTee : LocalIndex -> WasmInstr
+  GlobalGet : GlobalIndex -> WasmInstr
+  GlobalSet : GlobalIndex -> WasmInstr
+  
+  -- Memory
+  I32Load : MemArg -> WasmInstr
+  I64Load : MemArg -> WasmInstr
+  I32Store : MemArg -> WasmInstr
+  I64Store : MemArg -> WasmInstr
+  MemorySize : WasmInstr
+  MemoryGrow : WasmInstr
+  
+  -- Reference types
+  RefNull : WasmType -> WasmInstr
+  RefIsNull : WasmInstr
+  RefFunc : FuncIndex -> WasmInstr
+
+-- Block type
+data WasmBlockType where
+  EmptyBlock : WasmBlockType
+  ValBlock : WasmType -> WasmBlockType
+  TypeBlock : TypeIndex -> WasmBlockType
+
+-- Memory argument
+data MemArg where
+  MemArg : { align : Nat, offset : Nat } -> MemArg
+
+-- Indices
+type FuncIndex = Nat
+type TypeIndex = Nat
+type TableIndex = Nat
+type LocalIndex = Nat
+type GlobalIndex = Nat
+type LabelIndex = Nat
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         MODULE STRUCTURE                                 │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+-- WebAssembly module
+data WasmModule where
+  WasmModule : {
+    types    : List WasmFuncType,
+    imports  : List WasmImport,
+    funcs    : List WasmFunc,
+    tables   : List WasmTable,
+    memories : List WasmMemory,
+    globals  : List WasmGlobal,
+    exports  : List WasmExport,
+    start    : Maybe FuncIndex,
+    data     : List WasmData
+  } -> WasmModule
+
+-- Function type
+data WasmFuncType where
+  FuncType : { params : List WasmType, results : List WasmType } -> WasmFuncType
+
+-- Function
+data WasmFunc where
+  Func : {
+    typeIdx : TypeIndex,
+    locals  : List WasmType,
+    body    : List WasmInstr
+  } -> WasmFunc
+
+-- Import
+data WasmImport where
+  ImportFunc   : String -> String -> TypeIndex -> WasmImport
+  ImportTable  : String -> String -> WasmTable -> WasmImport
+  ImportMemory : String -> String -> WasmMemory -> WasmImport
+  ImportGlobal : String -> String -> WasmGlobal -> WasmImport
+
+-- Export  
+data WasmExport where
+  ExportFunc   : String -> FuncIndex -> WasmExport
+  ExportTable  : String -> TableIndex -> WasmExport
+  ExportMemory : String -> Nat -> WasmExport
+  ExportGlobal : String -> GlobalIndex -> WasmExport
+
+-- Memory
+data WasmMemory where
+  Memory : { min : Nat, max : Maybe Nat } -> WasmMemory
+
+-- Table
+data WasmTable where
+  Table : { elemType : WasmType, min : Nat, max : Maybe Nat } -> WasmTable
+
+-- Global
+data WasmGlobal where
+  Global : { typ : WasmType, mutable : Bool, init : List WasmInstr } -> WasmGlobal
+
+-- Data segment
+data WasmData where
+  DataActive  : Nat -> List WasmInstr -> Bytes -> WasmData
+  DataPassive : Bytes -> WasmData
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         PHI TO WASM COMPILATION                          │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+-- Compilation context
+data WasmCompileCtx where
+  WasmCompileCtx : {
+    types    : List WasmFuncType,
+    funcs    : List WasmFunc,
+    locals   : Map String LocalIndex,
+    globals  : Map String GlobalIndex,
+    labels   : List String,          -- Label stack for br
+    nextLocal : Nat
+  } -> WasmCompileCtx
+
+-- Compile a Phi expression to WASM instructions
+compileExpr : PhiExpr -> WasmCompileCtx -> (List WasmInstr, WasmCompileCtx)
+
+-- Literals
+compileExpr (Lit (IntLit n)) ctx = ([I32Const (toInt32 n)], ctx)
+compileExpr (Lit (FloatLit f)) ctx = ([F64Const f], ctx)
+
+-- Variables
+compileExpr (Var name) ctx = 
+  case lookup name ctx.locals of
+    Just idx -> ([LocalGet idx], ctx)
+    Nothing -> case lookup name ctx.globals of
+      Just idx -> ([GlobalGet idx], ctx)
+      Nothing -> error ("Unbound variable: " <> name)
+
+-- Binary operations
+compileExpr (BinOp Add e1 e2) ctx =
+  let (code1, ctx1) = compileExpr e1 ctx
+      (code2, ctx2) = compileExpr e2 ctx1
+  in (code1 <> code2 <> [I32Add], ctx2)
+
+compileExpr (BinOp Sub e1 e2) ctx =
+  let (code1, ctx1) = compileExpr e1 ctx
+      (code2, ctx2) = compileExpr e2 ctx1
+  in (code1 <> code2 <> [I32Sub], ctx2)
+
+compileExpr (BinOp Mul e1 e2) ctx =
+  let (code1, ctx1) = compileExpr e1 ctx
+      (code2, ctx2) = compileExpr e2 ctx1
+  in (code1 <> code2 <> [I32Mul], ctx2)
+
+-- If expressions
+compileExpr (IfExpr cond then_ else_) ctx =
+  let (condCode, ctx1) = compileExpr cond ctx
+      (thenCode, ctx2) = compileExpr then_ ctx1
+      (elseCode, ctx3) = compileExpr else_ ctx2
+  in (condCode <> [If (ValBlock I32) thenCode elseCode], ctx3)
+
+-- Function application
+compileExpr (App f args) ctx =
+  let (argsCode, ctx') = foldl compileArg ([], ctx) args
+      funcIdx = lookupFunc f ctx'
+  in (argsCode <> [Call funcIdx], ctx')
+  where
+    compileArg (code, c) arg =
+      let (argCode, c') = compileExpr arg c
+      in (code <> argCode, c')
+
+-- Let bindings
+compileExpr (Let name value body) ctx =
+  let (valueCode, ctx1) = compileExpr value ctx
+      localIdx = ctx1.nextLocal
+      ctx2 = ctx1 { 
+        locals = insert name localIdx ctx1.locals,
+        nextLocal = localIdx + 1 
+      }
+      (bodyCode, ctx3) = compileExpr body ctx2
+  in (valueCode <> [LocalSet localIdx] <> bodyCode, ctx3)
+
+-- Lambda (creates a function)
+compileExpr (Lambda params body) ctx =
+  -- Lambdas need to be lifted to top-level functions
+  -- and replaced with a FuncRef
+  let funcIdx = length ctx.funcs
+      paramTypes = map (const I32) params
+      funcType = FuncType { params = paramTypes, results = [I32] }
+      
+      -- Create local context for function body
+      localCtx = ctx { 
+        locals = fromList (zip params [0..]),
+        nextLocal = length params
+      }
+      (bodyCode, _) = compileExpr body localCtx
+      
+      func = Func {
+        typeIdx = length ctx.types,
+        locals = [],
+        body = bodyCode <> [Return]
+      }
+      
+      ctx' = ctx {
+        types = ctx.types <> [funcType],
+        funcs = ctx.funcs <> [func]
+      }
+  in ([RefFunc funcIdx], ctx')
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         WASM BINARY ENCODING                             │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+-- Encode module to WASM binary format
+encodeModule : WasmModule -> Bytes
+encodeModule mod = 
+  magic <> version <> sections
+  where
+    magic = [0x00, 0x61, 0x73, 0x6D]  -- \0asm
+    version = [0x01, 0x00, 0x00, 0x00]  -- version 1
+    sections = 
+      encodeTypeSection mod.types <>
+      encodeImportSection mod.imports <>
+      encodeFunctionSection mod.funcs <>
+      encodeTableSection mod.tables <>
+      encodeMemorySection mod.memories <>
+      encodeGlobalSection mod.globals <>
+      encodeExportSection mod.exports <>
+      encodeStartSection mod.start <>
+      encodeCodeSection mod.funcs <>
+      encodeDataSection mod.data
+
+-- LEB128 encoding for integers
+encodeLEB128 : Nat -> Bytes
+encodeLEB128 n
+  | n < 128 = [n]
+  | otherwise = (n .&. 0x7F .|. 0x80) : encodeLEB128 (n `shiftR` 7)
+
+-- Signed LEB128
+encodeSignedLEB128 : Int -> Bytes
+encodeSignedLEB128 n = encodeLEB128Signed n
+
+-- Section encoding
+encodeSection : Nat -> Bytes -> Bytes
+encodeSection id content =
+  [id] <> encodeLEB128 (length content) <> content
+
+-- Type section (id = 1)
+encodeTypeSection : List WasmFuncType -> Bytes
+encodeTypeSection [] = []
+encodeTypeSection types =
+  encodeSection 1 (encodeLEB128 (length types) <> concatMap encodeType types)
+
+encodeType : WasmFuncType -> Bytes
+encodeType (FuncType { params, results }) =
+  [0x60] <> encodeVec params <> encodeVec results
+  where
+    encodeVec xs = encodeLEB128 (length xs) <> concatMap encodeValType xs
+    encodeValType I32 = [0x7F]
+    encodeValType I64 = [0x7E]
+    encodeValType F32 = [0x7D]
+    encodeValType F64 = [0x7C]
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         JAVASCRIPT INTEROP                               │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+-- Generate JavaScript bindings for the WASM module
+generateJSBindings : WasmModule -> String
+generateJSBindings mod = unlines [
+  "// Auto-generated Phi WASM bindings",
+  "let wasmInstance = null;",
+  "",
+  "export async function init(wasmUrl) {",
+  "  const response = await fetch(wasmUrl);",
+  "  const bytes = await response.arrayBuffer();",
+  "  const { instance } = await WebAssembly.instantiate(bytes, {",
+  "    env: {",
+  "      // Phi runtime imports",
+  "      phi_print: (ptr, len) => console.log(readString(ptr, len)),",
+  "      phi_alloc: (size) => wasmInstance.exports.alloc(size),",
+  "      phi_free: (ptr) => wasmInstance.exports.free(ptr),",
+  "    }",
+  "  });",
+  "  wasmInstance = instance;",
+  "  return instance.exports;",
+  "}",
+  "",
+  generateExportBindings mod.exports
+  ]
+
+generateExportBindings : List WasmExport -> String
+generateExportBindings exports = 
+  unlines (map genExport (filter isFunc exports))
+  where
+    isFunc (ExportFunc _ _) = True
+    isFunc _ = False
+    genExport (ExportFunc name _) = unlines [
+      "export function " <> name <> "(...args) {",
+      "  return wasmInstance.exports." <> name <> "(...args);",
+      "}"
+      ]
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         RUNTIME SUPPORT                                  │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+-- Phi runtime for WASM (memory management, GC, etc.)
+phiWasmRuntime : WasmModule
+phiWasmRuntime = WasmModule {
+  types = [
+    FuncType { params = [I32], results = [I32] },      -- alloc
+    FuncType { params = [I32], results = [] },         -- free
+    FuncType { params = [I32, I32], results = [I32] }  -- realloc
+  ],
+  imports = [],
+  funcs = [allocFunc, freeFunc, reallocFunc],
+  tables = [],
+  memories = [Memory { min = 256, max = Just 65536 }],  -- 16MB-4GB
+  globals = [
+    Global { typ = I32, mutable = True, init = [I32Const 0] }  -- heap_ptr
+  ],
+  exports = [
+    ExportFunc "alloc" 0,
+    ExportFunc "free" 1,
+    ExportFunc "realloc" 2,
+    ExportMemory "memory" 0
+  ],
+  start = Nothing,
+  data = []
+}
+
+-- Simple bump allocator
+allocFunc : WasmFunc
+allocFunc = Func {
+  typeIdx = 0,
+  locals = [],
+  body = [
+    GlobalGet 0,        -- current heap ptr
+    LocalGet 0,         -- size to allocate
+    I32Add,             -- new heap ptr
+    GlobalSet 0,        -- update heap ptr
+    GlobalGet 0,        -- return old ptr (start of allocation)
+    LocalGet 0,
+    I32Sub
+  ]
+}
+
+freeFunc : WasmFunc
+freeFunc = Func {
+  typeIdx = 1,
+  locals = [],
+  body = []  -- No-op for bump allocator (GC handles it)
+}
+
+reallocFunc : WasmFunc
+reallocFunc = Func {
+  typeIdx = 2,
+  locals = [I32],  -- new_ptr
+  body = [
+    LocalGet 1,         -- new size
+    Call 0,             -- alloc new
+    LocalSet 2,         -- save new ptr
+    -- TODO: copy old data
+    LocalGet 2          -- return new ptr
+  ]
+}
+
+-- ┌─────────────────────────────────────────────────────────────────────────┐
+-- │                         EXAMPLES                                         │
+-- └─────────────────────────────────────────────────────────────────────────┘
+
+-- Compile a simple Phi program to WASM
+example_compile : IO ()
+example_compile = do
+  let phi_source = """
+    factorial : Nat -> Nat
+    factorial 0 = 1
+    factorial n = n * factorial (n - 1)
+    
+    main = factorial 10
+  """
+  
+  let wasm_module = compilePhi phi_source
+  let wasm_bytes = encodeModule wasm_module
+  
+  writeFile "factorial.wasm" wasm_bytes
+  putStrLn "Generated factorial.wasm"
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- END wasm.phi
+-- ═══════════════════════════════════════════════════════════════════════════

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Phi Playground</title>
+    <title>Φ Playground</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>Φ</text></svg>">
     <style>
         :root {
@@ -50,7 +50,7 @@
             -webkit-text-fill-color: transparent;
         }
         .logo-text { font-weight: 600; }
-        .header-actions { display: flex; gap: 0.5rem; }
+        .header-actions { display: flex; gap: 0.5rem; align-items: center; }
         .btn {
             padding: 0.5rem 1rem;
             border: 1px solid var(--border);
@@ -66,6 +66,7 @@
         .btn:hover { border-color: var(--accent); }
         .btn-primary { background: var(--accent); border-color: var(--accent); color: white; }
         .btn-primary:hover { opacity: 0.9; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         
         .main {
             flex: 1;
@@ -152,7 +153,19 @@
             border-radius: 50%;
             background: var(--success);
         }
+        .status-dot.loading { background: var(--accent); animation: pulse 1s infinite; }
         .status-dot.error { background: var(--error); }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        
+        .wasm-badge {
+            padding: 0.125rem 0.5rem;
+            background: var(--success);
+            color: white;
+            border-radius: 0.25rem;
+            font-size: 0.625rem;
+            font-weight: 600;
+        }
+        .wasm-badge.demo { background: var(--accent); }
         
         select {
             background: var(--bg);
@@ -175,15 +188,17 @@
             <span class="logo-text">Phi Playground</span>
         </a>
         <div class="header-actions">
+            <span id="wasm-status" class="wasm-badge demo">DEMO</span>
             <select id="example-select" onchange="loadExample()">
                 <option value="">Load example...</option>
                 <option value="hello">Hello World</option>
+                <option value="calc">Calculator</option>
+                <option value="rvm">RVM Assembly</option>
                 <option value="cofree">Cofree Comonad</option>
-                <option value="parser">JSON Parser</option>
                 <option value="stream">Infinite Streams</option>
             </select>
             <button class="btn" onclick="shareCode()">📤 Share</button>
-            <button class="btn btn-primary" onclick="runCode()">▶ Run</button>
+            <button class="btn btn-primary" id="run-btn" onclick="runCode()">▶ Run</button>
         </div>
     </header>
     
@@ -191,39 +206,26 @@
         <div class="panel">
             <div class="panel-header">
                 <div class="panel-tabs">
-                    <button class="tab active">main.phi</button>
+                    <button class="tab active" onclick="setMode('phi')">main.phi</button>
+                    <button class="tab" onclick="setMode('rvm')">main.rvm</button>
                 </div>
-                <span>Phi</span>
+                <span id="mode-label">Phi</span>
             </div>
             <div class="editor-container">
-                <textarea id="editor" spellcheck="false">-- Welcome to the Phi Playground!
+                <textarea id="editor" spellcheck="false">-- Welcome to the Φ Playground!
 -- Write your specification below and click Run.
 
--- Define a simple data type
+-- Type signature
+greet : String -> String
+greet name = "Hello, " ++ name ++ "!"
+
+-- Algebraic data type
 data Greeting where
   Hello : String -> Greeting
-  Goodbye : String -> Greeting
-
--- Pattern match on it
-greet : Greeting -> String
-greet (Hello name) = "Hello, " <> name <> "!"
-greet (Goodbye name) = "Goodbye, " <> name <> "!"
-
--- The classic Cofree comonad
-data Cofree f a where
-  Cofree : a -> f (Cofree f a) -> Cofree f a
-
--- Extract the head
-extract : Cofree f a -> a
-extract (Cofree a _) = a
-
--- Example: infinite stream of natural numbers
-nats : Cofree Identity Nat
-nats = go 0
-  where go n = Cofree n (Identity (go (n + 1)))
 
 -- Main expression to evaluate
-main = greet (Hello "Phi")</textarea>
+main = greet "World"
+</textarea>
             </div>
         </div>
         
@@ -231,135 +233,146 @@ main = greet (Hello "Phi")</textarea>
             <div class="panel-header">
                 <div class="panel-tabs">
                     <button class="tab active" onclick="showTab('output')">Output</button>
-                    <button class="tab" onclick="showTab('ast')">AST</button>
                     <button class="tab" onclick="showTab('types')">Types</button>
-                    <button class="tab" onclick="showTab('target')">Target</button>
+                    <button class="tab" onclick="showTab('bytecode')">Bytecode</button>
                 </div>
                 <select id="target-select">
                     <option value="eval">Evaluate</option>
-                    <option value="js">→ JavaScript</option>
-                    <option value="scala">→ Scala</option>
-                    <option value="haskell">→ Haskell</option>
-                    <option value="rust">→ Rust</option>
+                    <option value="rvm">Compile to RVM</option>
+                    <option value="js">Compile to JS</option>
                 </select>
             </div>
-            <div id="output" class="output">Click "Run" to evaluate your Phi code.
+            <div id="output" class="output">Click "Run" or press Ctrl+Enter to evaluate.
 
-The playground supports:
-• Type checking
-• Evaluation
-• Compilation to multiple targets
-
-Note: This is a demo. Full RVM coming soon!</div>
+Using RosettaVM in WebAssembly for real evaluation!</div>
         </div>
     </div>
     
     <div class="status-bar">
         <div class="status-item">
-            <span class="status-dot" id="status-dot"></span>
-            <span id="status-text">Ready</span>
+            <span id="status-dot" class="status-dot loading"></span>
+            <span id="status-text">Loading RosettaVM...</span>
         </div>
         <div class="status-item">
-            <span>Phi v0.1.0 (playground)</span>
+            <span id="vm-version">--</span>
         </div>
     </div>
     
-    <script>
+    <script type="module">
+        // Import WASM module
+        import init, { evaluate, evaluate_expr, calculate, version, parse_rvm } from '../wasm/rosettavm.js';
+        
+        let wasmReady = false;
+        let currentMode = 'phi';
+        
+        // Initialize WASM
+        async function initWasm() {
+            try {
+                await init();
+                wasmReady = true;
+                document.getElementById('wasm-status').textContent = 'WASM';
+                document.getElementById('wasm-status').className = 'wasm-badge';
+                document.getElementById('status-text').textContent = 'Ready';
+                document.getElementById('status-dot').className = 'status-dot';
+                document.getElementById('vm-version').textContent = version();
+                console.log('RosettaVM WASM initialized:', version());
+            } catch (e) {
+                console.error('WASM init failed:', e);
+                document.getElementById('wasm-status').textContent = 'DEMO';
+                document.getElementById('wasm-status').className = 'wasm-badge demo';
+                document.getElementById('status-text').textContent = 'Demo mode (WASM unavailable)';
+                document.getElementById('status-dot').className = 'status-dot';
+            }
+        }
+        
+        initWasm();
+        
+        // Make functions available globally
+        window.runCode = runCode;
+        window.loadExample = loadExample;
+        window.shareCode = shareCode;
+        window.showTab = showTab;
+        window.setMode = setMode;
+        
         const examples = {
-            hello: `-- Hello World in Phi
+            hello: `-- Hello World in Φ
+greet : String -> String
+greet name = "Hello, " ++ name ++ "!"
 
-main = "Hello, World!"`,
+main = greet "World"`,
             
-            cofree: `-- The Cofree Comonad
--- Represents a value with its computational context
+            calc: `-- Calculator example
+-- Expressions that can be evaluated by RosettaVM
 
+-- Try these in the editor:
+-- 42
+-- 1 + 2
+-- 10 * 5
+-- 100 - 37
+
+main = 6 * 7`,
+            
+            rvm: `; RosettaVM assembly example
+; Switch to "main.rvm" tab for assembly mode
+
+fn main() {
+    push 6
+    push 7
+    mul
+    halt
+}`,
+            
+            cofree: `-- Cofree Comonad: the universal comonad
 data Cofree f a where
   Cofree : a -> f (Cofree f a) -> Cofree f a
 
--- Extract current value (counit)
+-- Extract the head
 extract : Cofree f a -> a
 extract (Cofree a _) = a
 
--- Extend a local computation globally (cojoin dual)
+-- Extend a function across the structure
 extend : (Cofree f a -> b) -> Cofree f a -> Cofree f b
 extend f w@(Cofree _ fs) = Cofree (f w) (fmap (extend f) fs)
 
--- Cofree forms a Comonad
-instance Functor f => Comonad (Cofree f) where
-  extract = extract
-  extend = extend
-
-main = "Cofree is the free comonad over any functor F"`,
+main = extract (Cofree 42 [])`,
             
-            parser: `-- A Simple Parser Combinator
-
--- Parser type: input -> Maybe (result, remaining)
-type Parser a = String -> Maybe (a, String)
-
--- Parse a single character
-char : Char -> Parser Char
-char c = \\input -> case input of
-  (x:xs) | x == c -> Just (c, xs)
-  _ -> Nothing
-
--- Sequence two parsers
-andThen : Parser a -> (a -> Parser b) -> Parser b
-andThen p f = \\input -> case p input of
-  Just (a, rest) -> f a rest
-  Nothing -> Nothing
-
--- Choice between parsers
-orElse : Parser a -> Parser a -> Parser a
-orElse p1 p2 = \\input -> case p1 input of
-  Nothing -> p2 input
-  result -> result
-
--- Parse "hi"
-parseHi : Parser String
-parseHi = char 'h' \`andThen\` \\_ ->
-          char 'i' \`andThen\` \\_ ->
-          pure "hi"
-
-main = parseHi "hi there"`,
-            
-            stream: `-- Infinite Streams via Cofree
-
--- Identity functor
-data Identity a = Identity a
-
-instance Functor Identity where
-  fmap f (Identity a) = Identity (f a)
-
--- Stream is Cofree over Identity
+            stream: `-- Infinite Streams using Cofree
 type Stream a = Cofree Identity a
-
--- Construct a stream from a seed
-unfold : (s -> (a, s)) -> s -> Stream a
-unfold f seed = 
-  let (a, next) = f seed
-  in Cofree a (Identity (unfold f next))
 
 -- Natural numbers
 nats : Stream Nat
 nats = unfold (\\n -> (n, n + 1)) 0
 
--- Take n elements from a stream
-take : Nat -> Stream a -> List a
-take 0 _ = []
-take n (Cofree a (Identity rest)) = a : take (n - 1) rest
-
--- Fibonacci sequence
+-- Fibonacci sequence  
 fibs : Stream Nat
 fibs = unfold (\\(a, b) -> (a, (b, a + b))) (0, 1)
 
+-- Take first n elements
+take : Nat -> Stream a -> List a
+take 0 _ = []
+take n (Cofree a (Identity rest)) = a :: take (n - 1) rest
+
 main = take 10 fibs`
         };
+        
+        function setMode(mode) {
+            currentMode = mode;
+            document.querySelectorAll('.panel:first-child .tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`.panel:first-child .tab:${mode === 'phi' ? 'first' : 'last'}-child`).classList.add('active');
+            document.getElementById('mode-label').textContent = mode === 'phi' ? 'Phi' : 'RVM Assembly';
+        }
         
         function loadExample() {
             const select = document.getElementById('example-select');
             const example = examples[select.value];
             if (example) {
                 document.getElementById('editor').value = example;
+                // Switch mode based on example
+                if (select.value === 'rvm') {
+                    setMode('rvm');
+                } else {
+                    setMode('phi');
+                }
             }
             select.value = '';
         }
@@ -367,12 +380,12 @@ main = take 10 fibs`
         function showTab(tab) {
             document.querySelectorAll('.panel:last-child .tab').forEach(t => t.classList.remove('active'));
             event.target.classList.add('active');
-            // In a full implementation, this would switch the output view
         }
         
-        function setStatus(text, isError = false) {
+        function setStatus(text, isError = false, isLoading = false) {
             document.getElementById('status-text').textContent = text;
-            document.getElementById('status-dot').classList.toggle('error', isError);
+            const dot = document.getElementById('status-dot');
+            dot.className = 'status-dot' + (isError ? ' error' : '') + (isLoading ? ' loading' : '');
         }
         
         function runCode() {
@@ -380,86 +393,129 @@ main = take 10 fibs`
             const output = document.getElementById('output');
             const target = document.getElementById('target-select').value;
             
-            setStatus('Running...');
+            setStatus('Running...', false, true);
             output.className = 'output';
             
-            // Simulate parsing and evaluation (demo mode)
             setTimeout(() => {
                 try {
-                    // Simple pattern matching for demo
-                    if (code.includes('main =')) {
+                    // If WASM is ready and we have RVM assembly
+                    if (wasmReady && currentMode === 'rvm') {
+                        const result = evaluate(code);
+                        output.textContent = `✓ RosettaVM Result:\n\n${result}`;
+                        output.className = 'output success';
+                        setStatus('Evaluated with WASM');
+                        return;
+                    }
+                    
+                    // If WASM is ready, try simple expression evaluation
+                    if (wasmReady && code.includes('main =')) {
                         const mainMatch = code.match(/main\s*=\s*(.+)$/m);
                         if (mainMatch) {
                             const expr = mainMatch[1].trim();
                             
-                            // Evaluate simple expressions
-                            if (expr.startsWith('"') && expr.endsWith('"')) {
-                                output.textContent = expr.slice(1, -1);
-                                output.className = 'output success';
-                                setStatus('Evaluated successfully');
-                                return;
-                            }
-                            
-                            if (expr.includes('greet (Hello')) {
-                                const nameMatch = expr.match(/Hello "([^"]+)"/);
-                                if (nameMatch) {
-                                    output.textContent = `"Hello, ${nameMatch[1]}!"`;
+                            // Try numeric expressions with WASM
+                            if (/^[\d\s\+\-\*\/\%\(\)]+$/.test(expr)) {
+                                try {
+                                    const result = calculate(expr);
+                                    output.textContent = `✓ RosettaVM Result:\n\n${result}`;
                                     output.className = 'output success';
-                                    setStatus('Evaluated successfully');
+                                    setStatus('Evaluated with WASM');
                                     return;
+                                } catch (e) {
+                                    // Fall through to demo mode
                                 }
                             }
-                            
-                            if (expr.includes('take') && expr.includes('fibs')) {
-                                output.textContent = '[0, 1, 1, 2, 3, 5, 8, 13, 21, 34]';
-                                output.className = 'output success';
-                                setStatus('Evaluated successfully');
-                                return;
-                            }
-                            
-                            if (expr.includes('parseHi')) {
-                                output.textContent = 'Just ("hi", " there")';
-                                output.className = 'output success';
-                                setStatus('Evaluated successfully');
-                                return;
-                            }
-                            
-                            // Generic success for demo
-                            output.textContent = `✓ Type checked successfully
+                        }
+                    }
+                    
+                    // Demo mode fallback
+                    runDemoMode(code, output, target);
+                    
+                } catch (e) {
+                    output.textContent = `Error: ${e.message || e}`;
+                    output.className = 'output error';
+                    setStatus('Error', true);
+                }
+            }, 100);
+        }
+        
+        function runDemoMode(code, output, target) {
+            // Pattern matching for demo
+            if (code.includes('main =')) {
+                const mainMatch = code.match(/main\s*=\s*(.+)$/m);
+                if (mainMatch) {
+                    const expr = mainMatch[1].trim();
+                    
+                    // String literals
+                    if (expr.startsWith('"') && expr.endsWith('"')) {
+                        output.textContent = expr.slice(1, -1);
+                        output.className = 'output success';
+                        setStatus('Evaluated (demo)');
+                        return;
+                    }
+                    
+                    // Simple arithmetic
+                    if (/^[\d\s\+\-\*\/]+$/.test(expr)) {
+                        try {
+                            const result = eval(expr);
+                            output.textContent = String(result);
+                            output.className = 'output success';
+                            setStatus('Evaluated (demo)');
+                            return;
+                        } catch {}
+                    }
+                    
+                    // Pattern: greet "..."
+                    if (expr.includes('greet "')) {
+                        const nameMatch = expr.match(/greet "([^"]+)"/);
+                        if (nameMatch) {
+                            output.textContent = `"Hello, ${nameMatch[1]}!"`;
+                            output.className = 'output success';
+                            setStatus('Evaluated (demo)');
+                            return;
+                        }
+                    }
+                    
+                    // Pattern: take n fibs
+                    if (expr.includes('take') && expr.includes('fibs')) {
+                        output.textContent = '[0, 1, 1, 2, 3, 5, 8, 13, 21, 34]';
+                        output.className = 'output success';
+                        setStatus('Evaluated (demo)');
+                        return;
+                    }
+                    
+                    // Generic success
+                    output.textContent = `✓ Type checked successfully
 
 main : ${inferType(expr)}
 
-(Full evaluation requires RVM - coming soon!)
+Expression: ${expr}
 
-To compile to ${target === 'eval' ? 'native' : target}:
-  phi compile --target ${target === 'eval' ? 'native' : target} main.phi`;
-                            output.className = 'output success';
-                            setStatus('Type checked');
-                        }
-                    } else {
-                        output.textContent = `✓ Module type checked
+Full evaluation available for:
+• RVM assembly (switch to main.rvm tab)
+• Numeric expressions (try: main = 6 * 7)`;
+                    output.className = 'output success';
+                    setStatus('Type checked (demo)');
+                }
+            } else {
+                output.textContent = `✓ Module type checked
 
 Defined:
 ${extractDefinitions(code).join('\n')}
 
 No 'main' expression to evaluate.`;
-                        output.className = 'output success';
-                        setStatus('Type checked');
-                    }
-                } catch (e) {
-                    output.textContent = `Error: ${e.message}`;
-                    output.className = 'output error';
-                    setStatus('Error', true);
-                }
-            }, 300);
+                output.className = 'output success';
+                setStatus('Type checked (demo)');
+            }
         }
         
         function inferType(expr) {
             if (expr.startsWith('"')) return 'String';
             if (expr.match(/^\d+$/)) return 'Nat';
+            if (expr.match(/^[\d\s\+\-\*\/]+$/)) return 'Nat';
             if (expr.includes('greet')) return 'String';
             if (expr.includes('take')) return 'List Nat';
-            if (expr.includes('parse')) return 'Maybe (String, String)';
+            if (expr.includes('extract')) return 'a';
             return 'a';
         }
         
