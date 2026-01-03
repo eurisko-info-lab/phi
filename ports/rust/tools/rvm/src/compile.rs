@@ -38,6 +38,7 @@ pub enum BinOp {
     Eq, Ne, Lt, Le, Gt, Ge,
     And, Or,
     Cons,
+    Concat,  // String concatenation (++)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -130,6 +131,7 @@ impl Compiler {
                     BinOp::And => Instr::And,
                     BinOp::Or => Instr::Or,
                     BinOp::Cons => Instr::Cons,
+                    BinOp::Concat => Instr::StrConcat,
                 });
             }
             Expr::If(cond, then_e, else_e) => {
@@ -225,6 +227,7 @@ impl Compiler {
                     BinOp::And => Instr::And,
                     BinOp::Or => Instr::Or,
                     BinOp::Cons => Instr::Cons,
+                    BinOp::Concat => Instr::StrConcat,
                 });
             }
 

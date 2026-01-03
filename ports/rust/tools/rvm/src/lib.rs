@@ -337,6 +337,10 @@ fn format_instr(instr: &crate::instr::Instr) -> String {
         Instr::IsNil => "ISNIL".to_string(),
         Instr::Len => "LEN".to_string(),
         
+        // Strings
+        Instr::StrConcat => "STRCAT".to_string(),
+        Instr::StrLen => "STRLEN".to_string(),
+        
         // Fallback for any other instructions
         _ => format!("{:?}", instr),
     }
@@ -383,6 +387,8 @@ fn convert_expr(e: &crate::port::expr::Expr) -> compile::Expr {
                 ">=" => compile::BinOp::Ge,
                 "&&" => compile::BinOp::And,
                 "||" => compile::BinOp::Or,
+                "++" => compile::BinOp::Concat,
+                ":" => compile::BinOp::Cons,
                 _ => compile::BinOp::Add, // fallback
             };
             compile::Expr::BinOp(bin_op, Box::new(convert_expr(l)), Box::new(convert_expr(r)))
