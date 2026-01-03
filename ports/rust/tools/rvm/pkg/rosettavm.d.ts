@@ -8,6 +8,7 @@ export function calculate(expr: string): string;
 
 /**
  * Compile Phi source code to RVM assembly using proper grammar-based parser
+ * For full programs with type signatures and function definitions, extracts main expression
  */
 export function compile_phi(source: string): string;
 

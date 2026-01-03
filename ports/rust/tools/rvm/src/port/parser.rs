@@ -375,7 +375,11 @@ pub struct Parser<'a> {
 impl<'a> Parser<'a> {
     pub fn new(input: &'a str) -> ParseResult<Self> {
         let mut lexer = Lexer::new(input);
-        let current = lexer.next_token()?;
+        let mut current = lexer.next_token()?;
+        // Skip leading newlines
+        while current == Token::Newline {
+            current = lexer.next_token()?;
+        }
         Ok(Parser { lexer, current, peeked: None })
     }
     
