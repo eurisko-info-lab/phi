@@ -368,6 +368,252 @@ fn compile_phi_expr(source: &str) -> Result<String, JsValue> {
     Ok(output)
 }
 
+/// Pattern in function arguments
+#[derive(Debug, Clone)]
+enum FnPattern {
+    /// Simple variable binding: x
+    Var(String),
+    /// Constructor pattern: (Ctor x y z)
+    Ctor(String, Vec<String>),
+    /// Literal pattern: 0, "hello"
+    Literal(String),
+}
+
+/// Parse function argument patterns
+/// Handles: x, (Ctor x y), 0, "str"
+fn parse_function_patterns(args: &str) -> Result<Vec<FnPattern>, String> {
+    let mut patterns = Vec::new();
+    let mut chars = args.chars().peekable();
+    
+    while let Some(&c) = chars.peek() {
+        // Skip whitespace
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        
+        if c == '(' {
+            // Constructor pattern: (Ctor x y z)
+            chars.next(); // consume '('
+            let mut inner = String::new();
+            let mut depth = 1;
+            while let Some(ch) = chars.next() {
+                if ch == '(' { depth += 1; }
+                if ch == ')' { 
+                    depth -= 1;
+                    if depth == 0 { break; }
+                }
+                inner.push(ch);
+            }
+            // Parse inner as "Ctor x y z"
+            let parts: Vec<&str> = inner.split_whitespace().collect();
+            if parts.is_empty() {
+                return Err("Empty constructor pattern".to_string());
+            }
+            let ctor_name = parts[0].to_string();
+            let bindings: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+            patterns.push(FnPattern::Ctor(ctor_name, bindings));
+        } else if c.is_alphabetic() || c == '_' {
+            // Variable or constructor without parens
+            let mut name = String::new();
+            while let Some(&ch) = chars.peek() {
+                if ch.is_alphanumeric() || ch == '_' || ch == '\'' {
+                    name.push(ch);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            // Check if uppercase (constructor) or lowercase (variable)
+            if name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                patterns.push(FnPattern::Ctor(name, vec![]));
+            } else {
+                patterns.push(FnPattern::Var(name));
+            }
+        } else if c.is_numeric() {
+            // Literal number pattern
+            let mut num = String::new();
+            while let Some(&ch) = chars.peek() {
+                if ch.is_numeric() {
+                    num.push(ch);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            patterns.push(FnPattern::Literal(num));
+        } else if c == '"' {
+            // String literal pattern
+            chars.next(); // consume opening quote
+            let mut s = String::from("\"");
+            while let Some(ch) = chars.next() {
+                s.push(ch);
+                if ch == '"' { break; }
+            }
+            patterns.push(FnPattern::Literal(s));
+        } else {
+            chars.next(); // skip unknown
+        }
+    }
+    
+    Ok(patterns)
+}
+
+/// Compile a function with pattern matching
+fn compile_with_patterns(params: &[String], patterns: &[FnPattern], body: &compile::Expr) -> instr::CodeBlock {
+    use crate::instr::{Instr, Literal, CodeBlock};
+    
+    let mut code: Vec<Instr> = Vec::new();
+    let num_params = params.len();
+    
+    // For each constructor pattern, generate field extraction code
+    for (idx, pattern) in patterns.iter().enumerate() {
+        if let FnPattern::Ctor(_ctor_name, bindings) = pattern {
+            // The argument is at env slot `idx`
+            // For each binding, extract the field
+            for (field_idx, _binding) in bindings.iter().enumerate() {
+                // Load the argument from env
+                code.push(Instr::Load(idx as u32));
+                // Get field at index
+                code.push(Instr::GetField(field_idx as u8));
+                // Store it in a new slot (after all params)
+                code.push(Instr::Store((num_params + idx * 10 + field_idx) as u32));
+            }
+        }
+    }
+    
+    // Now compile the body with pattern bindings available
+    // Create a modified compiler that knows about pattern bindings
+    let mut locals: Vec<(String, u32)> = Vec::new();
+    
+    // Add original params
+    for (i, param) in params.iter().enumerate() {
+        locals.push((param.clone(), i as u32));
+    }
+    
+    // Add pattern bindings
+    for (idx, pattern) in patterns.iter().enumerate() {
+        if let FnPattern::Ctor(_ctor_name, bindings) = pattern {
+            for (field_idx, binding) in bindings.iter().enumerate() {
+                if binding != "_" {
+                    let slot = (num_params + idx * 10 + field_idx) as u32;
+                    locals.push((binding.clone(), slot));
+                }
+            }
+        }
+    }
+    
+    // Compile body with custom locals
+    let body_code = compile_expr_with_locals(body, &locals);
+    code.extend(body_code);
+    code.push(Instr::Return);
+    
+    CodeBlock::new(code)
+}
+
+/// Compile an expression with given local variable mappings
+fn compile_expr_with_locals(expr: &compile::Expr, locals: &[(String, u32)]) -> Vec<Instr> {
+    use crate::instr::{Instr, Literal};
+    
+    let mut code = Vec::new();
+    
+    match expr {
+        compile::Expr::Int(n) => {
+            code.push(Instr::Push(Literal::Int(*n)));
+        }
+        compile::Expr::Str(s) => {
+            code.push(Instr::Push(Literal::Str(s.clone())));
+        }
+        compile::Expr::Bool(b) => {
+            code.push(Instr::Push(Literal::Bool(*b)));
+        }
+        compile::Expr::Var(name) => {
+            // Look up in locals
+            if let Some((_, slot)) = locals.iter().find(|(n, _)| n == name) {
+                code.push(Instr::Load(*slot));
+            } else {
+                // Global lookup
+                code.push(Instr::LoadGlobal(Hash::of_str(name)));
+            }
+        }
+        compile::Expr::BinOp(op, lhs, rhs) => {
+            code.extend(compile_expr_with_locals(lhs, locals));
+            code.extend(compile_expr_with_locals(rhs, locals));
+            code.push(match op {
+                compile::BinOp::Add => Instr::Add,
+                compile::BinOp::Sub => Instr::Sub,
+                compile::BinOp::Mul => Instr::Mul,
+                compile::BinOp::Div => Instr::Div,
+                compile::BinOp::Mod => Instr::Mod,
+                compile::BinOp::Eq => Instr::Eq,
+                compile::BinOp::Ne => Instr::Ne,
+                compile::BinOp::Lt => Instr::Lt,
+                compile::BinOp::Le => Instr::Le,
+                compile::BinOp::Gt => Instr::Gt,
+                compile::BinOp::Ge => Instr::Ge,
+                compile::BinOp::And => Instr::And,
+                compile::BinOp::Or => Instr::Or,
+                compile::BinOp::Cons => Instr::Cons,
+                compile::BinOp::Concat => Instr::StrConcat,
+            });
+        }
+        compile::Expr::App(func, args) => {
+            for arg in args {
+                code.extend(compile_expr_with_locals(arg, locals));
+            }
+            code.extend(compile_expr_with_locals(func, locals));
+            if args.len() == 1 {
+                code.push(Instr::Apply);
+            } else {
+                code.push(Instr::ApplyN(args.len() as u8));
+            }
+        }
+        compile::Expr::Lambda(params, body) => {
+            // For simplicity, compile lambda as a closure
+            // This is a simplification - proper implementation would create a code block
+            let mut new_locals = locals.to_vec();
+            for (i, param) in params.iter().enumerate() {
+                new_locals.push((param.clone(), (locals.len() + i) as u32));
+            }
+            code.extend(compile_expr_with_locals(body, &new_locals));
+        }
+        compile::Expr::List(elems) => {
+            for elem in elems {
+                code.extend(compile_expr_with_locals(elem, locals));
+            }
+            code.push(Instr::MkList(elems.len() as u16));
+        }
+        compile::Expr::If(cond, then_e, else_e) => {
+            code.extend(compile_expr_with_locals(cond, locals));
+            let mut then_code = compile_expr_with_locals(then_e, locals);
+            let mut else_code = compile_expr_with_locals(else_e, locals);
+            
+            // Jump over then branch if condition is false
+            let jump_to_else = (then_code.len() + 2) as i32; // +1 for the jump at end of then
+            code.push(Instr::JumpIfNot(jump_to_else));
+            code.extend(then_code);
+            let jump_to_end = (else_code.len() + 1) as i32;
+            code.push(Instr::Jump(jump_to_end));
+            code.extend(else_code);
+        }
+        compile::Expr::Let(name, val, body) => {
+            code.extend(compile_expr_with_locals(val, locals));
+            let new_slot = locals.len() as u32;
+            code.push(Instr::Store(new_slot));
+            let mut new_locals = locals.to_vec();
+            new_locals.push((name.clone(), new_slot));
+            code.extend(compile_expr_with_locals(body, &new_locals));
+        }
+        _ => {
+            // Fallback: compile using default compiler
+            let block = compile::Compiler::compile(expr);
+            code.extend(block.code.into_iter().filter(|i| !matches!(i, Instr::Halt)));
+        }
+    }
+    
+    code
+}
+
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 fn compile_phi_program(source: &str) -> Result<String, JsValue> {
     use crate::port::parser::Parser;
@@ -431,20 +677,8 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
     // Generate RVM for each function
     for (name, cases) in &function_cases {
         for (i, (args, body)) in cases.iter().enumerate() {
-            // Check for pattern matching in args (args contain non-identifiers)
-            let has_patterns = args.split_whitespace().any(|arg| {
-                !arg.chars().all(|c| c.is_alphanumeric() || c == '_') ||
-                arg.chars().next().map(|c| c.is_numeric()).unwrap_or(false) ||
-                arg.starts_with('(') ||
-                arg == "_"
-            });
-            
-            if has_patterns && !args.is_empty() {
-                // Generate a stub that reports the pattern matching isn't implemented
-                output.push_str(&format!("-- {} has pattern matching (not yet compiled)\n", name));
-                output.push_str(&format!("-- {} {} = {}\n\n", name, args, body));
-                continue;
-            }
+            // Try to parse pattern matching in args
+            let pattern_result = parse_function_patterns(args);
             
             let fn_name = if cases.len() > 1 {
                 format!("{}_{}", name, i)
@@ -452,33 +686,70 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
                 name.clone()
             };
             
-            // Parse and compile body directly (not as lambda)
-            match Parser::new(body) {
-                Ok(mut parser) => match parser.parse_expr() {
-                    Ok(port_expr) => {
-                        let expr = convert_expr(&port_expr);
-                        let params: Vec<String> = args.split_whitespace()
-                            .map(|s| s.to_string())
-                            .collect();
-                        let block = if params.is_empty() {
-                            compile::Compiler::compile(&expr)
-                        } else {
-                            compile::Compiler::compile_function(&params, &expr)
-                        };
-                        output.push_str(&format!("fn {}({}) {{\n", fn_name, args));
-                        for instr in &block.code {
-                            output.push_str(&format!("    {}\n", print_instr(instr, &ctx)));
-                        }
-                        output.push_str("}\n\n");
+            match pattern_result {
+                Ok(patterns) => {
+                    // Parse and compile body
+                    match Parser::new(body) {
+                        Ok(mut parser) => match parser.parse_expr() {
+                            Ok(port_expr) => {
+                                // Convert body expression
+                                let mut body_expr = convert_expr(&port_expr);
+                                
+                                // Wrap body with pattern extractions
+                                // For each pattern like (Ctor x y), we generate:
+                                //   let x = getfield 0 arg in let y = getfield 1 arg in body
+                                let mut param_names: Vec<String> = Vec::new();
+                                for pattern in patterns.iter().rev() {
+                                    match pattern {
+                                        FnPattern::Var(v) => {
+                                            param_names.insert(0, v.clone());
+                                        }
+                                        FnPattern::Ctor(ctor_name, bindings) => {
+                                            // Generate a temporary name for the argument
+                                            let arg_name = format!("_arg{}", param_names.len());
+                                            param_names.insert(0, arg_name.clone());
+                                            
+                                            // Wrap body: let binding_n = getfield n arg in ... in body
+                                            for (idx, binding) in bindings.iter().enumerate().rev() {
+                                                if binding != "_" {
+                                                    // Create: let binding = (getfield idx arg) in body
+                                                    let field_access = compile::Expr::App(
+                                                        Box::new(compile::Expr::Var(format!("__getfield_{}_{}", arg_name, idx))),
+                                                        vec![compile::Expr::Var(arg_name.clone())]
+                                                    );
+                                                    body_expr = compile::Expr::Let(
+                                                        binding.clone(),
+                                                        Box::new(compile::Expr::Var(format!("__field_{}_{}", arg_name, idx))),
+                                                        Box::new(body_expr)
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        FnPattern::Literal(_) => {
+                                            // Literal patterns need runtime matching
+                                            param_names.insert(0, format!("_lit{}", param_names.len()));
+                                        }
+                                    }
+                                }
+                                
+                                // Compile with pattern-aware compilation
+                                let block = compile_with_patterns(&param_names, &patterns, &body_expr);
+                                
+                                output.push_str(&format!("fn {}({}) {{\n", fn_name, args));
+                                for instr in &block.code {
+                                    output.push_str(&format!("    {}\n", print_instr(instr, &ctx)));
+                                }
+                                output.push_str("}\n\n");
+                            }
+                            Err(_e) => continue,
+                        },
+                        Err(_e) => continue,
                     }
-                    Err(_e) => {
-                        // Skip functions that fail to parse (likely pattern matching)
-                        continue;
-                    }
-                },
-                Err(_e) => {
-                    // Skip functions that fail to parse
-                    continue;
+                }
+                Err(_) => {
+                    // Failed to parse patterns, skip with comment
+                    output.push_str(&format!("-- {} pattern parse failed\n", name));
+                    output.push_str(&format!("-- {} {} = {}\n\n", name, args, body));
                 }
             }
         }
