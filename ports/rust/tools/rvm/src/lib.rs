@@ -236,7 +236,12 @@ pub mod wasm_bindings {
                 continue;
             }
             
-            // Skip type signatures
+            // Skip type declarations (type X = ..., data X = ...)
+            if line.starts_with("type ") || line.starts_with("data ") {
+                continue;
+            }
+            
+            // Skip type signatures (name : Type)
             if line.contains(" : ") && !line.contains(" = ") {
                 continue;
             }
