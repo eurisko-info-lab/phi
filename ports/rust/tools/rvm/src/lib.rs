@@ -204,21 +204,23 @@ pub fn run_phi(source: &str) -> Result<String, JsValue> {
                         continue;
                     }
                     
-                    // Build lambda expression
-                    let full_expr = if args.is_empty() {
-                        body.to_string()
-                    } else {
-                        format!("\\{} -> {}", args.join(" "), body)
-                    };
-                    
-                    // Parse and compile
-                    if let Ok(mut parser) = Parser::new(&full_expr) {
+                    // Parse body and compile as function
+                    if let Ok(mut parser) = Parser::new(body) {
                         if let Ok(port_expr) = parser.parse_expr() {
                             let expr = convert_expr(&port_expr);
-                            let mut block = compile::Compiler::compile(&expr);
+                            // Compile with parameters as env slots
+                            let params: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+                            let mut block = compile::Compiler::compile_function(&params, &expr);
                             block.name = Some(name.to_string());
-                            let hash = st.add_code(block);
-                            function_names.insert(name.to_string(), hash);
+                            let code_hash = st.add_code(block);
+                            
+                            // Register as a closure VALUE at the name hash
+                            // This allows LoadGlobal(Hash::of_str(name)) to find it
+                            let name_hash = hash::Hash::of_str(name);
+                            let closure_val = value::Val::closure(code_hash, value::Env::new());
+                            st.set_value(name_hash, closure_val);
+                            
+                            function_names.insert(name.to_string(), code_hash);
                         }
                     }
                 }
@@ -341,7 +343,7 @@ fn format_instr(instr: &crate::instr::Instr) -> String {
 }
 
 // Helper function to convert port::expr::Expr to compile::Expr
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+// Available always (used by tests and WASM)
 fn convert_expr(e: &crate::port::expr::Expr) -> compile::Expr {
     use crate::port::expr::Expr as PortExpr;
     match e {
@@ -562,6 +564,7 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
 #[cfg(test)]
 mod tests {
     use super::compile;
+    use super::*;
     
     fn parse_simple_expr(source: &str) -> Result<compile::Expr, String> {
         let source = source.trim();
@@ -591,5 +594,43 @@ mod tests {
     fn test_parse_add() {
         let expr = parse_simple_expr("1 + 2").unwrap();
         assert!(matches!(expr, compile::Expr::BinOp(compile::BinOp::Add, _, _)));
+    }
+    
+    #[test]
+    fn test_function_call_via_closure() {
+        use crate::port::parser::Parser;
+        
+        let mut st = Store::new();
+        
+        // Compile greet function body: x + 1 (with x as param)
+        let body_src = "x + 1";
+        let mut parser = Parser::new(body_src).unwrap();
+        let port_expr = parser.parse_expr().unwrap();
+        let expr = convert_expr(&port_expr);
+        
+        // Compile as function with parameter x
+        let params = vec!["x".to_string()];
+        let mut block = compile::Compiler::compile_function(&params, &expr);
+        block.name = Some("greet".to_string());
+        let code_hash = st.add_code(block);
+        
+        // Register as closure VALUE at name hash
+        let name_hash = Hash::of_str("greet");
+        let closure_val = value::Val::closure(code_hash, value::Env::new());
+        st.set_value(name_hash, closure_val);
+        
+        // Compile main: greet 5
+        let main_src = "greet 5";
+        let mut parser = Parser::new(main_src).unwrap();
+        let port_expr = parser.parse_expr().unwrap();
+        let expr = convert_expr(&port_expr);
+        let block = compile::Compiler::compile(&expr);
+        let main_hash = st.add_code(block);
+        
+        // Run
+        let mut vm = VM::new(&st);
+        let result = vm.run(main_hash).expect("VM should run successfully");
+        
+        assert_eq!(result, Val::Int(6), "greet 5 should return 6");
     }
 }

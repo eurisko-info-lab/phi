@@ -121,6 +121,11 @@ impl Store {
         self.values.get(hash)
     }
 
+    /// Set a value at a specific hash (for named function registration)
+    pub fn set_value(&mut self, hash: Hash, val: Val) {
+        self.values.insert(hash, val);
+    }
+
     // Type operations
 
     pub fn add_type(&mut self, info: TypeInfo) -> Hash {

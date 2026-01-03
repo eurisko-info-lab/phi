@@ -76,6 +76,101 @@ impl Compiler {
         CodeBlock::new(compiler.code).with_name("main")
     }
 
+    /// Compile a function body with parameters
+    /// Parameters are assumed to be in the environment at indices 0, 1, 2, ...
+    /// This differs from compile() in that variables are always loaded from env, not stack
+    pub fn compile_function(params: &[String], body: &Expr) -> CodeBlock {
+        let mut compiler = Compiler::new();
+        // Register parameters as env slots (will use Load instruction)
+        for (i, param) in params.iter().enumerate() {
+            compiler.locals.push((param.clone(), i as u32));
+        }
+        // Compile body - compile_expr will use lookup_env_slot for variables
+        compiler.compile_function_expr(body);
+        compiler.code.push(Instr::Return);
+        CodeBlock::new(compiler.code)
+    }
+
+    fn compile_function_expr(&mut self, expr: &Expr) {
+        // Same as compile_expr but uses Load for all locals (function params)
+        match expr {
+            Expr::Int(n) => {
+                self.emit(Instr::Push(Literal::Int(*n)));
+            }
+            Expr::Str(s) => {
+                self.emit(Instr::Push(Literal::Str(s.clone())));
+            }
+            Expr::Bool(b) => {
+                self.emit(Instr::Push(Literal::Bool(*b)));
+            }
+            Expr::Var(name) => {
+                if let Some(slot) = self.lookup_env_slot(name) {
+                    // Load from environment
+                    self.emit(Instr::Load(slot));
+                } else {
+                    // Global lookup
+                    self.emit(Instr::LoadGlobal(Hash::of_str(name)));
+                }
+            }
+            Expr::BinOp(op, lhs, rhs) => {
+                self.compile_function_expr(lhs);
+                self.compile_function_expr(rhs);
+                self.emit(match op {
+                    BinOp::Add => Instr::Add,
+                    BinOp::Sub => Instr::Sub,
+                    BinOp::Mul => Instr::Mul,
+                    BinOp::Div => Instr::Div,
+                    BinOp::Mod => Instr::Mod,
+                    BinOp::Eq => Instr::Eq,
+                    BinOp::Ne => Instr::Ne,
+                    BinOp::Lt => Instr::Lt,
+                    BinOp::Le => Instr::Le,
+                    BinOp::Gt => Instr::Gt,
+                    BinOp::Ge => Instr::Ge,
+                    BinOp::And => Instr::And,
+                    BinOp::Or => Instr::Or,
+                    BinOp::Cons => Instr::Cons,
+                });
+            }
+            Expr::If(cond, then_e, else_e) => {
+                self.compile_function_expr(cond);
+                let jump_else_idx = self.code.len();
+                self.emit(Instr::Nop);
+                self.compile_function_expr(then_e);
+                let jump_end_idx = self.code.len();
+                self.emit(Instr::Nop);
+                let else_start = self.code.len();
+                self.compile_function_expr(else_e);
+                let end_addr = self.code.len();
+                let jump_to_else = (else_start as i32) - (jump_else_idx as i32);
+                self.code[jump_else_idx] = Instr::JumpIfNot(jump_to_else);
+                let jump_to_end = (end_addr as i32) - (jump_end_idx as i32);
+                self.code[jump_end_idx] = Instr::Jump(jump_to_end);
+            }
+            Expr::App(func, args) => {
+                for arg in args {
+                    self.compile_function_expr(arg);
+                }
+                self.compile_function_expr(func);
+                if args.len() == 1 {
+                    self.emit(Instr::Apply);
+                } else {
+                    self.emit(Instr::ApplyN(args.len() as u8));
+                }
+            }
+            Expr::List(elems) => {
+                for elem in elems {
+                    self.compile_function_expr(elem);
+                }
+                self.emit(Instr::MkList(elems.len() as u16));
+            }
+            _ => {
+                // For other cases, fall back to regular compile
+                self.compile_expr(expr);
+            }
+        }
+    }
+
     /// Compile an expression and add to store
     pub fn compile_to_store(expr: &Expr, store: &mut Store) -> Hash {
         let block = Self::compile(expr);
@@ -268,6 +363,16 @@ impl Compiler {
         for (i, (n, _)) in self.locals.iter().rev().enumerate() {
             if n == name {
                 return Some(i);
+            }
+        }
+        None
+    }
+
+    fn lookup_env_slot(&self, name: &str) -> Option<u32> {
+        // Find the slot number for a variable (used for function parameters)
+        for (n, slot) in self.locals.iter() {
+            if n == name {
+                return Some(*slot);
             }
         }
         None
