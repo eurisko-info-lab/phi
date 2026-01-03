@@ -836,4 +836,21 @@ mod tests {
         let expr = parse_expr("[1, 2, 3]").unwrap();
         assert!(matches!(expr, Expr::List(_)));
     }
+    
+    #[test]
+    fn test_parse_function_application() {
+        // Yoneda main: lower (lift [1, 2, 3])
+        let expr = parse_expr("lower (lift [1, 2, 3])").unwrap();
+        println!("Parsed: {:?}", expr);
+        assert!(matches!(expr, Expr::App(_, _)));
+    }
+    
+    #[test]
+    fn test_parse_constructor_application() {
+        // Constructor application: Yoneda (\f -> fmap f fa)
+        let expr = parse_expr("Yoneda (\\f -> fmap f fa)").unwrap();
+        println!("Parsed: {:?}", expr);
+        // Should be Ctor, not App (uppercase = constructor)
+        assert!(matches!(expr, Expr::Ctor(_, _)));
+    }
 }

@@ -275,6 +275,17 @@ fn convert_expr(e: &crate::port::expr::Expr) -> compile::Expr {
         PortExpr::Bool(b) => compile::Expr::Bool(*b),
         PortExpr::Unit => compile::Expr::Tuple(vec![]),
         PortExpr::Var(name) => compile::Expr::Var(name.clone()),
+        PortExpr::Ctor(name, args) => {
+            // Convert constructor to a function application
+            // Ctor("Yoneda", [arg]) -> App(Var("Yoneda"), arg)
+            let ctor_fn = compile::Expr::Var(name.clone());
+            if args.is_empty() {
+                ctor_fn
+            } else {
+                let converted_args: Vec<compile::Expr> = args.iter().map(convert_expr).collect();
+                compile::Expr::App(Box::new(ctor_fn), converted_args)
+            }
+        }
         PortExpr::Lam(param, body) => {
             compile::Expr::Lambda(vec![param.clone()], Box::new(convert_expr(body)))
         }
@@ -420,15 +431,18 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
     // Generate RVM for each function
     for (name, cases) in &function_cases {
         for (i, (args, body)) in cases.iter().enumerate() {
-            // Skip functions with pattern matching (args contain non-identifiers)
+            // Check for pattern matching in args (args contain non-identifiers)
             let has_patterns = args.split_whitespace().any(|arg| {
                 !arg.chars().all(|c| c.is_alphanumeric() || c == '_') ||
                 arg.chars().next().map(|c| c.is_numeric()).unwrap_or(false) ||
                 arg.starts_with('(') ||
                 arg == "_"
             });
+            
             if has_patterns && !args.is_empty() {
-                // Skip pattern matching functions for now
+                // Generate a stub that reports the pattern matching isn't implemented
+                output.push_str(&format!("-- {} has pattern matching (not yet compiled)\n", name));
+                output.push_str(&format!("-- {} {} = {}\n\n", name, args, body));
                 continue;
             }
             
