@@ -6,8 +6,8 @@ This demo embodies a simple but profound idea: **languages are algebraic structu
 
 ```
 Σ = (Sorts, Constructors)     -- signature
-T(Σ) = free algebra           -- terms (ASTs)
-h: T(Σ₁) → T(Σ₂)              -- homomorphism (transform)
+T(Σ) = Free algebra           -- terms (ASTs)
+h: T(Σ₁) → T(Σ₂)              -- homomorphism (transformation)
 ```
 
 Every `.phi` file is a **signature**. Every transform is a **homomorphism**.

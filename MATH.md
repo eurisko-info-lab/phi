@@ -399,7 +399,7 @@ enum ZipperContext[A]:
 
 Navigation:
 ```scala
-def up: Option[TermZipper[?]]    // ∂T → T (integrate)
+def up: Option[TermZipper[A]]    // ∂T → T (integrate)
 def down[B](...): Option[TermZipper[B]]  // T → ∂T (differentiate)
 ```
 
@@ -759,7 +759,7 @@ def cata[F[_], A](alg: F[A] => A)(fix: Fix[F]): A  // Works for ANY F!
 
 ---
 
-## 13. The Full Picture
+## 13. End-to-End Architecture
 
 ```
                           ┌─────────────────────────────────────┐
