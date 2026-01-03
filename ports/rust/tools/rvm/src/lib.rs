@@ -145,6 +145,10 @@ pub fn compile_phi(source: &str) -> Result<String, JsValue> {
 #[wasm_bindgen]
 pub fn run_phi(source: &str) -> Result<String, JsValue> {
     use crate::port::parser::Parser;
+    use std::collections::HashMap;
+    
+    let mut st = store::Store::new();
+    let mut function_names: HashMap<String, hash::Hash> = HashMap::new();
     
     // Check if this looks like a full program (has main =)
     let is_program = source.lines()
@@ -153,9 +157,10 @@ pub fn run_phi(source: &str) -> Result<String, JsValue> {
             trimmed.starts_with("main") && trimmed.contains("=")
         });
     
-    let main_expr = if is_program {
-        // Extract main expression from program
+    if is_program {
+        // First pass: collect and compile function definitions
         let mut main_body = None;
+        
         for line in source.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with("--") {
@@ -167,34 +172,94 @@ pub fn run_phi(source: &str) -> Result<String, JsValue> {
             if line.contains(" : ") && !line.contains(" = ") {
                 continue;
             }
+            
+            // Main expression
             if line.starts_with("main") && line.contains("=") {
                 if let Some(pos) = line.find('=') {
                     main_body = Some(line[pos + 1..].trim().to_string());
                 }
+                continue;
+            }
+            
+            // Function definition: name args = body (simple, no pattern matching)
+            if line.contains(" = ") {
+                if let Some((lhs, body)) = line.split_once('=') {
+                    let lhs = lhs.trim();
+                    let body = body.trim();
+                    let parts: Vec<&str> = lhs.split_whitespace().collect();
+                    if parts.is_empty() {
+                        continue;
+                    }
+                    
+                    let name = parts[0];
+                    let args = &parts[1..];
+                    
+                    // Skip pattern matching (args with non-identifier chars)
+                    let has_patterns = args.iter().any(|arg| {
+                        !arg.chars().all(|c| c.is_alphanumeric() || c == '_') ||
+                        arg.chars().next().map(|c| c.is_numeric()).unwrap_or(false) ||
+                        *arg == "_"
+                    });
+                    if has_patterns {
+                        continue;
+                    }
+                    
+                    // Build lambda expression
+                    let full_expr = if args.is_empty() {
+                        body.to_string()
+                    } else {
+                        format!("\\{} -> {}", args.join(" "), body)
+                    };
+                    
+                    // Parse and compile
+                    if let Ok(mut parser) = Parser::new(&full_expr) {
+                        if let Ok(port_expr) = parser.parse_expr() {
+                            let expr = convert_expr(&port_expr);
+                            let mut block = compile::Compiler::compile(&expr);
+                            block.name = Some(name.to_string());
+                            let hash = st.add_code(block);
+                            function_names.insert(name.to_string(), hash);
+                        }
+                    }
+                }
             }
         }
-        main_body.ok_or_else(|| JsValue::from_str("No main expression found"))?
+        
+        // Now compile main with function references available
+        let main_body = main_body.ok_or_else(|| JsValue::from_str("No main expression found"))?;
+        
+        let mut parser = Parser::new(&main_body)
+            .map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
+        let port_expr = parser.parse_expr()
+            .map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
+        
+        let expr = convert_expr(&port_expr);
+        let mut block = compile::Compiler::compile(&expr);
+        block.name = Some("main".to_string());
+        let main_hash = st.add_code(block);
+        
+        let mut machine = vm::VM::new(&st);
+        let result = machine.run(main_hash)
+            .map_err(|e| JsValue::from_str(&format!("Runtime error: {}", e)))?;
+        
+        Ok(format!("{:?}", result))
     } else {
-        source.to_string()
-    };
-    
-    // Parse and compile the main expression
-    let mut parser = Parser::new(&main_expr)
-        .map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
-    let port_expr = parser.parse_expr()
-        .map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
-    
-    let expr = convert_expr(&port_expr);
-    let block = compile::Compiler::compile(&expr);
-    
-    let mut st = store::Store::new();
-    let hash = st.add_code(block);
-    let mut machine = vm::VM::new(&st);
-    
-    let result = machine.run(hash)
-        .map_err(|e| JsValue::from_str(&format!("Runtime error: {}", e)))?;
-    
-    Ok(format!("{:?}", result))
+        // Simple expression mode
+        let mut parser = Parser::new(source)
+            .map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
+        let port_expr = parser.parse_expr()
+            .map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
+        
+        let expr = convert_expr(&port_expr);
+        let block = compile::Compiler::compile(&expr);
+        let hash = st.add_code(block);
+        
+        let mut machine = vm::VM::new(&st);
+        let result = machine.run(hash)
+            .map_err(|e| JsValue::from_str(&format!("Runtime error: {}", e)))?;
+        
+        Ok(format!("{:?}", result))
+    }
 }
 
 // Helper function to format an instruction as RVM assembly text

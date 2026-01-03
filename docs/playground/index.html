@@ -773,12 +773,13 @@ main = take 10 fibs`,
             output.className = 'output-panel active';
             
             setTimeout(() => {
+                let rvmCode = code;  // Default to input code
+                
                 try {
                     // If WASM is ready
                     if (wasmReady) {
                         try {
                             let result;
-                            let rvmCode = '';
                             
                             if (currentMode === 'phi') {
                                 // Use run_phi for direct execution
@@ -813,12 +814,17 @@ main = take 10 fibs`,
                             showTab('output');
                             return;
                         } catch (e) {
-                            // WASM evaluation failed, try demo mode
-                            console.log('WASM eval failed:', e);
+                            // WASM evaluation failed, show error directly
+                            output.textContent = `Runtime Error:\n\n${e.message || e}`;
+                            output.className = 'output-panel active error';
+                            bytecode.innerHTML = formatBytecode(rvmCode);
+                            setStatus('Runtime Error', true);
+                            showTab('output');
+                            return;
                         }
                     }
                     
-                    // Demo mode fallback
+                    // Demo mode fallback (WASM not ready)
                     runDemoMode(code, output, types, bytecode, target, rvmCode);
                     
                 } catch (e) {
