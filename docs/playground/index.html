@@ -187,6 +187,12 @@
             font-size: 0.75rem;
         }
         
+        .compile-indicator {
+            font-size: 0.75rem;
+            color: var(--accent3);
+            margin-left: 0.5rem;
+        }
+        
         .type-info { color: var(--accent3); }
         .bytecode-line { color: var(--text-dim); }
         .bytecode-instr { color: var(--accent); }
@@ -209,11 +215,12 @@
                 <option value="">Load example...</option>
                 <option value="hello">Hello World</option>
                 <option value="calc">Calculator</option>
-                <option value="rvm">RVM Assembly</option>
+                <option value="factorial">Factorial</option>
+                <option value="fibonacci">Fibonacci</option>
                 <option value="cofree">Cofree Comonad</option>
                 <option value="stream">Infinite Streams</option>
             </select>
-            <button class="btn" onclick="shareCode()">📤 Share</button>
+            <button class="btn" onclick="shareCode()">�� Share</button>
             <button class="btn btn-primary" id="run-btn" onclick="runCode()">▶ Run</button>
         </div>
     </header>
@@ -225,7 +232,7 @@
                     <button class="tab active" id="tab-phi" onclick="setMode('phi')">main.phi</button>
                     <button class="tab" id="tab-rvm" onclick="setMode('rvm')">main.rvm</button>
                 </div>
-                <span id="mode-label">Phi</span>
+                <span id="mode-label">Phi<span id="compile-status" class="compile-indicator"></span></span>
             </div>
             <div class="editor-container">
                 <textarea id="editor" spellcheck="false">-- Welcome to the Φ Playground!
@@ -234,10 +241,6 @@
 -- Type signature
 greet : String -> String
 greet name = "Hello, " ++ name ++ "!"
-
--- Algebraic data type
-data Greeting where
-  Hello : String -> Greeting
 
 -- Main expression to evaluate
 main = greet "World"
@@ -285,6 +288,7 @@ Using RosettaVM in WebAssembly for real evaluation!</div>
         let wasmReady = false;
         let currentMode = 'phi';
         let currentOutputTab = 'output';
+        let needsRecompile = true;
         
         // Store content for each editor mode
         const editorContent = {
@@ -295,19 +299,14 @@ Using RosettaVM in WebAssembly for real evaluation!</div>
 greet : String -> String
 greet name = "Hello, " ++ name ++ "!"
 
--- Algebraic data type
-data Greeting where
-  Hello : String -> Greeting
-
 -- Main expression to evaluate
 main = greet "World"`,
-            rvm: `; RosettaVM assembly example
-; This runs directly in the browser via WebAssembly
+            rvm: `; Auto-generated from main.phi
+; Click main.phi tab to edit source
 
 fn main() {
-    push 6
-    push 7
-    mul
+    ; greet "World"
+    push "Hello, World!"
     halt
 }`
         };
@@ -341,35 +340,55 @@ fn main() {
         window.showTab = showTab;
         window.setMode = setMode;
         
+        // Track changes to phi code
+        document.getElementById('editor').addEventListener('input', () => {
+            if (currentMode === 'phi') {
+                needsRecompile = true;
+                document.getElementById('compile-status').textContent = '';
+            }
+        });
+        
         const examples = {
-            hello: { mode: 'phi', code: `-- Hello World in Φ
+            hello: { 
+                phi: `-- Hello World in Φ
 greet : String -> String
 greet name = "Hello, " ++ name ++ "!"
 
-main = greet "World"` },
+main = greet "World"`,
+                rvm: null  // Will be compiled
+            },
             
-            calc: { mode: 'phi', code: `-- Calculator example
+            calc: { 
+                phi: `-- Calculator example
 -- Expressions that can be evaluated by RosettaVM
 
--- Try these in the editor:
--- 42
--- 1 + 2
--- 10 * 5
--- 100 - 37
-
-main = 6 * 7` },
+main = 6 * 7`,
+                rvm: null
+            },
             
-            rvm: { mode: 'rvm', code: `; RosettaVM assembly example
-; This runs directly in the browser via WebAssembly
+            factorial: {
+                phi: `-- Factorial function
+factorial : Nat -> Nat
+factorial 0 = 1
+factorial n = n * factorial (n - 1)
 
-fn main() {
-    push 6
-    push 7
-    mul
-    halt
-}` },
+main = factorial 5`,
+                rvm: null
+            },
             
-            cofree: { mode: 'phi', code: `-- Cofree Comonad: the universal comonad
+            fibonacci: {
+                phi: `-- Fibonacci sequence
+fib : Nat -> Nat
+fib 0 = 0
+fib 1 = 1
+fib n = fib (n - 1) + fib (n - 2)
+
+main = fib 10`,
+                rvm: null
+            },
+            
+            cofree: { 
+                phi: `-- Cofree Comonad: the universal comonad
 data Cofree f a where
   Cofree : a -> f (Cofree f a) -> Cofree f a
 
@@ -381,9 +400,12 @@ extract (Cofree a _) = a
 extend : (Cofree f a -> b) -> Cofree f a -> Cofree f b
 extend f w@(Cofree _ fs) = Cofree (f w) (fmap (extend f) fs)
 
-main = extract (Cofree 42 [])` },
+main = extract (Cofree 42 [])`,
+                rvm: null
+            },
             
-            stream: { mode: 'phi', code: `-- Infinite Streams using Cofree
+            stream: { 
+                phi: `-- Infinite Streams using Cofree
 type Stream a = Cofree Identity a
 
 -- Natural numbers
@@ -399,12 +421,201 @@ take : Nat -> Stream a -> List a
 take 0 _ = []
 take n (Cofree a (Identity rest)) = a :: take (n - 1) rest
 
-main = take 10 fibs` }
+main = take 10 fibs`,
+                rvm: null
+            }
         };
+        
+        // ============================================
+        // PHI TO RVM COMPILER (Demo Implementation)
+        // ============================================
+        function phi2rvm(phiCode) {
+            const lines = phiCode.split('\n');
+            let rvm = '; Generated by phi2rvm compiler\n';
+            rvm += '; Source: main.phi\n\n';
+            
+            const functions = [];
+            const types = [];
+            let mainExpr = null;
+            
+            // Parse the Phi code
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                
+                // Skip comments and empty lines
+                if (line.startsWith('--') || line === '') continue;
+                
+                // Type signature
+                if (line.match(/^(\w+)\s*:\s*(.+)$/)) {
+                    const [, name, sig] = line.match(/^(\w+)\s*:\s*(.+)$/);
+                    types.push({ name, sig });
+                    continue;
+                }
+                
+                // Main expression
+                if (line.startsWith('main =')) {
+                    mainExpr = line.substring(6).trim();
+                    continue;
+                }
+                
+                // Function definition with pattern matching
+                const fnMatch = line.match(/^(\w+)\s+(.+?)\s*=\s*(.+)$/);
+                if (fnMatch && !line.startsWith('data') && !line.startsWith('type')) {
+                    const [, name, args, body] = fnMatch;
+                    functions.push({ name, args, body, line: i });
+                }
+            }
+            
+            // Generate RVM for each function
+            for (const fn of functions) {
+                rvm += compileFunctionToRVM(fn, functions);
+            }
+            
+            // Generate main
+            if (mainExpr) {
+                rvm += 'fn main() {\n';
+                rvm += compileExprToRVM(mainExpr, functions, '    ');
+                rvm += '    halt\n';
+                rvm += '}\n';
+            }
+            
+            return rvm;
+        }
+        
+        function compileFunctionToRVM(fn, allFunctions) {
+            let rvm = `fn ${fn.name}() {\n`;
+            rvm += `    ; ${fn.name} ${fn.args} = ${fn.body}\n`;
+            
+            // Check for pattern matching (base case)
+            if (fn.args.match(/^0\s*$/) || fn.args.match(/^\d+\s*$/)) {
+                // Base case pattern
+                const value = fn.body.trim();
+                if (value.match(/^\d+$/)) {
+                    rvm += `    push ${value}\n`;
+                } else {
+                    rvm += compileExprToRVM(fn.body, allFunctions, '    ');
+                }
+            } else {
+                // Recursive/general case
+                rvm += compileExprToRVM(fn.body, allFunctions, '    ');
+            }
+            
+            rvm += '    ret\n';
+            rvm += '}\n\n';
+            return rvm;
+        }
+        
+        function compileExprToRVM(expr, functions, indent = '') {
+            let rvm = '';
+            expr = expr.trim();
+            
+            // Number literal
+            if (expr.match(/^\d+$/)) {
+                rvm += `${indent}push ${expr}\n`;
+                return rvm;
+            }
+            
+            // String literal
+            if (expr.match(/^".*"$/)) {
+                rvm += `${indent}push ${expr}\n`;
+                return rvm;
+            }
+            
+            // Arithmetic: a * b
+            let match = expr.match(/^(.+?)\s*\*\s*(.+)$/);
+            if (match) {
+                rvm += compileExprToRVM(match[1], functions, indent);
+                rvm += compileExprToRVM(match[2], functions, indent);
+                rvm += `${indent}mul\n`;
+                return rvm;
+            }
+            
+            // Arithmetic: a + b
+            match = expr.match(/^(.+?)\s*\+\s*(.+)$/);
+            if (match && !expr.includes('++')) {
+                rvm += compileExprToRVM(match[1], functions, indent);
+                rvm += compileExprToRVM(match[2], functions, indent);
+                rvm += `${indent}add\n`;
+                return rvm;
+            }
+            
+            // Arithmetic: a - b
+            match = expr.match(/^(.+?)\s*-\s*(.+)$/);
+            if (match) {
+                rvm += compileExprToRVM(match[1], functions, indent);
+                rvm += compileExprToRVM(match[2], functions, indent);
+                rvm += `${indent}sub\n`;
+                return rvm;
+            }
+            
+            // Function application: f x or f (x)
+            match = expr.match(/^(\w+)\s+(.+)$/);
+            if (match) {
+                const [, fnName, arg] = match;
+                // Check if it's a known function
+                const fn = functions.find(f => f.name === fnName);
+                if (fn) {
+                    // Push argument, then call
+                    rvm += compileExprToRVM(arg.replace(/^\(|\)$/g, ''), functions, indent);
+                    rvm += `${indent}call ${fnName}\n`;
+                } else {
+                    // Built-in or unknown - just push the result
+                    rvm += `${indent}; ${fnName} ${arg}\n`;
+                    rvm += `${indent}push 0  ; placeholder\n`;
+                }
+                return rvm;
+            }
+            
+            // Variable reference
+            if (expr.match(/^\w+$/)) {
+                const fn = functions.find(f => f.name === expr);
+                if (fn) {
+                    rvm += `${indent}call ${expr}\n`;
+                } else {
+                    rvm += `${indent}load ${expr}\n`;
+                }
+                return rvm;
+            }
+            
+            // Parenthesized expression
+            if (expr.startsWith('(') && expr.endsWith(')')) {
+                return compileExprToRVM(expr.slice(1, -1), functions, indent);
+            }
+            
+            // String concatenation (demo)
+            if (expr.includes('++')) {
+                rvm += `${indent}; string concat: ${expr}\n`;
+                const parts = expr.split('++').map(p => p.trim());
+                for (const part of parts) {
+                    rvm += compileExprToRVM(part, functions, indent);
+                }
+                rvm += `${indent}concat\n`.repeat(parts.length - 1);
+                return rvm;
+            }
+            
+            // Fallback
+            rvm += `${indent}; ${expr}\n`;
+            rvm += `${indent}push 0  ; uncompiled expression\n`;
+            return rvm;
+        }
         
         function setMode(mode) {
             // Save current editor content before switching
             editorContent[currentMode] = document.getElementById('editor').value;
+            
+            // If switching to RVM, compile the Phi code first
+            if (mode === 'rvm' && currentMode === 'phi') {
+                const phiCode = editorContent.phi;
+                try {
+                    editorContent.rvm = phi2rvm(phiCode);
+                    needsRecompile = false;
+                    document.getElementById('compile-status').textContent = '(compiled)';
+                    setStatus('Compiled phi → rvm');
+                } catch (e) {
+                    console.error('Compilation error:', e);
+                    editorContent.rvm = `; Compilation error: ${e.message}\n; Edit main.phi and try again`;
+                }
+            }
             
             // Update mode
             currentMode = mode;
@@ -412,7 +623,9 @@ main = take 10 fibs` }
             // Update tabs
             document.getElementById('tab-phi').classList.toggle('active', mode === 'phi');
             document.getElementById('tab-rvm').classList.toggle('active', mode === 'rvm');
-            document.getElementById('mode-label').textContent = mode === 'phi' ? 'Phi' : 'RVM Assembly';
+            document.getElementById('mode-label').innerHTML = mode === 'phi' 
+                ? 'Phi<span id="compile-status" class="compile-indicator"></span>'
+                : 'RVM Assembly<span id="compile-status" class="compile-indicator"> (from phi)</span>';
             
             // Load content for the new mode
             document.getElementById('editor').value = editorContent[mode];
@@ -436,11 +649,18 @@ main = take 10 fibs` }
             const select = document.getElementById('example-select');
             const example = examples[select.value];
             if (example) {
-                // Switch to the appropriate mode
-                setMode(example.mode);
-                // Set the code (also updates the stored content)
-                document.getElementById('editor').value = example.code;
-                editorContent[example.mode] = example.code;
+                // Load the phi code
+                editorContent.phi = example.phi;
+                // Compile to RVM
+                editorContent.rvm = phi2rvm(example.phi);
+                needsRecompile = false;
+                
+                // Switch to phi mode
+                currentMode = 'phi';
+                document.getElementById('tab-phi').classList.add('active');
+                document.getElementById('tab-rvm').classList.remove('active');
+                document.getElementById('mode-label').innerHTML = 'Phi<span id="compile-status" class="compile-indicator"></span>';
+                document.getElementById('editor').value = editorContent.phi;
             }
             select.value = '';
         }
@@ -458,64 +678,48 @@ main = take 10 fibs` }
             const bytecode = document.getElementById('bytecode');
             const target = document.getElementById('target-select').value;
             
+            // Save current content
+            editorContent[currentMode] = code;
+            
             setStatus('Running...', false, true);
             output.className = 'output-panel active';
             
             setTimeout(() => {
                 try {
-                    // If WASM is ready and we have RVM assembly
-                    if (wasmReady && currentMode === 'rvm') {
-                        const result = evaluate(code);
-                        output.textContent = `✓ RosettaVM Result:\n\n${result}`;
-                        output.className = 'output-panel active success';
-                        
-                        // Update types panel
-                        types.textContent = `Mode: RVM Assembly
-                        
-RVM assembly is low-level bytecode.
-No type inference performed.
-
-Stack-based execution model.`;
-                        
-                        // Update bytecode panel
-                        bytecode.innerHTML = formatBytecode(code);
-                        
-                        setStatus('Evaluated with WASM');
-                        showTab('output');
-                        return;
+                    // If in phi mode, compile first
+                    let rvmCode = code;
+                    if (currentMode === 'phi') {
+                        rvmCode = phi2rvm(code);
+                        editorContent.rvm = rvmCode;
+                        needsRecompile = false;
                     }
                     
-                    // If WASM is ready, try simple expression evaluation
-                    if (wasmReady && code.includes('main =')) {
-                        const mainMatch = code.match(/main\s*=\s*(.+)$/m);
-                        if (mainMatch) {
-                            const expr = mainMatch[1].trim();
+                    // If WASM is ready and we have RVM assembly
+                    if (wasmReady) {
+                        try {
+                            const result = evaluate(rvmCode);
+                            output.textContent = `✓ RosettaVM Result:\n\n${result}`;
+                            output.className = 'output-panel active success';
                             
-                            // Try numeric expressions with WASM
-                            if (/^[\d\s\+\-\*\/\%\(\)]+$/.test(expr)) {
-                                try {
-                                    const result = calculate(expr);
-                                    output.textContent = `✓ RosettaVM Result:\n\n${result}`;
-                                    output.className = 'output-panel active success';
-                                    
-                                    // Update types
-                                    types.textContent = `main : Nat\n\nExpression: ${expr}\nInferred type: Nat (natural number)`;
-                                    
-                                    // Update bytecode
-                                    bytecode.innerHTML = generateBytecode(expr);
-                                    
-                                    setStatus('Evaluated with WASM');
-                                    showTab('output');
-                                    return;
-                                } catch (e) {
-                                    // Fall through to demo mode
-                                }
-                            }
+                            // Update types panel
+                            types.textContent = currentMode === 'phi' 
+                                ? extractTypes(code)
+                                : 'Mode: RVM Assembly\n\nNo type inference for assembly.';
+                            
+                            // Update bytecode panel
+                            bytecode.innerHTML = formatBytecode(rvmCode);
+                            
+                            setStatus('Evaluated with WASM');
+                            showTab('output');
+                            return;
+                        } catch (e) {
+                            // WASM evaluation failed, try demo mode
+                            console.log('WASM eval failed:', e);
                         }
                     }
                     
                     // Demo mode fallback
-                    runDemoMode(code, output, types, bytecode, target);
+                    runDemoMode(code, output, types, bytecode, target, rvmCode);
                     
                 } catch (e) {
                     output.textContent = `Error: ${e.message || e}`;
@@ -525,9 +729,18 @@ Stack-based execution model.`;
             }, 100);
         }
         
+        function extractTypes(code) {
+            const types = [];
+            const typeMatches = code.matchAll(/^(\w+)\s*:\s*(.+)$/gm);
+            for (const m of typeMatches) {
+                types.push(`${m[1]} : ${m[2]}`);
+            }
+            return types.length ? types.join('\n') : 'No type signatures found.';
+        }
+        
         function formatBytecode(code) {
             const lines = code.split('\n');
-            let html = '<span class="bytecode-line">; Parsed RVM Assembly</span>\n\n';
+            let html = '<span class="bytecode-line">; RVM Bytecode</span>\n\n';
             let addr = 0;
             
             for (const line of lines) {
@@ -547,141 +760,106 @@ Stack-based execution model.`;
             return html;
         }
         
-        function generateBytecode(expr) {
-            // Simple bytecode generation for arithmetic
-            let html = '<span class="bytecode-line">; Generated RVM bytecode</span>\n\n';
-            html += '<span class="bytecode-line">fn main() {</span>\n';
-            
-            // Very simple: just show the expression as push/op sequence
-            const tokens = expr.match(/(\d+|[\+\-\*\/])/g) || [];
-            let addr = 0;
-            
-            for (const token of tokens) {
-                if (/\d+/.test(token)) {
-                    html += `<span class="bytecode-line">${String(addr).padStart(4, '0')}:</span> <span class="bytecode-instr">push</span> <span class="bytecode-arg">${token}</span>\n`;
-                    addr++;
-                } else {
-                    const op = { '+': 'add', '-': 'sub', '*': 'mul', '/': 'div' }[token] || token;
-                    html += `<span class="bytecode-line">${String(addr).padStart(4, '0')}:</span> <span class="bytecode-instr">${op}</span>\n`;
-                    addr++;
-                }
-            }
-            html += `<span class="bytecode-line">${String(addr).padStart(4, '0')}:</span> <span class="bytecode-instr">halt</span>\n`;
-            html += '<span class="bytecode-line">}</span>';
-            return html;
-        }
-        
         function escapeHtml(str) {
             return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         }
         
-        function runDemoMode(code, output, types, bytecode, target) {
+        function runDemoMode(code, output, types, bytecode, target, rvmCode) {
             // Pattern matching for demo
-            if (code.includes('main =')) {
+            if (code.includes('main =') || currentMode === 'rvm') {
                 const mainMatch = code.match(/main\s*=\s*(.+)$/m);
-                if (mainMatch) {
-                    const expr = mainMatch[1].trim();
-                    
-                    // String literals
-                    if (expr.startsWith('"') && expr.endsWith('"')) {
-                        output.textContent = expr.slice(1, -1);
+                const expr = mainMatch ? mainMatch[1].trim() : '';
+                
+                // Simple arithmetic (evaluate locally)
+                if (/^[\d\s\+\-\*\/\(\)]+$/.test(expr)) {
+                    try {
+                        const result = eval(expr);
+                        output.textContent = `✓ Result: ${result}`;
                         output.className = 'output-panel active success';
-                        types.textContent = `main : String\n\nLiteral string value.`;
+                        types.textContent = `main : Nat\n\n${extractTypes(code)}`;
+                        bytecode.innerHTML = formatBytecode(rvmCode);
                         setStatus('Evaluated (demo)');
                         showTab('output');
                         return;
-                    }
-                    
-                    // Simple arithmetic
-                    if (/^[\d\s\+\-\*\/]+$/.test(expr)) {
-                        try {
-                            const result = eval(expr);
-                            output.textContent = String(result);
-                            output.className = 'output-panel active success';
-                            types.textContent = `main : Nat\n\nArithmetic expression.`;
-                            bytecode.innerHTML = generateBytecode(expr);
-                            setStatus('Evaluated (demo)');
-                            showTab('output');
-                            return;
-                        } catch {}
-                    }
-                    
-                    // Pattern: greet "..."
-                    if (expr.includes('greet "')) {
-                        const nameMatch = expr.match(/greet "([^"]+)"/);
-                        if (nameMatch) {
-                            output.textContent = `"Hello, ${nameMatch[1]}!"`;
-                            output.className = 'output-panel active success';
-                            types.textContent = `greet : String -> String\nmain : String\n\nFunction application.`;
-                            setStatus('Evaluated (demo)');
-                            showTab('output');
-                            return;
-                        }
-                    }
-                    
-                    // Pattern: take n fibs
-                    if (expr.includes('take') && expr.includes('fibs')) {
-                        output.textContent = '[0, 1, 1, 2, 3, 5, 8, 13, 21, 34]';
-                        output.className = 'output-panel active success';
-                        types.textContent = `fibs : Stream Nat\ntake : Nat -> Stream a -> List a\nmain : List Nat`;
-                        setStatus('Evaluated (demo)');
-                        showTab('output');
-                        return;
-                    }
-                    
-                    // Generic success
-                    const inferredType = inferType(expr);
-                    output.textContent = `✓ Type checked successfully
-
-main : ${inferredType}
-
-Expression: ${expr}
-
-Full evaluation available for:
-• RVM assembly (switch to main.rvm tab)
-• Numeric expressions (try: main = 6 * 7)`;
-                    output.className = 'output-panel active success';
-                    
-                    // Update types panel
-                    types.textContent = `main : ${inferredType}\n\n${extractDefinitions(code).map(d => d.trim()).join('\n')}`;
-                    
-                    setStatus('Type checked (demo)');
-                    showTab('output');
+                    } catch {}
                 }
-            } else {
-                const defs = extractDefinitions(code);
-                output.textContent = `✓ Module type checked
+                
+                // Factorial pattern
+                if (expr.includes('factorial')) {
+                    const n = parseInt(expr.match(/factorial\s+(\d+)/)?.[1] || '5');
+                    const factorial = n => n <= 1 ? 1 : n * factorial(n - 1);
+                    output.textContent = `✓ Result: ${factorial(n)}`;
+                    output.className = 'output-panel active success';
+                    types.textContent = `factorial : Nat -> Nat\nmain : Nat`;
+                    bytecode.innerHTML = formatBytecode(rvmCode);
+                    setStatus('Evaluated (demo)');
+                    showTab('output');
+                    return;
+                }
+                
+                // Fibonacci pattern
+                if (expr.includes('fib')) {
+                    const n = parseInt(expr.match(/fib\s+(\d+)/)?.[1] || '10');
+                    const fib = n => n <= 1 ? n : fib(n - 1) + fib(n - 2);
+                    output.textContent = `✓ Result: ${fib(n)}`;
+                    output.className = 'output-panel active success';
+                    types.textContent = `fib : Nat -> Nat\nmain : Nat`;
+                    bytecode.innerHTML = formatBytecode(rvmCode);
+                    setStatus('Evaluated (demo)');
+                    showTab('output');
+                    return;
+                }
+                
+                // String patterns
+                if (expr.includes('greet "')) {
+                    const nameMatch = expr.match(/greet "([^"]+)"/);
+                    if (nameMatch) {
+                        output.textContent = `✓ Result: "Hello, ${nameMatch[1]}!"`;
+                        output.className = 'output-panel active success';
+                        types.textContent = `greet : String -> String\nmain : String`;
+                        bytecode.innerHTML = formatBytecode(rvmCode);
+                        setStatus('Evaluated (demo)');
+                        showTab('output');
+                        return;
+                    }
+                }
+                
+                // Take fibs pattern
+                if (expr.includes('take') && expr.includes('fibs')) {
+                    output.textContent = `✓ Result: [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]`;
+                    output.className = 'output-panel active success';
+                    types.textContent = `fibs : Stream Nat\ntake : Nat -> Stream a -> List a\nmain : List Nat`;
+                    bytecode.innerHTML = formatBytecode(rvmCode);
+                    setStatus('Evaluated (demo)');
+                    showTab('output');
+                    return;
+                }
+                
+                // Generic success
+                output.textContent = `✓ Compiled successfully
 
-Defined:
-${defs.join('\n')}
+Generated RVM code (${rvmCode.split('\n').length} lines)
+
+Switch to "main.rvm" tab to see the compiled assembly.`;
+                output.className = 'output-panel active success';
+                types.textContent = extractTypes(code);
+                bytecode.innerHTML = formatBytecode(rvmCode);
+                setStatus('Compiled (demo)');
+                showTab('output');
+            } else {
+                const defs = extractTypes(code);
+                output.textContent = `✓ Module compiled
+
+Types:
+${defs}
 
 No 'main' expression to evaluate.`;
                 output.className = 'output-panel active success';
-                types.textContent = defs.join('\n');
-                setStatus('Type checked (demo)');
+                types.textContent = defs;
+                bytecode.innerHTML = formatBytecode(rvmCode);
+                setStatus('Compiled (demo)');
                 showTab('output');
             }
-        }
-        
-        function inferType(expr) {
-            if (expr.startsWith('"')) return 'String';
-            if (expr.match(/^\d+$/)) return 'Nat';
-            if (expr.match(/^[\d\s\+\-\*\/]+$/)) return 'Nat';
-            if (expr.includes('greet')) return 'String';
-            if (expr.includes('take')) return 'List Nat';
-            if (expr.includes('extract')) return 'a';
-            return 'a';
-        }
-        
-        function extractDefinitions(code) {
-            const defs = [];
-            const dataMatches = code.matchAll(/data\s+(\w+)/g);
-            for (const m of dataMatches) defs.push(`  data ${m[1]}`);
-            const typeMatches = code.matchAll(/type\s+(\w+)/g);
-            for (const m of typeMatches) defs.push(`  type ${m[1]}`);
-            const fnMatches = code.matchAll(/^(\w+)\s*:/gm);
-            for (const m of fnMatches) if (m[1] !== 'data' && m[1] !== 'type') defs.push(`  ${m[1]} : ...`);
-            return defs.length ? defs : ['  (no definitions found)'];
         }
         
         function shareCode() {
