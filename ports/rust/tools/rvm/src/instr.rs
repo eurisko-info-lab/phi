@@ -159,6 +159,40 @@ pub enum BuiltinOp {
     Eval,
     Quote,
     Typeof,
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Network FFI (requires 'network' feature)
+    // ═══════════════════════════════════════════════════════════════════
+    
+    // HTTP client
+    HttpGet,      // url, headers -> response
+    HttpPost,     // url, headers, body -> response
+    HttpPut,      // url, headers, body -> response
+    HttpDelete,   // url, headers -> response
+    
+    // JSON
+    JsonParse,    // string -> json value
+    JsonStringify, // json value -> string
+    JsonGet,      // json, path -> value
+    
+    // Time
+    Now,          // -> timestamp (millis since epoch)
+    Sleep,        // millis -> ()
+    FormatTime,   // timestamp, format -> string
+    ParseTime,    // string, format -> timestamp
+    
+    // Environment
+    GetEnv,       // name -> maybe string
+    SetEnv,       // name, value -> ()
+    LoadDotEnv,   // path -> ()
+    
+    // Secrets (secure credential access)
+    GetSecret,    // service, key -> maybe string (from keyring)
+    
+    // Async (requires 'async' feature)
+    Spawn,        // thunk -> task_id
+    Await,        // task_id -> result
+    Timeout,      // millis, thunk -> maybe result
 }
 
 /// A compiled code block

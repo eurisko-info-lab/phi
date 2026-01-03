@@ -3,13 +3,18 @@
 use std::fmt;
 
 /// A 256-bit content hash
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Hash([u8; 32]);
 
 impl Hash {
     /// Create hash from raw bytes
     pub fn new(bytes: [u8; 32]) -> Self {
         Hash(bytes)
+    }
+
+    /// Zero hash (for default/placeholder)
+    pub fn zero() -> Self {
+        Hash([0u8; 32])
     }
 
     /// Create hash from raw bytes (alias)

@@ -13,9 +13,11 @@ pub enum Val {
     Float(f64),
     List(Rc<Vec<Val>>),
     Tuple(Rc<Vec<Val>>),
-    Record(Rc<Vec<(String, Val)>>),
-    Con(Hash, u32, Rc<Vec<Val>>),  // type hash, tag, fields
-    Closure(Hash, Rc<Env>),         // code hash, captured env
+    Record(Vec<(String, Val)>),         // not Rc for easier construction
+    Bytes(Vec<u8>),                      // binary data for HTTP bodies
+    Con(Hash, u32, Rc<Vec<Val>>),        // type hash, tag, fields
+    Constructor { type_hash: Hash, tag: u8, fields: Vec<Val> }, // named fields variant
+    Closure(Hash, Rc<Env>),              // code hash, captured env
     Thunk(Hash, Rc<Env>, Option<Box<Val>>),
     Builtin(String),
     Continuation(Box<Continuation>),
@@ -29,6 +31,7 @@ impl Val {
     pub fn bool(b: bool) -> Self { Val::Bool(b) }
     pub fn list(v: Vec<Val>) -> Self { Val::List(Rc::new(v)) }
     pub fn tuple(v: Vec<Val>) -> Self { Val::Tuple(Rc::new(v)) }
+    pub fn bytes(b: Vec<u8>) -> Self { Val::Bytes(b) }
     pub fn con(type_hash: Hash, tag: u32, fields: Vec<Val>) -> Self {
         Val::Con(type_hash, tag, Rc::new(fields))
     }
@@ -50,6 +53,14 @@ impl Val {
 
     pub fn as_list(&self) -> Option<&[Val]> {
         match self { Val::List(v) => Some(v), _ => None }
+    }
+
+    pub fn as_bytes(&self) -> Option<Vec<u8>> {
+        match self {
+            Val::Bytes(b) => Some(b.clone()),
+            Val::Str(s) => Some(s.as_bytes().to_vec()),
+            _ => None,
+        }
     }
 
     pub fn as_closure(&self) -> Option<(Hash, &Env)> {
@@ -97,6 +108,18 @@ impl fmt::Display for Val {
             }
             Val::Con(_, tag, fields) => {
                 write!(f, "Con#{}(", tag)?;
+                for (i, v) in fields.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", v)?;
+                }
+                write!(f, ")")
+            }
+            Val::Bytes(b) => write!(f, "<bytes len={}>", b.len()),
+            Val::Constructor { tag, fields, .. } if fields.is_empty() => {
+                write!(f, "Constructor#{}", tag)
+            }
+            Val::Constructor { tag, fields, .. } => {
+                write!(f, "Constructor#{}(", tag)?;
                 for (i, v) in fields.iter().enumerate() {
                     if i > 0 { write!(f, ", ")?; }
                     write!(f, "{}", v)?;

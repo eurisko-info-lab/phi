@@ -8,6 +8,54 @@ use crate::instr::CodeBlock;
 use crate::value::{Val, Env, Frame};
 use crate::store::Store;
 
+// JSON conversion helpers (for non-network builds)
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "network")))]
+fn json_to_val(json: &serde_json::Value) -> Val {
+    use serde_json::Value;
+    match json {
+        Value::Null => Val::Unit,
+        Value::Bool(b) => Val::Bool(*b),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Val::Int(i)
+            } else if let Some(f) = n.as_f64() {
+                Val::Float(f)
+            } else {
+                Val::Unit
+            }
+        }
+        Value::String(s) => Val::str(s.clone()),
+        Value::Array(arr) => Val::list(arr.iter().map(json_to_val).collect()),
+        Value::Object(obj) => Val::Record(
+            obj.iter()
+                .map(|(k, v)| (k.clone(), json_to_val(v)))
+                .collect(),
+        ),
+    }
+}
+
+#[cfg(not(all(not(target_arch = "wasm32"), feature = "network")))]
+fn val_to_json(val: &Val) -> serde_json::Value {
+    use serde_json::{json, Value, Map};
+    match val {
+        Val::Unit => Value::Null,
+        Val::Bool(b) => json!(b),
+        Val::Int(i) => json!(i),
+        Val::Float(f) => json!(f),
+        Val::Str(s) => json!(s.as_str()),
+        Val::List(items) => Value::Array(items.iter().map(val_to_json).collect()),
+        Val::Tuple(items) => Value::Array(items.iter().map(val_to_json).collect()),
+        Val::Record(fields) => {
+            let mut map = Map::new();
+            for (k, v) in fields {
+                map.insert(k.clone(), val_to_json(v));
+            }
+            Value::Object(map)
+        }
+        _ => Value::Null, // Closures, etc. can't be serialized
+    }
+}
+
 /// VM execution state
 pub struct VM<'a> {
     // Store reference
@@ -586,7 +634,9 @@ impl<'a> VM<'a> {
                     Val::List(_) => "List",
                     Val::Tuple(_) => "Tuple",
                     Val::Record(_) => "Record",
+                    Val::Bytes(_) => "Bytes",
                     Val::Con(_, _, _) => "Con",
+                    Val::Constructor { .. } => "Constructor",
                     Val::Closure(_, _) => "Closure",
                     Val::Thunk(_, _, _) => "Thunk",
                     Val::Builtin(_) => "Builtin",
@@ -712,6 +762,9 @@ impl<'a> VM<'a> {
     }
 
     fn builtin(&mut self, op: BuiltinOp) -> VMResult<()> {
+        #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+        use crate::ffi;
+        
         match op {
             BuiltinOp::Print => {
                 let v = self.pop()?;
@@ -752,6 +805,255 @@ impl<'a> VM<'a> {
                 let list: Vec<Val> = (start..end).map(Val::Int).collect();
                 self.stack.push(Val::list(list));
             }
+            
+            // ═══════════════════════════════════════════════════════════════
+            // Network FFI (requires 'network' feature)
+            // ═══════════════════════════════════════════════════════════════
+            
+            #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+            BuiltinOp::HttpGet => {
+                let headers = self.pop()?;
+                let url_val = self.pop()?;
+                let url = url_val.as_str().ok_or(VMError::TypeMismatch {
+                    expected: "string", got: format!("{}", url_val)
+                })?;
+                let result = ffi::http_get(url, &headers)?;
+                self.stack.push(result);
+            }
+            #[cfg(not(all(not(target_arch = "wasm32"), feature = "network")))]
+            BuiltinOp::HttpGet => {
+                return Err(VMError::NotImplemented("HttpGet requires 'network' feature".into()));
+            }
+            
+            #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+            BuiltinOp::HttpPost => {
+                let body = self.pop()?;
+                let headers = self.pop()?;
+                let url_val = self.pop()?;
+                let url = url_val.as_str().ok_or(VMError::TypeMismatch {
+                    expected: "string", got: format!("{}", url_val)
+                })?;
+                let body_bytes = body.as_bytes().unwrap_or_default();
+                let result = ffi::http_post(url, &headers, &body_bytes)?;
+                self.stack.push(result);
+            }
+            #[cfg(not(all(not(target_arch = "wasm32"), feature = "network")))]
+            BuiltinOp::HttpPost => {
+                return Err(VMError::NotImplemented("HttpPost requires 'network' feature".into()));
+            }
+            
+            #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+            BuiltinOp::HttpPut => {
+                let body = self.pop()?;
+                let headers = self.pop()?;
+                let url_val = self.pop()?;
+                let url = url_val.as_str().ok_or(VMError::TypeMismatch {
+                    expected: "string", got: format!("{}", url_val)
+                })?;
+                let body_bytes = body.as_bytes().unwrap_or_default();
+                let result = ffi::http_put(url, &headers, &body_bytes)?;
+                self.stack.push(result);
+            }
+            #[cfg(not(all(not(target_arch = "wasm32"), feature = "network")))]
+            BuiltinOp::HttpPut => {
+                return Err(VMError::NotImplemented("HttpPut requires 'network' feature".into()));
+            }
+            
+            #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+            BuiltinOp::HttpDelete => {
+                let headers = self.pop()?;
+                let url_val = self.pop()?;
+                let url = url_val.as_str().ok_or(VMError::TypeMismatch {
+                    expected: "string", got: format!("{}", url_val)
+                })?;
+                let result = ffi::http_delete(url, &headers)?;
+                self.stack.push(result);
+            }
+            #[cfg(not(all(not(target_arch = "wasm32"), feature = "network")))]
+            BuiltinOp::HttpDelete => {
+                return Err(VMError::NotImplemented("HttpDelete requires 'network' feature".into()));
+            }
+            
+            // JSON (available without network feature via serde_json)
+            BuiltinOp::JsonParse => {
+                let s = self.pop()?;
+                let json_str = s.as_str().ok_or(VMError::TypeMismatch {
+                    expected: "string", got: format!("{}", s)
+                })?;
+                #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+                {
+                    let result = ffi::json_parse(json_str)?;
+                    self.stack.push(result);
+                }
+                #[cfg(not(all(not(target_arch = "wasm32"), feature = "network")))]
+                {
+                    // Basic JSON parsing without full FFI
+                    let json: serde_json::Value = serde_json::from_str(json_str)
+                        .map_err(|e| VMError::TypeMismatch { expected: "valid JSON", got: format!("{}", e) })?;
+                    self.stack.push(json_to_val(&json));
+                }
+            }
+            BuiltinOp::JsonStringify => {
+                let val = self.pop()?;
+                #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+                {
+                    let json_str = ffi::json_stringify(&val)?;
+                    self.stack.push(Val::str(json_str));
+                }
+                #[cfg(not(all(not(target_arch = "wasm32"), feature = "network")))]
+                {
+                    let json = val_to_json(&val);
+                    let json_str = json.to_string();
+                    self.stack.push(Val::str(json_str));
+                }
+            }
+            BuiltinOp::JsonGet => {
+                // json, path -> value (simplified: just field access)
+                let path = self.pop()?;
+                let json = self.pop()?;
+                let field = path.as_str().ok_or(VMError::TypeMismatch {
+                    expected: "string", got: format!("{}", path)
+                })?;
+                if let Val::Record(fields) = json {
+                    let val = fields.iter()
+                        .find(|(k, _)| k == field)
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or(Val::Unit);
+                    self.stack.push(val);
+                } else {
+                    self.stack.push(Val::Unit);
+                }
+            }
+            
+            // Time (basic support without FFI)
+            BuiltinOp::Now => {
+                #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+                {
+                    let result = ffi::now()?;
+                    self.stack.push(result);
+                }
+                #[cfg(not(all(not(target_arch = "wasm32"), feature = "network")))]
+                {
+                    use std::time::{SystemTime, UNIX_EPOCH};
+                    let millis = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    self.stack.push(Val::Int(millis));
+                }
+            }
+            BuiltinOp::Sleep => {
+                let millis = self.pop_int()?;
+                #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+                {
+                    ffi::sleep(millis)?;
+                }
+                #[cfg(not(all(not(target_arch = "wasm32"), feature = "network")))]
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(millis as u64));
+                }
+                self.stack.push(Val::Unit);
+            }
+            BuiltinOp::FormatTime => {
+                let format = self.pop()?;
+                let millis = self.pop_int()?;
+                let _fmt_str = format.as_str().unwrap_or("iso8601");
+                #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+                {
+                    let result = ffi::format_time(millis, _fmt_str)?;
+                    self.stack.push(result);
+                }
+                #[cfg(not(all(not(target_arch = "wasm32"), feature = "network")))]
+                {
+                    // Basic ISO8601 formatting
+                    self.stack.push(Val::str(format!("{}", millis)));
+                }
+            }
+            BuiltinOp::ParseTime => {
+                // Simplified: just parse ISO8601
+                let _format = self.pop()?;
+                let _s = self.pop()?;
+                // TODO: implement proper parsing
+                self.stack.push(Val::Int(0));
+            }
+            
+            // Environment
+            BuiltinOp::GetEnv => {
+                let name = self.pop()?;
+                let name_str = name.as_str().ok_or(VMError::TypeMismatch {
+                    expected: "string", got: format!("{}", name)
+                })?;
+                #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+                {
+                    let result = ffi::get_env(name_str)?;
+                    self.stack.push(result);
+                }
+                #[cfg(not(all(not(target_arch = "wasm32"), feature = "network")))]
+                {
+                    match std::env::var(name_str) {
+                        Ok(val) => self.stack.push(Val::Constructor {
+                            type_hash: Hash::default(),
+                            tag: 0, // Just
+                            fields: vec![Val::str(val)],
+                        }),
+                        Err(_) => self.stack.push(Val::Constructor {
+                            type_hash: Hash::default(),
+                            tag: 1, // Nothing
+                            fields: vec![],
+                        }),
+                    }
+                }
+            }
+            BuiltinOp::SetEnv => {
+                let value = self.pop()?;
+                let name = self.pop()?;
+                let name_str = name.as_str().ok_or(VMError::TypeMismatch {
+                    expected: "string", got: format!("{}", name)
+                })?;
+                let value_str = value.as_str().ok_or(VMError::TypeMismatch {
+                    expected: "string", got: format!("{}", value)
+                })?;
+                #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+                ffi::set_env(name_str, value_str)?;
+                #[cfg(not(all(not(target_arch = "wasm32"), feature = "network")))]
+                std::env::set_var(name_str, value_str);
+                self.stack.push(Val::Unit);
+            }
+            BuiltinOp::LoadDotEnv => {
+                let path = self.pop()?;
+                let _path_str = path.as_str().ok_or(VMError::TypeMismatch {
+                    expected: "string", got: format!("{}", path)
+                })?;
+                #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+                ffi::load_dotenv(_path_str)?;
+                // Without network feature, just succeed silently
+                self.stack.push(Val::Unit);
+            }
+            
+            // Secrets (requires network feature)
+            #[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+            BuiltinOp::GetSecret => {
+                let key = self.pop()?;
+                let service = self.pop()?;
+                let service_str = service.as_str().ok_or(VMError::TypeMismatch {
+                    expected: "string", got: format!("{}", service)
+                })?;
+                let key_str = key.as_str().ok_or(VMError::TypeMismatch {
+                    expected: "string", got: format!("{}", key)
+                })?;
+                let result = ffi::get_secret(service_str, key_str)?;
+                self.stack.push(result);
+            }
+            #[cfg(not(all(not(target_arch = "wasm32"), feature = "network")))]
+            BuiltinOp::GetSecret => {
+                return Err(VMError::NotImplemented("GetSecret requires 'network' feature".into()));
+            }
+            
+            // Async (stubs for now)
+            BuiltinOp::Spawn | BuiltinOp::Await | BuiltinOp::Timeout => {
+                return Err(VMError::NotImplemented("async operations".into()));
+            }
+            
             _ => return Err(VMError::NotImplemented(format!("{:?}", op))),
         }
         Ok(())

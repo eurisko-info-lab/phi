@@ -19,6 +19,7 @@ pub mod cuda;  // CUDA GPU backend
 pub mod cuda_codegen;  // Generic CUDA code generator
 pub mod parallel;  // Rayon parallel execution
 pub mod phi_compiler;  // Phi to RVM compiler
+pub mod ffi;  // Network FFI for autonomous agents
 
 use std::env;
 use std::fs;

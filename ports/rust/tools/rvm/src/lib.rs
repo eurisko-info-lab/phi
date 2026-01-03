@@ -1,6 +1,7 @@
-//! RosettaVM Library - WebAssembly bindings
+//! RosettaVM Library - WebAssembly bindings and FFI
 //!
-//! This module provides the API for running Phi specs in the browser.
+//! This module provides the API for running Phi specs in the browser
+//! and network FFI for autonomous agents.
 
 pub mod hash;
 pub mod value;
@@ -11,6 +12,10 @@ pub mod parse;
 pub mod compile;
 pub mod port;
 pub mod phi_compiler;
+
+// Network FFI (native only, with network feature)
+#[cfg(all(not(target_arch = "wasm32"), feature = "network"))]
+pub mod ffi;
 
 // Re-export parallel only for native (uses rayon)
 #[cfg(not(target_arch = "wasm32"))]
@@ -28,6 +33,13 @@ pub mod parallel {
 pub mod cuda;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cuda_codegen;
+
+// Re-exports for library usage
+pub use hash::Hash;
+pub use value::Val;
+pub use vm::{VM, VMResult, VMError};
+pub use store::Store;
+pub use instr::{Instr, Literal, BuiltinOp};
 
 // WASM-specific bindings
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]

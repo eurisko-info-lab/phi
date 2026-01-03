@@ -1,41 +1,48 @@
 [package]
 name = "rosettavm"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A content-addressed virtual machine for Port/Phi"
 license = "MIT"
+
+[features]
+default = ["cli"]
+cli = []
+# Network FFI for autonomous agents (not needed for WASM playground)
+network = ["reqwest", "tokio", "keyring"]
+# Full async runtime
+async = ["tokio/full"]
+# WebAssembly support  
+wasm = ["wasm-bindgen", "console_error_panic_hook", "web-sys"]
 
 [dependencies]
 blake3 = "1.5"
 thiserror = "1.0"
 rustc-hash = "1.1"
 rayon = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Optional network dependencies (for autonomous agents)
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"], optional = true }
+tokio = { version = "1.42", features = ["rt", "time", "sync"], optional = true }
+keyring = { version = "3.6", optional = true }
+
+# Optional WASM dependencies
+wasm-bindgen = { version = "0.2", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+web-sys = { version = "0.3", optional = true, features = ["console"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Native-only dependencies
+dotenvy = "0.15"
 
 [profile.release]
 opt-level = 3
 lto = true
 
-# WebAssembly support
 [lib]
 crate-type = ["cdylib", "rlib"]
-
-[dependencies.wasm-bindgen]
-version = "0.2"
-optional = true
-
-[dependencies.console_error_panic_hook]
-version = "0.1"
-optional = true
-
-[dependencies.web-sys]
-version = "0.3"
-optional = true
-features = ["console"]
-
-[features]
-default = ["cli"]
-cli = []
-wasm = ["wasm-bindgen", "console_error_panic_hook", "web-sys"]
 
 [[bin]]
 name = "rvm"
