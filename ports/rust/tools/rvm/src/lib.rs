@@ -277,7 +277,7 @@ fn format_instr(instr: &crate::instr::Instr) -> String {
             Literal::Bool(b) => format!("PUSH {}", b),
             Literal::Nil => "PUSH nil".to_string(),
             Literal::Unit => "PUSH unit".to_string(),
-            Literal::Hash(h) => format!("PUSH @{:?}", h),
+            Literal::Hash(h) => format!("PUSH @{}", h.short()),
         },
         Instr::Pop => "POP".to_string(),
         Instr::Dup => "DUP".to_string(),
@@ -288,8 +288,8 @@ fn format_instr(instr: &crate::instr::Instr) -> String {
         // Env
         Instr::Load(n) => format!("LOAD {}", n),
         Instr::Store(n) => format!("STORE {}", n),
-        Instr::LoadGlobal(s) => format!("LOADG {}", s),
-        Instr::StoreGlobal(s) => format!("STOREG {}", s),
+        Instr::LoadGlobal(h) => format!("LOADG @{}", h.short()),
+        Instr::StoreGlobal(h) => format!("STOREG @{}", h.short()),
         
         // Arithmetic
         Instr::Add => "ADD".to_string(),
@@ -316,15 +316,15 @@ fn format_instr(instr: &crate::instr::Instr) -> String {
         Instr::Jump(n) => format!("JMP {}", n),
         Instr::JumpIf(n) => format!("JT {}", n),
         Instr::JumpIfNot(n) => format!("JF {}", n),
-        Instr::Call(n) => format!("CALL {}", n),
-        Instr::TailCall(n) => format!("TAILCALL {}", n),
+        Instr::Call(h) => format!("CALL @{}", h.short()),
+        Instr::TailCall(h) => format!("TAILCALL @{}", h.short()),
         Instr::Return => "RET".to_string(),
         Instr::Halt => "HALT".to_string(),
         
         // Data structures
         Instr::MkList(n) => format!("MKLIST {}", n),
         Instr::MkTuple(n) => format!("MKTUPLE {}", n),
-        Instr::Closure(h, n) => format!("CLOSURE @{:?} {}", h, n),
+        Instr::Closure(h, n) => format!("CLOSURE @{} {}", h.short(), n),
         Instr::Apply => "APPLY".to_string(),
         Instr::ApplyN(n) => format!("APPLYN {}", n),
         Instr::Index => "INDEX".to_string(),
@@ -444,6 +444,8 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
     let mut output = String::new();
     let mut function_cases: HashMap<String, Vec<(String, String)>> = HashMap::new();
     let mut main_expr: Option<String> = None;
+    // Map hash short form to function name for display
+    let mut hash_to_name: HashMap<String, String> = HashMap::new();
     
     for line in source.lines() {
         let line = line.trim();
@@ -488,6 +490,52 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
         }
     }
     
+    // First pass: register all function names by their hash
+    for (name, _) in &function_cases {
+        let name_hash = hash::Hash::of_str(name);
+        hash_to_name.insert(name_hash.short(), name.clone());
+    }
+    
+    // Helper to format instruction with name resolution
+    let format_with_names = |instr: &crate::instr::Instr| -> String {
+        use crate::instr::{Instr, Literal};
+        match instr {
+            Instr::LoadGlobal(h) => {
+                let short = h.short();
+                if let Some(name) = hash_to_name.get(&short) {
+                    format!("LOADG {}", name)
+                } else {
+                    format!("LOADG @{}", short)
+                }
+            }
+            Instr::Closure(h, n) => {
+                let short = h.short();
+                if let Some(name) = hash_to_name.get(&short) {
+                    format!("CLOSURE {} {}", name, n)
+                } else {
+                    format!("CLOSURE @{} {}", short, n)
+                }
+            }
+            Instr::Call(h) => {
+                let short = h.short();
+                if let Some(name) = hash_to_name.get(&short) {
+                    format!("CALL {}", name)
+                } else {
+                    format!("CALL @{}", short)
+                }
+            }
+            Instr::Push(Literal::Hash(h)) => {
+                let short = h.short();
+                if let Some(name) = hash_to_name.get(&short) {
+                    format!("PUSH {}", name)
+                } else {
+                    format!("PUSH @{}", short)
+                }
+            }
+            _ => format_instr(instr),
+        }
+    };
+    
     // Generate RVM for each function
     for (name, cases) in &function_cases {
         for (i, (args, body)) in cases.iter().enumerate() {
@@ -509,21 +557,22 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
                 name.clone()
             };
             
-            // Parse and compile body
-            let full_expr = if args.is_empty() {
-                body.clone()
-            } else {
-                format!("\\{} -> {}", args, body)
-            };
-            
-            match Parser::new(&full_expr) {
+            // Parse and compile body directly (not as lambda)
+            match Parser::new(body) {
                 Ok(mut parser) => match parser.parse_expr() {
                     Ok(port_expr) => {
                         let expr = convert_expr(&port_expr);
-                        let block = compile::Compiler::compile(&expr);
-                        output.push_str(&format!("fn {}() {{\n", fn_name));
+                        let params: Vec<String> = args.split_whitespace()
+                            .map(|s| s.to_string())
+                            .collect();
+                        let block = if params.is_empty() {
+                            compile::Compiler::compile(&expr)
+                        } else {
+                            compile::Compiler::compile_function(&params, &expr)
+                        };
+                        output.push_str(&format!("fn {}({}) {{\n", fn_name, args));
                         for instr in &block.code {
-                            output.push_str(&format!("    {}\n", format_instr(instr)));
+                            output.push_str(&format!("    {}\n", format_with_names(instr)));
                         }
                         output.push_str("}\n\n");
                     }
@@ -549,7 +598,7 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
                     let block = compile::Compiler::compile(&expr);
                     output.push_str("fn main() {\n");
                     for instr in &block.code {
-                        output.push_str(&format!("    {}\n", format_instr(instr)));
+                        output.push_str(&format!("    {}\n", format_with_names(instr)));
                     }
                     output.push_str("}\n");
                 }

@@ -45,11 +45,11 @@ export interface InitOutput {
   readonly calculate: (a: number, b: number) => [number, number, number, number];
   readonly compile_phi: (a: number, b: number) => [number, number, number, number];
   readonly evaluate: (a: number, b: number) => [number, number, number, number];
+  readonly evaluate_expr: (a: number, b: number) => [number, number, number, number];
+  readonly init: () => void;
   readonly parse_rvm: (a: number, b: number) => [number, number, number, number];
   readonly run_phi: (a: number, b: number) => [number, number, number, number];
   readonly version: () => [number, number];
-  readonly init: () => void;
-  readonly evaluate_expr: (a: number, b: number) => [number, number, number, number];
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
   readonly __wbindgen_malloc: (a: number, b: number) => number;
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
