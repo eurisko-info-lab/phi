@@ -124,17 +124,28 @@
             outline: none;
         }
         
-        .output {
+        .output-container {
             flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+        .output-panel {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
             overflow: auto;
             padding: 1rem;
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.875rem;
             line-height: 1.6;
             white-space: pre-wrap;
+            display: none;
         }
-        .output.error { color: var(--error); }
-        .output.success { color: var(--success); }
+        .output-panel.active { display: block; }
+        .output-panel.error { color: var(--error); }
+        .output-panel.success { color: var(--success); }
         
         .status-bar {
             display: flex;
@@ -176,6 +187,11 @@
             font-size: 0.75rem;
         }
         
+        .type-info { color: var(--accent3); }
+        .bytecode-line { color: var(--text-dim); }
+        .bytecode-instr { color: var(--accent); }
+        .bytecode-arg { color: var(--accent2); }
+        
         @media (max-width: 768px) {
             .main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
         }
@@ -203,11 +219,11 @@
     </header>
     
     <div class="main">
-        <div class="panel">
+        <div class="panel" id="editor-panel">
             <div class="panel-header">
                 <div class="panel-tabs">
-                    <button class="tab active" onclick="setMode('phi')">main.phi</button>
-                    <button class="tab" onclick="setMode('rvm')">main.rvm</button>
+                    <button class="tab active" id="tab-phi" onclick="setMode('phi')">main.phi</button>
+                    <button class="tab" id="tab-rvm" onclick="setMode('rvm')">main.rvm</button>
                 </div>
                 <span id="mode-label">Phi</span>
             </div>
@@ -229,12 +245,12 @@ main = greet "World"
             </div>
         </div>
         
-        <div class="panel">
+        <div class="panel" id="output-panel">
             <div class="panel-header">
                 <div class="panel-tabs">
-                    <button class="tab active" onclick="showTab('output')">Output</button>
-                    <button class="tab" onclick="showTab('types')">Types</button>
-                    <button class="tab" onclick="showTab('bytecode')">Bytecode</button>
+                    <button class="tab active" id="tab-output" onclick="showTab('output')">Output</button>
+                    <button class="tab" id="tab-types" onclick="showTab('types')">Types</button>
+                    <button class="tab" id="tab-bytecode" onclick="showTab('bytecode')">Bytecode</button>
                 </div>
                 <select id="target-select">
                     <option value="eval">Evaluate</option>
@@ -242,9 +258,13 @@ main = greet "World"
                     <option value="js">Compile to JS</option>
                 </select>
             </div>
-            <div id="output" class="output">Click "Run" or press Ctrl+Enter to evaluate.
+            <div class="output-container">
+                <div id="output" class="output-panel active">Click "Run" or press Ctrl+Enter to evaluate.
 
 Using RosettaVM in WebAssembly for real evaluation!</div>
+                <div id="types" class="output-panel">Run code to see type information.</div>
+                <div id="bytecode" class="output-panel">Run code to see compiled bytecode.</div>
+            </div>
         </div>
     </div>
     
@@ -264,6 +284,33 @@ Using RosettaVM in WebAssembly for real evaluation!</div>
         
         let wasmReady = false;
         let currentMode = 'phi';
+        let currentOutputTab = 'output';
+        
+        // Store content for each editor mode
+        const editorContent = {
+            phi: `-- Welcome to the Φ Playground!
+-- Write your specification below and click Run.
+
+-- Type signature
+greet : String -> String
+greet name = "Hello, " ++ name ++ "!"
+
+-- Algebraic data type
+data Greeting where
+  Hello : String -> Greeting
+
+-- Main expression to evaluate
+main = greet "World"`,
+            rvm: `; RosettaVM assembly example
+; This runs directly in the browser via WebAssembly
+
+fn main() {
+    push 6
+    push 7
+    mul
+    halt
+}`
+        };
         
         // Initialize WASM
         async function initWasm() {
@@ -295,13 +342,13 @@ Using RosettaVM in WebAssembly for real evaluation!</div>
         window.setMode = setMode;
         
         const examples = {
-            hello: `-- Hello World in Φ
+            hello: { mode: 'phi', code: `-- Hello World in Φ
 greet : String -> String
 greet name = "Hello, " ++ name ++ "!"
 
-main = greet "World"`,
+main = greet "World"` },
             
-            calc: `-- Calculator example
+            calc: { mode: 'phi', code: `-- Calculator example
 -- Expressions that can be evaluated by RosettaVM
 
 -- Try these in the editor:
@@ -310,19 +357,19 @@ main = greet "World"`,
 -- 10 * 5
 -- 100 - 37
 
-main = 6 * 7`,
+main = 6 * 7` },
             
-            rvm: `; RosettaVM assembly example
-; Switch to "main.rvm" tab for assembly mode
+            rvm: { mode: 'rvm', code: `; RosettaVM assembly example
+; This runs directly in the browser via WebAssembly
 
 fn main() {
     push 6
     push 7
     mul
     halt
-}`,
+}` },
             
-            cofree: `-- Cofree Comonad: the universal comonad
+            cofree: { mode: 'phi', code: `-- Cofree Comonad: the universal comonad
 data Cofree f a where
   Cofree : a -> f (Cofree f a) -> Cofree f a
 
@@ -334,9 +381,9 @@ extract (Cofree a _) = a
 extend : (Cofree f a -> b) -> Cofree f a -> Cofree f b
 extend f w@(Cofree _ fs) = Cofree (f w) (fmap (extend f) fs)
 
-main = extract (Cofree 42 [])`,
+main = extract (Cofree 42 [])` },
             
-            stream: `-- Infinite Streams using Cofree
+            stream: { mode: 'phi', code: `-- Infinite Streams using Cofree
 type Stream a = Cofree Identity a
 
 -- Natural numbers
@@ -352,34 +399,50 @@ take : Nat -> Stream a -> List a
 take 0 _ = []
 take n (Cofree a (Identity rest)) = a :: take (n - 1) rest
 
-main = take 10 fibs`
+main = take 10 fibs` }
         };
         
         function setMode(mode) {
+            // Save current editor content before switching
+            editorContent[currentMode] = document.getElementById('editor').value;
+            
+            // Update mode
             currentMode = mode;
-            document.querySelectorAll('.panel:first-child .tab').forEach(t => t.classList.remove('active'));
-            document.querySelector(`.panel:first-child .tab:${mode === 'phi' ? 'first' : 'last'}-child`).classList.add('active');
+            
+            // Update tabs
+            document.getElementById('tab-phi').classList.toggle('active', mode === 'phi');
+            document.getElementById('tab-rvm').classList.toggle('active', mode === 'rvm');
             document.getElementById('mode-label').textContent = mode === 'phi' ? 'Phi' : 'RVM Assembly';
+            
+            // Load content for the new mode
+            document.getElementById('editor').value = editorContent[mode];
+        }
+        
+        function showTab(tab) {
+            currentOutputTab = tab;
+            
+            // Update tab buttons
+            document.getElementById('tab-output').classList.toggle('active', tab === 'output');
+            document.getElementById('tab-types').classList.toggle('active', tab === 'types');
+            document.getElementById('tab-bytecode').classList.toggle('active', tab === 'bytecode');
+            
+            // Show/hide panels
+            document.getElementById('output').classList.toggle('active', tab === 'output');
+            document.getElementById('types').classList.toggle('active', tab === 'types');
+            document.getElementById('bytecode').classList.toggle('active', tab === 'bytecode');
         }
         
         function loadExample() {
             const select = document.getElementById('example-select');
             const example = examples[select.value];
             if (example) {
-                document.getElementById('editor').value = example;
-                // Switch mode based on example
-                if (select.value === 'rvm') {
-                    setMode('rvm');
-                } else {
-                    setMode('phi');
-                }
+                // Switch to the appropriate mode
+                setMode(example.mode);
+                // Set the code (also updates the stored content)
+                document.getElementById('editor').value = example.code;
+                editorContent[example.mode] = example.code;
             }
             select.value = '';
-        }
-        
-        function showTab(tab) {
-            document.querySelectorAll('.panel:last-child .tab').forEach(t => t.classList.remove('active'));
-            event.target.classList.add('active');
         }
         
         function setStatus(text, isError = false, isLoading = false) {
@@ -391,10 +454,12 @@ main = take 10 fibs`
         function runCode() {
             const code = document.getElementById('editor').value;
             const output = document.getElementById('output');
+            const types = document.getElementById('types');
+            const bytecode = document.getElementById('bytecode');
             const target = document.getElementById('target-select').value;
             
             setStatus('Running...', false, true);
-            output.className = 'output';
+            output.className = 'output-panel active';
             
             setTimeout(() => {
                 try {
@@ -402,8 +467,21 @@ main = take 10 fibs`
                     if (wasmReady && currentMode === 'rvm') {
                         const result = evaluate(code);
                         output.textContent = `✓ RosettaVM Result:\n\n${result}`;
-                        output.className = 'output success';
+                        output.className = 'output-panel active success';
+                        
+                        // Update types panel
+                        types.textContent = `Mode: RVM Assembly
+                        
+RVM assembly is low-level bytecode.
+No type inference performed.
+
+Stack-based execution model.`;
+                        
+                        // Update bytecode panel
+                        bytecode.innerHTML = formatBytecode(code);
+                        
                         setStatus('Evaluated with WASM');
+                        showTab('output');
                         return;
                     }
                     
@@ -418,8 +496,16 @@ main = take 10 fibs`
                                 try {
                                     const result = calculate(expr);
                                     output.textContent = `✓ RosettaVM Result:\n\n${result}`;
-                                    output.className = 'output success';
+                                    output.className = 'output-panel active success';
+                                    
+                                    // Update types
+                                    types.textContent = `main : Nat\n\nExpression: ${expr}\nInferred type: Nat (natural number)`;
+                                    
+                                    // Update bytecode
+                                    bytecode.innerHTML = generateBytecode(expr);
+                                    
                                     setStatus('Evaluated with WASM');
+                                    showTab('output');
                                     return;
                                 } catch (e) {
                                     // Fall through to demo mode
@@ -429,17 +515,67 @@ main = take 10 fibs`
                     }
                     
                     // Demo mode fallback
-                    runDemoMode(code, output, target);
+                    runDemoMode(code, output, types, bytecode, target);
                     
                 } catch (e) {
                     output.textContent = `Error: ${e.message || e}`;
-                    output.className = 'output error';
+                    output.className = 'output-panel active error';
                     setStatus('Error', true);
                 }
             }, 100);
         }
         
-        function runDemoMode(code, output, target) {
+        function formatBytecode(code) {
+            const lines = code.split('\n');
+            let html = '<span class="bytecode-line">; Parsed RVM Assembly</span>\n\n';
+            let addr = 0;
+            
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed.startsWith(';') || trimmed.startsWith('fn') || trimmed === '}') {
+                    html += `<span class="bytecode-line">${escapeHtml(line)}</span>\n`;
+                } else {
+                    const parts = trimmed.split(/\s+/);
+                    const instr = parts[0];
+                    const args = parts.slice(1).join(' ');
+                    html += `<span class="bytecode-line">${String(addr).padStart(4, '0')}:</span> <span class="bytecode-instr">${escapeHtml(instr)}</span>`;
+                    if (args) html += ` <span class="bytecode-arg">${escapeHtml(args)}</span>`;
+                    html += '\n';
+                    addr++;
+                }
+            }
+            return html;
+        }
+        
+        function generateBytecode(expr) {
+            // Simple bytecode generation for arithmetic
+            let html = '<span class="bytecode-line">; Generated RVM bytecode</span>\n\n';
+            html += '<span class="bytecode-line">fn main() {</span>\n';
+            
+            // Very simple: just show the expression as push/op sequence
+            const tokens = expr.match(/(\d+|[\+\-\*\/])/g) || [];
+            let addr = 0;
+            
+            for (const token of tokens) {
+                if (/\d+/.test(token)) {
+                    html += `<span class="bytecode-line">${String(addr).padStart(4, '0')}:</span> <span class="bytecode-instr">push</span> <span class="bytecode-arg">${token}</span>\n`;
+                    addr++;
+                } else {
+                    const op = { '+': 'add', '-': 'sub', '*': 'mul', '/': 'div' }[token] || token;
+                    html += `<span class="bytecode-line">${String(addr).padStart(4, '0')}:</span> <span class="bytecode-instr">${op}</span>\n`;
+                    addr++;
+                }
+            }
+            html += `<span class="bytecode-line">${String(addr).padStart(4, '0')}:</span> <span class="bytecode-instr">halt</span>\n`;
+            html += '<span class="bytecode-line">}</span>';
+            return html;
+        }
+        
+        function escapeHtml(str) {
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+        
+        function runDemoMode(code, output, types, bytecode, target) {
             // Pattern matching for demo
             if (code.includes('main =')) {
                 const mainMatch = code.match(/main\s*=\s*(.+)$/m);
@@ -449,8 +585,10 @@ main = take 10 fibs`
                     // String literals
                     if (expr.startsWith('"') && expr.endsWith('"')) {
                         output.textContent = expr.slice(1, -1);
-                        output.className = 'output success';
+                        output.className = 'output-panel active success';
+                        types.textContent = `main : String\n\nLiteral string value.`;
                         setStatus('Evaluated (demo)');
+                        showTab('output');
                         return;
                     }
                     
@@ -459,8 +597,11 @@ main = take 10 fibs`
                         try {
                             const result = eval(expr);
                             output.textContent = String(result);
-                            output.className = 'output success';
+                            output.className = 'output-panel active success';
+                            types.textContent = `main : Nat\n\nArithmetic expression.`;
+                            bytecode.innerHTML = generateBytecode(expr);
                             setStatus('Evaluated (demo)');
+                            showTab('output');
                             return;
                         } catch {}
                     }
@@ -470,8 +611,10 @@ main = take 10 fibs`
                         const nameMatch = expr.match(/greet "([^"]+)"/);
                         if (nameMatch) {
                             output.textContent = `"Hello, ${nameMatch[1]}!"`;
-                            output.className = 'output success';
+                            output.className = 'output-panel active success';
+                            types.textContent = `greet : String -> String\nmain : String\n\nFunction application.`;
                             setStatus('Evaluated (demo)');
+                            showTab('output');
                             return;
                         }
                     }
@@ -479,33 +622,44 @@ main = take 10 fibs`
                     // Pattern: take n fibs
                     if (expr.includes('take') && expr.includes('fibs')) {
                         output.textContent = '[0, 1, 1, 2, 3, 5, 8, 13, 21, 34]';
-                        output.className = 'output success';
+                        output.className = 'output-panel active success';
+                        types.textContent = `fibs : Stream Nat\ntake : Nat -> Stream a -> List a\nmain : List Nat`;
                         setStatus('Evaluated (demo)');
+                        showTab('output');
                         return;
                     }
                     
                     // Generic success
+                    const inferredType = inferType(expr);
                     output.textContent = `✓ Type checked successfully
 
-main : ${inferType(expr)}
+main : ${inferredType}
 
 Expression: ${expr}
 
 Full evaluation available for:
 • RVM assembly (switch to main.rvm tab)
 • Numeric expressions (try: main = 6 * 7)`;
-                    output.className = 'output success';
+                    output.className = 'output-panel active success';
+                    
+                    // Update types panel
+                    types.textContent = `main : ${inferredType}\n\n${extractDefinitions(code).map(d => d.trim()).join('\n')}`;
+                    
                     setStatus('Type checked (demo)');
+                    showTab('output');
                 }
             } else {
+                const defs = extractDefinitions(code);
                 output.textContent = `✓ Module type checked
 
 Defined:
-${extractDefinitions(code).join('\n')}
+${defs.join('\n')}
 
 No 'main' expression to evaluate.`;
-                output.className = 'output success';
+                output.className = 'output-panel active success';
+                types.textContent = defs.join('\n');
                 setStatus('Type checked (demo)');
+                showTab('output');
             }
         }
         
@@ -533,7 +687,7 @@ No 'main' expression to evaluate.`;
         function shareCode() {
             const code = document.getElementById('editor').value;
             const encoded = btoa(encodeURIComponent(code));
-            const url = window.location.origin + window.location.pathname + '?code=' + encoded;
+            const url = window.location.origin + window.location.pathname + '?code=' + encoded + '&mode=' + currentMode;
             navigator.clipboard.writeText(url).then(() => {
                 setStatus('Link copied to clipboard!');
                 setTimeout(() => setStatus('Ready'), 2000);
@@ -543,9 +697,17 @@ No 'main' expression to evaluate.`;
         // Load shared code from URL
         const params = new URLSearchParams(window.location.search);
         const sharedCode = params.get('code');
+        const sharedMode = params.get('mode');
         if (sharedCode) {
             try {
-                document.getElementById('editor').value = decodeURIComponent(atob(sharedCode));
+                const decoded = decodeURIComponent(atob(sharedCode));
+                if (sharedMode === 'rvm' || sharedMode === 'phi') {
+                    editorContent[sharedMode] = decoded;
+                    setMode(sharedMode);
+                } else {
+                    document.getElementById('editor').value = decoded;
+                    editorContent[currentMode] = decoded;
+                }
             } catch (e) {
                 console.error('Failed to load shared code');
             }
