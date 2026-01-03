@@ -50,6 +50,20 @@ impl Hash {
         full[..8].to_string()
     }
 
+    /// Create a "partial" hash from short form (8 hex chars)
+    /// This creates a hash where only the first 4 bytes are set.
+    /// Useful for display purposes but cannot be used for content lookup.
+    pub fn from_short(s: &str) -> Option<Self> {
+        if s.len() != 8 {
+            return None;
+        }
+        let mut bytes = [0u8; 32];
+        for i in 0..4 {
+            bytes[i] = u8::from_str_radix(&s[i*2..i*2+2], 16).ok()?;
+        }
+        Some(Hash(bytes))
+    }
+
     /// Get raw bytes
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0

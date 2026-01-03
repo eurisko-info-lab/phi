@@ -9,6 +9,7 @@ pub mod instr;
 pub mod store;
 pub mod vm;
 pub mod parse;
+pub mod print;
 pub mod compile;
 pub mod port;
 pub mod phi_compiler;
@@ -264,88 +265,6 @@ pub fn run_phi(source: &str) -> Result<String, JsValue> {
     }
 }
 
-// Helper function to format an instruction as RVM assembly text
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-fn format_instr(instr: &crate::instr::Instr) -> String {
-    use crate::instr::{Instr, Literal};
-    match instr {
-        // Stack
-        Instr::Push(lit) => match lit {
-            Literal::Int(n) => format!("push {}", n),
-            Literal::Float(f) => format!("push {}", f),
-            Literal::Str(s) => format!("push \"{}\"", s),
-            Literal::Bool(b) => format!("push {}", b),
-            Literal::Nil => "push nil".to_string(),
-            Literal::Unit => "push unit".to_string(),
-            Literal::Hash(h) => format!("push @{}", h.short()),
-        },
-        Instr::Pop => "pop".to_string(),
-        Instr::Dup => "dup".to_string(),
-        Instr::Swap => "swap".to_string(),
-        Instr::Rot => "rot".to_string(),
-        Instr::Over => "over".to_string(),
-        
-        // Env
-        Instr::Load(n) => format!("load {}", n),
-        Instr::Store(n) => format!("store {}", n),
-        Instr::LoadGlobal(h) => format!("// loadg @{}", h.short()),
-        Instr::StoreGlobal(h) => format!("// storeg @{}", h.short()),
-        
-        // Arithmetic
-        Instr::Add => "add".to_string(),
-        Instr::Sub => "sub".to_string(),
-        Instr::Mul => "mul".to_string(),
-        Instr::Div => "div".to_string(),
-        Instr::Mod => "mod".to_string(),
-        Instr::Neg => "neg".to_string(),
-        
-        // Comparison
-        Instr::Eq => "eq".to_string(),
-        Instr::Ne => "ne".to_string(),
-        Instr::Lt => "lt".to_string(),
-        Instr::Le => "le".to_string(),
-        Instr::Gt => "gt".to_string(),
-        Instr::Ge => "ge".to_string(),
-        
-        // Boolean
-        Instr::Not => "not".to_string(),
-        Instr::And => "and".to_string(),
-        Instr::Or => "or".to_string(),
-        
-        // Control
-        Instr::Jump(n) => format!("jmp {}", n),
-        Instr::JumpIf(n) => format!("jt {}", n),
-        Instr::JumpIfNot(n) => format!("jf {}", n),
-        Instr::Call(h) => format!("call @{}", h.short()),
-        Instr::TailCall(h) => format!("tailcall @{}", h.short()),
-        Instr::Return => "ret".to_string(),
-        Instr::Halt => "halt".to_string(),
-        
-        // Data structures
-        Instr::MkList(n) => format!("mklist {}", n),
-        Instr::MkTuple(n) => format!("mktuple {}", n),
-        Instr::Closure(h, n) => format!("closure @{} {}", h.short(), n),
-        Instr::Apply => "apply".to_string(),
-        Instr::ApplyN(n) => format!("applyn {}", n),
-        Instr::Index => "index".to_string(),
-        Instr::GetField(n) => format!("getfield {}", n),
-        
-        // Lists
-        Instr::Cons => "cons".to_string(),
-        Instr::Head => "head".to_string(),
-        Instr::Tail => "tail".to_string(),
-        Instr::IsNil => "isnil".to_string(),
-        Instr::Len => "len".to_string(),
-        
-        // Strings
-        Instr::StrConcat => "strcat".to_string(),
-        Instr::StrLen => "strlen".to_string(),
-        
-        // Fallback for any other instructions
-        _ => format!("{:?}", instr),
-    }
-}
-
 // Helper function to convert port::expr::Expr to compile::Expr
 // Available always (used by tests and WASM)
 fn convert_expr(e: &crate::port::expr::Expr) -> compile::Expr {
@@ -415,6 +334,7 @@ fn wasm_parse_simple_expr(source: &str) -> Result<compile::Expr, String> {
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 fn compile_phi_expr(source: &str) -> Result<String, JsValue> {
     use crate::port::parser::Parser;
+    use crate::print::{PrintContext, print_instr};
     
     let mut parser = Parser::new(source)
         .map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
@@ -425,11 +345,12 @@ fn compile_phi_expr(source: &str) -> Result<String, JsValue> {
     let expr = convert_expr(&port_expr);
     let block = compile::Compiler::compile(&expr);
     
-    // Format as RVM assembly
+    // Format as RVM assembly using print module
+    let ctx = PrintContext::new();
     let mut output = String::new();
     output.push_str("fn main() {\n");
     for instr in &block.code {
-        output.push_str(&format!("    {}\n", format_instr(instr)));
+        output.push_str(&format!("    {}\n", print_instr(instr, &ctx)));
     }
     output.push_str("}\n");
     
@@ -438,14 +359,15 @@ fn compile_phi_expr(source: &str) -> Result<String, JsValue> {
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 fn compile_phi_program(source: &str) -> Result<String, JsValue> {
-    use std::collections::HashMap;
     use crate::port::parser::Parser;
+    use crate::print::{PrintContext, print_instr};
     
     let mut output = String::new();
-    let mut function_cases: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let mut function_cases: std::collections::HashMap<String, Vec<(String, String)>> = std::collections::HashMap::new();
     let mut main_expr: Option<String> = None;
-    // Map hash short form to function name for display
-    let mut hash_to_name: HashMap<String, String> = HashMap::new();
+    
+    // PrintContext for name resolution
+    let mut ctx = PrintContext::new();
     
     for line in source.lines() {
         let line = line.trim();
@@ -490,69 +412,10 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
         }
     }
     
-    // First pass: register all function names by their hash
+    // Register all function names in PrintContext
     for (name, _) in &function_cases {
-        let name_hash = hash::Hash::of_str(name);
-        hash_to_name.insert(name_hash.short(), name.clone());
+        ctx.register(name);
     }
-    
-    // Helper to format instruction with name resolution
-    let format_with_names = |instr: &crate::instr::Instr| -> String {
-        use crate::instr::{Instr, Literal};
-        match instr {
-            // LoadGlobal doesn't have a parser equivalent - show as comment with hash
-            Instr::LoadGlobal(h) => {
-                let short = h.short();
-                if let Some(name) = hash_to_name.get(&short) {
-                    format!("// loadg {} @{}", name, short)
-                } else {
-                    format!("// loadg @{}", short)
-                }
-            }
-            // StoreGlobal doesn't have a parser equivalent either
-            Instr::StoreGlobal(h) => {
-                let short = h.short();
-                if let Some(name) = hash_to_name.get(&short) {
-                    format!("// storeg {} @{}", name, short)
-                } else {
-                    format!("// storeg @{}", short)
-                }
-            }
-            Instr::Closure(h, n) => {
-                let short = h.short();
-                if let Some(name) = hash_to_name.get(&short) {
-                    format!("closure {} {}", name, n)
-                } else {
-                    format!("closure @{} {}", short, n)
-                }
-            }
-            Instr::Call(h) => {
-                let short = h.short();
-                if let Some(name) = hash_to_name.get(&short) {
-                    format!("call {}", name)
-                } else {
-                    format!("call @{}", short)
-                }
-            }
-            Instr::TailCall(h) => {
-                let short = h.short();
-                if let Some(name) = hash_to_name.get(&short) {
-                    format!("tailcall {}", name)
-                } else {
-                    format!("tailcall @{}", short)
-                }
-            }
-            Instr::Push(Literal::Hash(h)) => {
-                let short = h.short();
-                if let Some(name) = hash_to_name.get(&short) {
-                    format!("push {}", name)
-                } else {
-                    format!("push @{}", short)
-                }
-            }
-            _ => format_instr(instr),
-        }
-    };
     
     // Generate RVM for each function
     for (name, cases) in &function_cases {
@@ -590,7 +453,7 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
                         };
                         output.push_str(&format!("fn {}({}) {{\n", fn_name, args));
                         for instr in &block.code {
-                            output.push_str(&format!("    {}\n", format_with_names(instr)));
+                            output.push_str(&format!("    {}\n", print_instr(instr, &ctx)));
                         }
                         output.push_str("}\n\n");
                     }
@@ -616,7 +479,7 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
                     let block = compile::Compiler::compile(&expr);
                     output.push_str("fn main() {\n");
                     for instr in &block.code {
-                        output.push_str(&format!("    {}\n", format_with_names(instr)));
+                        output.push_str(&format!("    {}\n", print_instr(instr, &ctx)));
                     }
                     output.push_str("}\n");
                 }

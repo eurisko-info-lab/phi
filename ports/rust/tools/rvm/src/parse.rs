@@ -16,6 +16,24 @@ pub fn parse_file(source: &str, store: &mut Store) -> Result<Hash, ParseError> {
     parser.parse_module(store)
 }
 
+/// Parse a single instruction line (for testing roundtrip)
+pub fn parse_instr(source: &str) -> Result<Instr, ParseError> {
+    let mut parser = Parser::new(source);
+    parser.skip_ws();
+    let pre = parser.parse_pre_instr()?;
+    match pre {
+        PreInstr::Resolved(instr) => Ok(instr),
+        PreInstr::Jump(LabelOrOffset::Offset(n)) => Ok(Instr::Jump(n)),
+        PreInstr::JumpIf(LabelOrOffset::Offset(n)) => Ok(Instr::JumpIf(n)),
+        PreInstr::JumpIfNot(LabelOrOffset::Offset(n)) => Ok(Instr::JumpIfNot(n)),
+        _ => Err(ParseError {
+            line: parser.line,
+            col: parser.col,
+            message: "Cannot resolve label in single instruction parse".to_string(),
+        }),
+    }
+}
+
 /// Intermediate instruction that may contain unresolved label references
 #[derive(Debug, Clone)]
 enum PreInstr {
@@ -216,6 +234,14 @@ impl<'a> Parser<'a> {
             // Env
             "load" => PreInstr::Resolved(Instr::Load(self.parse_u32()?)),
             "store" => PreInstr::Resolved(Instr::Store(self.parse_u32()?)),
+            "loadg" | "loadglobal" => {
+                let target = self.parse_ident_or_hash()?;
+                PreInstr::Resolved(Instr::LoadGlobal(target))
+            }
+            "storeg" | "storeglobal" => {
+                let target = self.parse_ident_or_hash()?;
+                PreInstr::Resolved(Instr::StoreGlobal(target))
+            }
 
             // Arithmetic
             "add" => PreInstr::Resolved(Instr::Add),
@@ -427,6 +453,25 @@ impl<'a> Parser<'a> {
             Err(self.error("expected identifier"))
         } else {
             Ok(s)
+        }
+    }
+
+    /// Parse an identifier or a @hash reference, returning the Hash
+    fn parse_ident_or_hash(&mut self) -> Result<Hash, ParseError> {
+        self.skip_ws_inline();
+        if self.peek_char() == Some('@') {
+            self.advance();
+            let hex = self.take_while(|c| c.is_ascii_hexdigit());
+            if hex.len() == 8 {
+                // Short hash - we can't fully reconstruct, but we can use it as-is
+                // This will work for display but not for execution without the full hash
+                Hash::from_short(&hex).ok_or_else(|| self.error("invalid short hash"))
+            } else {
+                Hash::from_hex(&hex).ok_or_else(|| self.error("invalid hash"))
+            }
+        } else {
+            let name = self.parse_ident()?;
+            Ok(Hash::of_str(&name))
         }
     }
 
