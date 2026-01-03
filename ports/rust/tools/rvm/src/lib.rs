@@ -271,75 +271,75 @@ fn format_instr(instr: &crate::instr::Instr) -> String {
     match instr {
         // Stack
         Instr::Push(lit) => match lit {
-            Literal::Int(n) => format!("PUSH {}", n),
-            Literal::Float(f) => format!("PUSH {}", f),
-            Literal::Str(s) => format!("PUSH \"{}\"", s),
-            Literal::Bool(b) => format!("PUSH {}", b),
-            Literal::Nil => "PUSH nil".to_string(),
-            Literal::Unit => "PUSH unit".to_string(),
-            Literal::Hash(h) => format!("PUSH @{}", h.short()),
+            Literal::Int(n) => format!("push {}", n),
+            Literal::Float(f) => format!("push {}", f),
+            Literal::Str(s) => format!("push \"{}\"", s),
+            Literal::Bool(b) => format!("push {}", b),
+            Literal::Nil => "push nil".to_string(),
+            Literal::Unit => "push unit".to_string(),
+            Literal::Hash(h) => format!("push @{}", h.short()),
         },
-        Instr::Pop => "POP".to_string(),
-        Instr::Dup => "DUP".to_string(),
-        Instr::Swap => "SWAP".to_string(),
-        Instr::Rot => "ROT".to_string(),
-        Instr::Over => "OVER".to_string(),
+        Instr::Pop => "pop".to_string(),
+        Instr::Dup => "dup".to_string(),
+        Instr::Swap => "swap".to_string(),
+        Instr::Rot => "rot".to_string(),
+        Instr::Over => "over".to_string(),
         
         // Env
-        Instr::Load(n) => format!("LOAD {}", n),
-        Instr::Store(n) => format!("STORE {}", n),
-        Instr::LoadGlobal(h) => format!("LOADG @{}", h.short()),
-        Instr::StoreGlobal(h) => format!("STOREG @{}", h.short()),
+        Instr::Load(n) => format!("load {}", n),
+        Instr::Store(n) => format!("store {}", n),
+        Instr::LoadGlobal(h) => format!("// loadg @{}", h.short()),
+        Instr::StoreGlobal(h) => format!("// storeg @{}", h.short()),
         
         // Arithmetic
-        Instr::Add => "ADD".to_string(),
-        Instr::Sub => "SUB".to_string(),
-        Instr::Mul => "MUL".to_string(),
-        Instr::Div => "DIV".to_string(),
-        Instr::Mod => "MOD".to_string(),
-        Instr::Neg => "NEG".to_string(),
+        Instr::Add => "add".to_string(),
+        Instr::Sub => "sub".to_string(),
+        Instr::Mul => "mul".to_string(),
+        Instr::Div => "div".to_string(),
+        Instr::Mod => "mod".to_string(),
+        Instr::Neg => "neg".to_string(),
         
         // Comparison
-        Instr::Eq => "EQ".to_string(),
-        Instr::Ne => "NE".to_string(),
-        Instr::Lt => "LT".to_string(),
-        Instr::Le => "LE".to_string(),
-        Instr::Gt => "GT".to_string(),
-        Instr::Ge => "GE".to_string(),
+        Instr::Eq => "eq".to_string(),
+        Instr::Ne => "ne".to_string(),
+        Instr::Lt => "lt".to_string(),
+        Instr::Le => "le".to_string(),
+        Instr::Gt => "gt".to_string(),
+        Instr::Ge => "ge".to_string(),
         
         // Boolean
-        Instr::Not => "NOT".to_string(),
-        Instr::And => "AND".to_string(),
-        Instr::Or => "OR".to_string(),
+        Instr::Not => "not".to_string(),
+        Instr::And => "and".to_string(),
+        Instr::Or => "or".to_string(),
         
         // Control
-        Instr::Jump(n) => format!("JMP {}", n),
-        Instr::JumpIf(n) => format!("JT {}", n),
-        Instr::JumpIfNot(n) => format!("JF {}", n),
-        Instr::Call(h) => format!("CALL @{}", h.short()),
-        Instr::TailCall(h) => format!("TAILCALL @{}", h.short()),
-        Instr::Return => "RET".to_string(),
-        Instr::Halt => "HALT".to_string(),
+        Instr::Jump(n) => format!("jmp {}", n),
+        Instr::JumpIf(n) => format!("jt {}", n),
+        Instr::JumpIfNot(n) => format!("jf {}", n),
+        Instr::Call(h) => format!("call @{}", h.short()),
+        Instr::TailCall(h) => format!("tailcall @{}", h.short()),
+        Instr::Return => "ret".to_string(),
+        Instr::Halt => "halt".to_string(),
         
         // Data structures
-        Instr::MkList(n) => format!("MKLIST {}", n),
-        Instr::MkTuple(n) => format!("MKTUPLE {}", n),
-        Instr::Closure(h, n) => format!("CLOSURE @{} {}", h.short(), n),
-        Instr::Apply => "APPLY".to_string(),
-        Instr::ApplyN(n) => format!("APPLYN {}", n),
-        Instr::Index => "INDEX".to_string(),
-        Instr::GetField(n) => format!("GETFIELD {}", n),
+        Instr::MkList(n) => format!("mklist {}", n),
+        Instr::MkTuple(n) => format!("mktuple {}", n),
+        Instr::Closure(h, n) => format!("closure @{} {}", h.short(), n),
+        Instr::Apply => "apply".to_string(),
+        Instr::ApplyN(n) => format!("applyn {}", n),
+        Instr::Index => "index".to_string(),
+        Instr::GetField(n) => format!("getfield {}", n),
         
         // Lists
-        Instr::Cons => "CONS".to_string(),
-        Instr::Head => "HEAD".to_string(),
-        Instr::Tail => "TAIL".to_string(),
-        Instr::IsNil => "ISNIL".to_string(),
-        Instr::Len => "LEN".to_string(),
+        Instr::Cons => "cons".to_string(),
+        Instr::Head => "head".to_string(),
+        Instr::Tail => "tail".to_string(),
+        Instr::IsNil => "isnil".to_string(),
+        Instr::Len => "len".to_string(),
         
         // Strings
-        Instr::StrConcat => "STRCAT".to_string(),
-        Instr::StrLen => "STRLEN".to_string(),
+        Instr::StrConcat => "strcat".to_string(),
+        Instr::StrLen => "strlen".to_string(),
         
         // Fallback for any other instructions
         _ => format!("{:?}", instr),
@@ -500,36 +500,54 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
     let format_with_names = |instr: &crate::instr::Instr| -> String {
         use crate::instr::{Instr, Literal};
         match instr {
+            // LoadGlobal doesn't have a parser equivalent - show as comment
             Instr::LoadGlobal(h) => {
                 let short = h.short();
                 if let Some(name) = hash_to_name.get(&short) {
-                    format!("LOADG {}", name)
+                    format!("// load {}", name)
                 } else {
-                    format!("LOADG @{}", short)
+                    format!("// load @{}", short)
+                }
+            }
+            // StoreGlobal doesn't have a parser equivalent either
+            Instr::StoreGlobal(h) => {
+                let short = h.short();
+                if let Some(name) = hash_to_name.get(&short) {
+                    format!("// store {}", name)
+                } else {
+                    format!("// store @{}", short)
                 }
             }
             Instr::Closure(h, n) => {
                 let short = h.short();
                 if let Some(name) = hash_to_name.get(&short) {
-                    format!("CLOSURE {} {}", name, n)
+                    format!("closure {} {}", name, n)
                 } else {
-                    format!("CLOSURE @{} {}", short, n)
+                    format!("closure @{} {}", short, n)
                 }
             }
             Instr::Call(h) => {
                 let short = h.short();
                 if let Some(name) = hash_to_name.get(&short) {
-                    format!("CALL {}", name)
+                    format!("call {}", name)
                 } else {
-                    format!("CALL @{}", short)
+                    format!("call @{}", short)
+                }
+            }
+            Instr::TailCall(h) => {
+                let short = h.short();
+                if let Some(name) = hash_to_name.get(&short) {
+                    format!("tailcall {}", name)
+                } else {
+                    format!("tailcall @{}", short)
                 }
             }
             Instr::Push(Literal::Hash(h)) => {
                 let short = h.short();
                 if let Some(name) = hash_to_name.get(&short) {
-                    format!("PUSH {}", name)
+                    format!("push {}", name)
                 } else {
-                    format!("PUSH @{}", short)
+                    format!("push @{}", short)
                 }
             }
             _ => format_instr(instr),
