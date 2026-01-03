@@ -477,7 +477,7 @@ main = take 10 fibs`,
             // Generate main
             if (mainExpr) {
                 rvm += 'fn main() {\n';
-                rvm += compileExprToRVM(mainExpr, functionDefs, '    ');
+                rvm += compileExprToRVM(mainExpr, functionDefs, '    ', {});
                 rvm += '    halt\n';
                 rvm += '}\n';
             }
@@ -486,7 +486,17 @@ main = take 10 fibs`,
         }
         
         function compileFunctionToRVM(name, cases, allFunctions) {
-            let rvm = `fn ${name}(n) {\n`;
+            // Extract parameter name from the general case (non-numeric pattern)
+            let paramName = 'n';
+            for (const c of cases) {
+                if (!/^\d+$/.test(c.args.trim())) {
+                    paramName = c.args.trim();
+                    break;
+                }
+            }
+            
+            let rvm = `fn ${name}(${paramName}) {\n`;
+            const env = { [paramName]: 0 };  // Parameter is at index 0
             
             // If multiple cases, it's pattern matching
             if (cases.length > 1) {
@@ -508,26 +518,26 @@ main = take 10 fibs`,
                     const pattern = c.args.trim();
                     
                     if (/^\d+$/.test(pattern)) {
-                        // Numeric pattern: if n == pattern
+                        // Numeric pattern: if param == pattern
                         rvm += `    ; case ${name} ${pattern}\n`;
-                        rvm += `    load n\n`;
+                        rvm += `    load 0           ; load ${paramName}\n`;
                         rvm += `    push ${pattern}\n`;
                         rvm += `    eq\n`;
-                        rvm += `    jz .case${i + 1}\n`;
-                        rvm += compileExprToRVM(c.body, allFunctions, '    ');
+                        rvm += `    jf case_${name}_${i + 1}\n`;
+                        rvm += compileExprToRVM(c.body, allFunctions, '    ', env);
                         rvm += `    ret\n`;
-                        rvm += `.case${i + 1}:\n`;
+                        rvm += `case_${name}_${i + 1}:\n`;
                     } else if (isLast) {
                         // General case (variable pattern) - must be last
                         rvm += `    ; case ${name} ${pattern} (general)\n`;
-                        rvm += compileExprToRVM(c.body, allFunctions, '    ');
+                        rvm += compileExprToRVM(c.body, allFunctions, '    ', env);
                     }
                 }
             } else {
                 // Single case - simple function
                 const c = cases[0];
                 rvm += `    ; ${name} ${c.args} = ${c.body}\n`;
-                rvm += compileExprToRVM(c.body, allFunctions, '    ');
+                rvm += compileExprToRVM(c.body, allFunctions, '    ', env);
             }
             
             rvm += '    ret\n';
@@ -535,7 +545,7 @@ main = take 10 fibs`,
             return rvm;
         }
         
-        function compileExprToRVM(expr, functions, indent = '') {
+        function compileExprToRVM(expr, functions, indent = '', env = {}) {
             let rvm = '';
             expr = expr.trim();
             
@@ -551,41 +561,52 @@ main = take 10 fibs`,
                 return rvm;
             }
             
-            // Arithmetic: a * b
-            let match = expr.match(/^(.+?)\s*\*\s*(.+)$/);
-            if (match) {
-                rvm += compileExprToRVM(match[1], functions, indent);
-                rvm += compileExprToRVM(match[2], functions, indent);
-                rvm += `${indent}mul\n`;
-                return rvm;
+            // Parenthesized expression - only if entire expr is wrapped
+            if (expr.startsWith('(') && findMatchingParen(expr, 0) === expr.length - 1) {
+                return compileExprToRVM(expr.slice(1, -1), functions, indent, env);
             }
             
-            // Arithmetic: a + b
-            match = expr.match(/^(.+?)\s*\+\s*(.+)$/);
-            if (match && !expr.includes('++')) {
-                rvm += compileExprToRVM(match[1], functions, indent);
-                rvm += compileExprToRVM(match[2], functions, indent);
+            // Split at top-level + (outside parentheses)
+            let splitIdx = findTopLevelOp(expr, '+');
+            if (splitIdx > 0 && !expr.includes('++')) {
+                const left = expr.slice(0, splitIdx).trim();
+                const right = expr.slice(splitIdx + 1).trim();
+                rvm += compileExprToRVM(left, functions, indent, env);
+                rvm += compileExprToRVM(right, functions, indent, env);
                 rvm += `${indent}add\n`;
                 return rvm;
             }
             
-            // Arithmetic: a - b
-            match = expr.match(/^(.+?)\s*-\s*(.+)$/);
-            if (match) {
-                rvm += compileExprToRVM(match[1], functions, indent);
-                rvm += compileExprToRVM(match[2], functions, indent);
+            // Split at top-level -
+            splitIdx = findTopLevelOp(expr, '-');
+            if (splitIdx > 0) {
+                const left = expr.slice(0, splitIdx).trim();
+                const right = expr.slice(splitIdx + 1).trim();
+                rvm += compileExprToRVM(left, functions, indent, env);
+                rvm += compileExprToRVM(right, functions, indent, env);
                 rvm += `${indent}sub\n`;
                 return rvm;
             }
             
-            // Function application: f x or f (x)
-            match = expr.match(/^(\w+)\s+(.+)$/);
-            if (match) {
-                const [, fnName, arg] = match;
+            // Split at top-level *
+            splitIdx = findTopLevelOp(expr, '*');
+            if (splitIdx > 0) {
+                const left = expr.slice(0, splitIdx).trim();
+                const right = expr.slice(splitIdx + 1).trim();
+                rvm += compileExprToRVM(left, functions, indent, env);
+                rvm += compileExprToRVM(right, functions, indent, env);
+                rvm += `${indent}mul\n`;
+                return rvm;
+            }
+            
+            // Function application: f (x) or f x
+            const fnMatch = expr.match(/^(\w+)\s+(.+)$/);
+            if (fnMatch) {
+                const [, fnName, arg] = fnMatch;
                 // Check if it's a known function
                 if (functions[fnName]) {
                     // Push argument, then call
-                    rvm += compileExprToRVM(arg.replace(/^\(|\)$/g, ''), functions, indent);
+                    rvm += compileExprToRVM(arg, functions, indent, env);
                     rvm += `${indent}call ${fnName}\n`;
                 } else {
                     // Built-in or unknown - just push the result
@@ -599,15 +620,12 @@ main = take 10 fibs`,
             if (expr.match(/^\w+$/)) {
                 if (functions[expr]) {
                     rvm += `${indent}call ${expr}\n`;
+                } else if (env.hasOwnProperty(expr)) {
+                    rvm += `${indent}load ${env[expr]}           ; load ${expr}\n`;
                 } else {
-                    rvm += `${indent}load ${expr}\n`;
+                    rvm += `${indent}load ${expr}  ; unknown var\n`;
                 }
                 return rvm;
-            }
-            
-            // Parenthesized expression
-            if (expr.startsWith('(') && expr.endsWith(')')) {
-                return compileExprToRVM(expr.slice(1, -1), functions, indent);
             }
             
             // String concatenation (demo)
@@ -615,7 +633,7 @@ main = take 10 fibs`,
                 rvm += `${indent}; string concat: ${expr}\n`;
                 const parts = expr.split('++').map(p => p.trim());
                 for (const part of parts) {
-                    rvm += compileExprToRVM(part, functions, indent);
+                    rvm += compileExprToRVM(part, functions, indent, env);
                 }
                 rvm += `${indent}concat\n`.repeat(parts.length - 1);
                 return rvm;
@@ -625,6 +643,35 @@ main = take 10 fibs`,
             rvm += `${indent}; ${expr}\n`;
             rvm += `${indent}push 0  ; uncompiled expression\n`;
             return rvm;
+        }
+        
+        // Find matching closing paren
+        function findMatchingParen(str, start) {
+            let depth = 0;
+            for (let i = start; i < str.length; i++) {
+                if (str[i] === '(') depth++;
+                else if (str[i] === ')') {
+                    depth--;
+                    if (depth === 0) return i;
+                }
+            }
+            return -1;
+        }
+        
+        // Find operator at top level (outside parens)
+        function findTopLevelOp(str, op) {
+            let depth = 0;
+            for (let i = str.length - 1; i >= 0; i--) {
+                if (str[i] === ')') depth++;
+                else if (str[i] === '(') depth--;
+                else if (depth === 0 && str[i] === op) {
+                    // Check it's not part of ++ or --
+                    if (op === '+' && str[i+1] === '+') continue;
+                    if (op === '-' && str[i+1] === '-') continue;
+                    return i;
+                }
+            }
+            return -1;
         }
         function setMode(mode) {
             // Save current editor content before switching
