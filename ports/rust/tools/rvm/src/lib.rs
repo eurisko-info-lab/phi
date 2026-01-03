@@ -500,22 +500,22 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
     let format_with_names = |instr: &crate::instr::Instr| -> String {
         use crate::instr::{Instr, Literal};
         match instr {
-            // LoadGlobal doesn't have a parser equivalent - show as comment
+            // LoadGlobal doesn't have a parser equivalent - show as comment with hash
             Instr::LoadGlobal(h) => {
                 let short = h.short();
                 if let Some(name) = hash_to_name.get(&short) {
-                    format!("// load {}", name)
+                    format!("// loadg {} @{}", name, short)
                 } else {
-                    format!("// load @{}", short)
+                    format!("// loadg @{}", short)
                 }
             }
             // StoreGlobal doesn't have a parser equivalent either
             Instr::StoreGlobal(h) => {
                 let short = h.short();
                 if let Some(name) = hash_to_name.get(&short) {
-                    format!("// store {}", name)
+                    format!("// storeg {} @{}", name, short)
                 } else {
-                    format!("// store @{}", short)
+                    format!("// storeg @{}", short)
                 }
             }
             Instr::Closure(h, n) => {
