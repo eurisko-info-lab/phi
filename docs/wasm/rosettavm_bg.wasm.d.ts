@@ -5,6 +5,7 @@ export const calculate: (a: number, b: number) => [number, number, number, numbe
 export const compile_phi: (a: number, b: number) => [number, number, number, number];
 export const evaluate: (a: number, b: number) => [number, number, number, number];
 export const parse_rvm: (a: number, b: number) => [number, number, number, number];
+export const run_phi: (a: number, b: number) => [number, number, number, number];
 export const version: () => [number, number];
 export const init: () => void;
 export const evaluate_expr: (a: number, b: number) => [number, number, number, number];

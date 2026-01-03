@@ -283,7 +283,7 @@ Using RosettaVM in WebAssembly for real evaluation!</div>
     
     <script type="module">
         // Import WASM module
-        import init, { evaluate, evaluate_expr, calculate, version, parse_rvm, compile_phi } from '../wasm/rosettavm.js';
+        import init, { evaluate, evaluate_expr, calculate, version, parse_rvm, compile_phi, run_phi } from '../wasm/rosettavm.js';
         
         let wasmReady = false;
         let currentMode = 'phi';
@@ -774,22 +774,30 @@ main = take 10 fibs`,
             
             setTimeout(() => {
                 try {
-                    // If in phi mode, compile first
-                    let rvmCode = code;
-                    if (currentMode === 'phi') {
-                        if (wasmReady) {
-                            rvmCode = compile_phi(code);
-                        } else {
-                            rvmCode = phi2rvm(code);  // Fallback to JS compiler
-                        }
-                        editorContent.rvm = rvmCode;
-                        needsRecompile = false;
-                    }
-                    
-                    // If WASM is ready and we have RVM assembly
+                    // If WASM is ready
                     if (wasmReady) {
                         try {
-                            const result = evaluate(rvmCode);
+                            let result;
+                            let rvmCode = '';
+                            
+                            if (currentMode === 'phi') {
+                                // Use run_phi for direct execution
+                                result = run_phi(code);
+                                // Get RVM code for display (may have hash refs but that's ok for display)
+                                try {
+                                    rvmCode = compile_phi(code);
+                                } catch (e) {
+                                    rvmCode = '; Compilation display not available';
+                                }
+                            } else {
+                                // RVM mode - evaluate directly
+                                rvmCode = code;
+                                result = evaluate(code);
+                            }
+                            
+                            editorContent.rvm = rvmCode;
+                            needsRecompile = false;
+                            
                             output.textContent = `✓ RosettaVM Result:\n\n${result}`;
                             output.className = 'output-panel active success';
                             

@@ -7,7 +7,7 @@
 export function calculate(expr: string): string;
 
 /**
- * Compile Phi source to RVM assembly
+ * Compile Phi source to RVM assembly (for display only)
  */
 export function compile_phi(source: string): string;
 
@@ -29,6 +29,11 @@ export function init(): void;
 export function parse_rvm(source: string): string;
 
 /**
+ * Compile and run Phi source directly (bypasses text RVM)
+ */
+export function run_phi(source: string): string;
+
+/**
  * Get version info
  */
 export function version(): string;
@@ -41,6 +46,7 @@ export interface InitOutput {
   readonly compile_phi: (a: number, b: number) => [number, number, number, number];
   readonly evaluate: (a: number, b: number) => [number, number, number, number];
   readonly parse_rvm: (a: number, b: number) => [number, number, number, number];
+  readonly run_phi: (a: number, b: number) => [number, number, number, number];
   readonly version: () => [number, number];
   readonly init: () => void;
   readonly evaluate_expr: (a: number, b: number) => [number, number, number, number];

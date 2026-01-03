@@ -123,7 +123,7 @@ pub fn evaluate_expr(source: &str) -> Result<String, JsValue> {
 }
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-/// Compile Phi source to RVM assembly
+/// Compile Phi source to RVM assembly (for display only)
 #[wasm_bindgen]
 pub fn compile_phi(source: &str) -> Result<String, JsValue> {
     // Check if this looks like a full program (has main =)
@@ -138,6 +138,63 @@ pub fn compile_phi(source: &str) -> Result<String, JsValue> {
     } else {
         compile_phi_expr(source)
     }
+}
+
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+/// Compile and run Phi source directly (bypasses text RVM)
+#[wasm_bindgen]
+pub fn run_phi(source: &str) -> Result<String, JsValue> {
+    use crate::port::parser::Parser;
+    
+    // Check if this looks like a full program (has main =)
+    let is_program = source.lines()
+        .any(|line| {
+            let trimmed = line.trim();
+            trimmed.starts_with("main") && trimmed.contains("=")
+        });
+    
+    let main_expr = if is_program {
+        // Extract main expression from program
+        let mut main_body = None;
+        for line in source.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("--") {
+                continue;
+            }
+            if line.starts_with("type ") || line.starts_with("data ") {
+                continue;
+            }
+            if line.contains(" : ") && !line.contains(" = ") {
+                continue;
+            }
+            if line.starts_with("main") && line.contains("=") {
+                if let Some(pos) = line.find('=') {
+                    main_body = Some(line[pos + 1..].trim().to_string());
+                }
+            }
+        }
+        main_body.ok_or_else(|| JsValue::from_str("No main expression found"))?
+    } else {
+        source.to_string()
+    };
+    
+    // Parse and compile the main expression
+    let mut parser = Parser::new(&main_expr)
+        .map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
+    let port_expr = parser.parse_expr()
+        .map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
+    
+    let expr = convert_expr(&port_expr);
+    let block = compile::Compiler::compile(&expr);
+    
+    let mut st = store::Store::new();
+    let hash = st.add_code(block);
+    let mut machine = vm::VM::new(&st);
+    
+    let result = machine.run(hash)
+        .map_err(|e| JsValue::from_str(&format!("Runtime error: {}", e)))?;
+    
+    Ok(format!("{:?}", result))
 }
 
 // Helper function to format an instruction as RVM assembly text
