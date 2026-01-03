@@ -2,7 +2,7 @@
   "name": "rosettavm",
   "type": "module",
   "description": "A content-addressed virtual machine for Port/Phi",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "license": "MIT",
   "files": [
     "rosettavm_bg.wasm",

@@ -140,6 +140,84 @@ pub fn compile_phi(source: &str) -> Result<String, JsValue> {
     }
 }
 
+// Helper function to format an instruction as RVM assembly text
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+fn format_instr(instr: &crate::instr::Instr) -> String {
+    use crate::instr::{Instr, Literal};
+    match instr {
+        // Stack
+        Instr::Push(lit) => match lit {
+            Literal::Int(n) => format!("PUSH {}", n),
+            Literal::Float(f) => format!("PUSH {}", f),
+            Literal::Str(s) => format!("PUSH \"{}\"", s),
+            Literal::Bool(b) => format!("PUSH {}", b),
+            Literal::Nil => "PUSH nil".to_string(),
+            Literal::Unit => "PUSH unit".to_string(),
+            Literal::Hash(h) => format!("PUSH @{:?}", h),
+        },
+        Instr::Pop => "POP".to_string(),
+        Instr::Dup => "DUP".to_string(),
+        Instr::Swap => "SWAP".to_string(),
+        Instr::Rot => "ROT".to_string(),
+        Instr::Over => "OVER".to_string(),
+        
+        // Env
+        Instr::Load(n) => format!("LOAD {}", n),
+        Instr::Store(n) => format!("STORE {}", n),
+        Instr::LoadGlobal(s) => format!("LOADG {}", s),
+        Instr::StoreGlobal(s) => format!("STOREG {}", s),
+        
+        // Arithmetic
+        Instr::Add => "ADD".to_string(),
+        Instr::Sub => "SUB".to_string(),
+        Instr::Mul => "MUL".to_string(),
+        Instr::Div => "DIV".to_string(),
+        Instr::Mod => "MOD".to_string(),
+        Instr::Neg => "NEG".to_string(),
+        
+        // Comparison
+        Instr::Eq => "EQ".to_string(),
+        Instr::Ne => "NE".to_string(),
+        Instr::Lt => "LT".to_string(),
+        Instr::Le => "LE".to_string(),
+        Instr::Gt => "GT".to_string(),
+        Instr::Ge => "GE".to_string(),
+        
+        // Boolean
+        Instr::Not => "NOT".to_string(),
+        Instr::And => "AND".to_string(),
+        Instr::Or => "OR".to_string(),
+        
+        // Control
+        Instr::Jump(n) => format!("JMP {}", n),
+        Instr::JumpIf(n) => format!("JT {}", n),
+        Instr::JumpIfNot(n) => format!("JF {}", n),
+        Instr::Call(n) => format!("CALL {}", n),
+        Instr::TailCall(n) => format!("TAILCALL {}", n),
+        Instr::Return => "RET".to_string(),
+        Instr::Halt => "HALT".to_string(),
+        
+        // Data structures
+        Instr::MkList(n) => format!("MKLIST {}", n),
+        Instr::MkTuple(n) => format!("MKTUPLE {}", n),
+        Instr::Closure(h, n) => format!("CLOSURE @{:?} {}", h, n),
+        Instr::Apply => "APPLY".to_string(),
+        Instr::ApplyN(n) => format!("APPLYN {}", n),
+        Instr::Index => "INDEX".to_string(),
+        Instr::GetField(n) => format!("GETFIELD {}", n),
+        
+        // Lists
+        Instr::Cons => "CONS".to_string(),
+        Instr::Head => "HEAD".to_string(),
+        Instr::Tail => "TAIL".to_string(),
+        Instr::IsNil => "ISNIL".to_string(),
+        Instr::Len => "LEN".to_string(),
+        
+        // Fallback for any other instructions
+        _ => format!("{:?}", instr),
+    }
+}
+
 // Helper function to convert port::expr::Expr to compile::Expr
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 fn convert_expr(e: &crate::port::expr::Expr) -> compile::Expr {
@@ -217,12 +295,13 @@ fn compile_phi_expr(source: &str) -> Result<String, JsValue> {
     let expr = convert_expr(&port_expr);
     let block = compile::Compiler::compile(&expr);
     
-    // Format as RVM text
+    // Format as RVM assembly
     let mut output = String::new();
-    output.push_str("@main\n");
+    output.push_str("fn main() {\n");
     for instr in &block.code {
-        output.push_str(&format!("  {:?}\n", instr));
+        output.push_str(&format!("    {}\n", format_instr(instr)));
     }
+    output.push_str("}\n");
     
     Ok(output)
 }
@@ -312,10 +391,11 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
                     Ok(port_expr) => {
                         let expr = convert_expr(&port_expr);
                         let block = compile::Compiler::compile(&expr);
-                        output.push_str(&format!("@{}\n", fn_name));
+                        output.push_str(&format!("fn {}() {{\n", fn_name));
                         for instr in &block.code {
-                            output.push_str(&format!("  {:?}\n", instr));
+                            output.push_str(&format!("    {}\n", format_instr(instr)));
                         }
+                        output.push_str("}\n\n");
                     }
                     Err(_e) => {
                         // Skip functions that fail to parse (likely pattern matching)
@@ -337,10 +417,11 @@ fn compile_phi_program(source: &str) -> Result<String, JsValue> {
                 Ok(port_expr) => {
                     let expr = convert_expr(&port_expr);
                     let block = compile::Compiler::compile(&expr);
-                    output.push_str("@main\n");
+                    output.push_str("fn main() {\n");
                     for instr in &block.code {
-                        output.push_str(&format!("  {:?}\n", instr));
+                        output.push_str(&format!("    {}\n", format_instr(instr)));
                     }
+                    output.push_str("}\n");
                 }
                 Err(e) => {
                     return Err(JsValue::from_str(&format!("Parse error in main: {}", e)));
