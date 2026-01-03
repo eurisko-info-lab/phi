@@ -283,7 +283,7 @@ Using RosettaVM in WebAssembly for real evaluation!</div>
     
     <script type="module">
         // Import WASM module
-        import init, { evaluate, evaluate_expr, calculate, version, parse_rvm } from '../wasm/rosettavm.js';
+        import init, { evaluate, evaluate_expr, calculate, version, parse_rvm, compile_phi } from '../wasm/rosettavm.js';
         
         let wasmReady = false;
         let currentMode = 'phi';
@@ -682,13 +682,17 @@ main = take 10 fibs`,
             if (mode === 'rvm' && currentMode === 'phi') {
                 const phiCode = editorContent.phi;
                 try {
-                    editorContent.rvm = phi2rvm(phiCode);
+                    if (wasmReady) {
+                        editorContent.rvm = compile_phi(phiCode);
+                    } else {
+                        editorContent.rvm = phi2rvm(phiCode);  // Fallback to JS compiler
+                    }
                     needsRecompile = false;
                     document.getElementById('compile-status').textContent = '(compiled)';
                     setStatus('Compiled phi → rvm');
                 } catch (e) {
                     console.error('Compilation error:', e);
-                    editorContent.rvm = `; Compilation error: ${e.message}\n; Edit main.phi and try again`;
+                    editorContent.rvm = `; Compilation error: ${e.message || e}\n; Edit main.phi and try again`;
                 }
             }
             
@@ -726,8 +730,17 @@ main = take 10 fibs`,
             if (example) {
                 // Load the phi code
                 editorContent.phi = example.phi;
-                // Compile to RVM
-                editorContent.rvm = phi2rvm(example.phi);
+                // Compile to RVM using WASM
+                try {
+                    if (wasmReady) {
+                        editorContent.rvm = compile_phi(example.phi);
+                    } else {
+                        editorContent.rvm = phi2rvm(example.phi);  // Fallback to JS compiler
+                    }
+                } catch (e) {
+                    console.error('Compilation error:', e);
+                    editorContent.rvm = `; Compilation error: ${e.message || e}`;
+                }
                 needsRecompile = false;
                 
                 // Switch to phi mode
@@ -764,7 +777,11 @@ main = take 10 fibs`,
                     // If in phi mode, compile first
                     let rvmCode = code;
                     if (currentMode === 'phi') {
-                        rvmCode = phi2rvm(code);
+                        if (wasmReady) {
+                            rvmCode = compile_phi(code);
+                        } else {
+                            rvmCode = phi2rvm(code);  // Fallback to JS compiler
+                        }
                         editorContent.rvm = rvmCode;
                         needsRecompile = false;
                     }

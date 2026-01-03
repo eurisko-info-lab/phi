@@ -2,6 +2,7 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const calculate: (a: number, b: number) => [number, number, number, number];
+export const compile_phi: (a: number, b: number) => [number, number, number, number];
 export const evaluate: (a: number, b: number) => [number, number, number, number];
 export const parse_rvm: (a: number, b: number) => [number, number, number, number];
 export const version: () => [number, number];

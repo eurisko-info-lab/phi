@@ -7,6 +7,11 @@
 export function calculate(expr: string): string;
 
 /**
+ * Compile Phi source code to RVM assembly using proper grammar-based parser
+ */
+export function compile_phi(source: string): string;
+
+/**
  * Evaluate RVM assembly code and return the result as a string
  */
 export function evaluate(source: string): string;
@@ -33,6 +38,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
   readonly calculate: (a: number, b: number) => [number, number, number, number];
+  readonly compile_phi: (a: number, b: number) => [number, number, number, number];
   readonly evaluate: (a: number, b: number) => [number, number, number, number];
   readonly parse_rvm: (a: number, b: number) => [number, number, number, number];
   readonly version: () => [number, number];
