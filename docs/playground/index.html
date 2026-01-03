@@ -498,6 +498,7 @@ main = take 10 fibs`,
                     const bIsNum = /^\d+$/.test(b.args.trim());
                     if (aIsNum && !bIsNum) return -1;
                     if (!aIsNum && bIsNum) return 1;
+                    if (aIsNum && bIsNum) return parseInt(a.args) - parseInt(b.args);
                     return 0;
                 });
                 
@@ -568,8 +569,8 @@ main = take 10 fibs`,
                 return rvm;
             }
             
-            // Arithmetic: a - b (be careful with negative numbers)
-            match = expr.match(/^(.+?)\s+-\s+(.+)$/);
+            // Arithmetic: a - b
+            match = expr.match(/^(.+?)\s*-\s*(.+)$/);
             if (match) {
                 rvm += compileExprToRVM(match[1], functions, indent);
                 rvm += compileExprToRVM(match[2], functions, indent);
@@ -587,44 +588,18 @@ main = take 10 fibs`,
                     rvm += compileExprToRVM(arg.replace(/^\(|\)$/g, ''), functions, indent);
                     rvm += `${indent}call ${fnName}\n`;
                 } else {
-                    // Built-in or unknown
+                    // Built-in or unknown - just push the result
                     rvm += `${indent}; ${fnName} ${arg}\n`;
-                    rvm += compileExprToRVM(arg.replace(/^\(|\)$/g, ''), functions, indent);
+                    rvm += `${indent}push 0  ; placeholder\n`;
                 }
                 return rvm;
             }
             
-            // Variable reference (including 'n' for recursion)
+            // Variable reference
             if (expr.match(/^\w+$/)) {
                 if (functions[expr]) {
                     rvm += `${indent}call ${expr}\n`;
                 } else {
-                    rvm += `${indent}load ${expr}\n`;
-                }
-                return rvm;
-            }
-            
-            // Parenthesized expression
-            if (expr.startsWith('(') && expr.endsWith(')')) {
-                return compileExprToRVM(expr.slice(1, -1), functions, indent);
-            }
-            
-            // String concatenation (demo)
-            if (expr.includes('++')) {
-                rvm += `${indent}; string concat: ${expr}\n`;
-                const parts = expr.split('++').map(p => p.trim());
-                for (const part of parts) {
-                    rvm += compileExprToRVM(part, functions, indent);
-                }
-                rvm += `${indent}concat\n`.repeat(parts.length - 1);
-                return rvm;
-            }
-            
-            // Fallback
-            rvm += `${indent}; ${expr}\n`;
-            rvm += `${indent}push 0  ; uncompiled expression\n`;
-            return rvm;
-        }
                     rvm += `${indent}load ${expr}\n`;
                 }
                 return rvm;
