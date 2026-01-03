@@ -520,7 +520,7 @@ main = take 10 fibs`,
                     if (/^\d+$/.test(pattern)) {
                         // Numeric pattern: if param == pattern
                         rvm += `    ; case ${name} ${pattern}\n`;
-                        rvm += `    load 0           ; load ${paramName}\n`;
+                        rvm += `    load 0\n`;
                         rvm += `    push ${pattern}\n`;
                         rvm += `    eq\n`;
                         rvm += `    jf case_${name}_${i + 1}\n`;
@@ -611,7 +611,7 @@ main = take 10 fibs`,
                 } else {
                     // Built-in or unknown - just push the result
                     rvm += `${indent}; ${fnName} ${arg}\n`;
-                    rvm += `${indent}push 0  ; placeholder\n`;
+                    rvm += `${indent}push 0\n`;
                 }
                 return rvm;
             }
@@ -621,9 +621,10 @@ main = take 10 fibs`,
                 if (functions[expr]) {
                     rvm += `${indent}call ${expr}\n`;
                 } else if (env.hasOwnProperty(expr)) {
-                    rvm += `${indent}load ${env[expr]}           ; load ${expr}\n`;
+                    rvm += `${indent}load ${env[expr]}\n`;
                 } else {
-                    rvm += `${indent}load ${expr}  ; unknown var\n`;
+                    rvm += `${indent}; unknown var: ${expr}\n`;
+                    rvm += `${indent}push 0\n`;
                 }
                 return rvm;
             }
@@ -641,7 +642,7 @@ main = take 10 fibs`,
             
             // Fallback
             rvm += `${indent}; ${expr}\n`;
-            rvm += `${indent}push 0  ; uncompiled expression\n`;
+            rvm += `${indent}push 0\n`;
             return rvm;
         }
         
