@@ -1,0 +1,52 @@
+{
+  "hello": {
+    "name": "Hello World",
+    "description": "Basic greeting function with string concatenation",
+    "phi": "-- Hello World in Φ\ngreet : String -> String\ngreet name = \"Hello, \" ++ name ++ \"!\"\n\nmain = greet \"World\""
+  },
+  "calc": {
+    "name": "Calculator",
+    "description": "Simple arithmetic expression",
+    "phi": "-- Calculator example\n-- Expressions that can be evaluated by RosettaVM\n\nmain = 6 * 7"
+  },
+  "factorial": {
+    "name": "Factorial",
+    "description": "Recursive factorial function with pattern matching",
+    "phi": "-- Factorial function\nfactorial : Nat -> Nat\nfactorial 0 = 1\nfactorial n = n * factorial (n - 1)\n\nmain = factorial 5"
+  },
+  "fibonacci": {
+    "name": "Fibonacci",
+    "description": "Fibonacci sequence with pattern matching",
+    "phi": "-- Fibonacci sequence\nfib : Nat -> Nat\nfib 0 = 0\nfib 1 = 1\nfib n = fib (n - 1) + fib (n - 2)\n\nmain = fib 10"
+  },
+  "cofree": {
+    "name": "Cofree Comonad",
+    "description": "The universal comonad - foundation for infinite structures",
+    "phi": "-- Cofree Comonad: the universal comonad\ndata Cofree f a where\n  Cofree : a -> f (Cofree f a) -> Cofree f a\n\n-- Extract the head\nextract : Cofree f a -> a\nextract (Cofree a _) = a\n\n-- Extend a function across the structure\nextend : (Cofree f a -> b) -> Cofree f a -> Cofree f b\nextend f w@(Cofree _ fs) = Cofree (f w) (fmap (extend f) fs)\n\nmain = extract (Cofree 42 [])"
+  },
+  "stream": {
+    "name": "Infinite Streams",
+    "description": "Lazy infinite streams using Cofree",
+    "phi": "-- Infinite Streams using Cofree\ntype Stream a = Cofree Identity a\n\n-- Natural numbers\nnats : Stream Nat\nnats = unfold (\\n -> (n, n + 1)) 0\n\n-- Fibonacci sequence  \nfibs : Stream Nat\nfibs = unfold (\\(a, b) -> (a, (b, a + b))) (0, 1)\n\n-- Take first n elements\ntake : Nat -> Stream a -> List a\ntake 0 _ = []\ntake n (Cofree a (Identity rest)) = a :: take (n - 1) rest\n\nmain = take 10 fibs"
+  },
+  "list": {
+    "name": "List Operations",
+    "description": "Common list functions - map, filter, fold",
+    "phi": "-- List operations\nmap : (a -> b) -> List a -> List b\nmap f [] = []\nmap f (x:xs) = f x : map f xs\n\nfilter : (a -> Bool) -> List a -> List a\nfilter p [] = []\nfilter p (x:xs) = if p x then x : filter p xs else filter p xs\n\nfold : (a -> b -> b) -> b -> List a -> b\nfold f z [] = z\nfold f z (x:xs) = f x (fold f z xs)\n\nmain = fold (+) 0 [1, 2, 3, 4, 5]"
+  },
+  "church": {
+    "name": "Church Numerals",
+    "description": "Natural numbers encoded as functions",
+    "phi": "-- Church numerals\ntype Church = (a -> a) -> a -> a\n\nzero : Church\nzero f x = x\n\nsucc : Church -> Church\nsucc n f x = f (n f x)\n\nadd : Church -> Church -> Church\nadd m n f x = m f (n f x)\n\nmul : Church -> Church -> Church\nmul m n f = m (n f)\n\n-- Convert to Nat for display\ntoNat : Church -> Nat\ntoNat n = n (+1) 0\n\nmain = toNat (mul (succ (succ zero)) (succ (succ (succ zero))))"
+  },
+  "monad": {
+    "name": "Monad Laws",
+    "description": "Demonstrating the three monad laws",
+    "phi": "-- Monad type class\nclass Monad m where\n  return : a -> m a\n  (>>=) : m a -> (a -> m b) -> m b\n\n-- Maybe monad instance\ninstance Monad Maybe where\n  return = Just\n  Nothing >>= f = Nothing\n  Just x >>= f = f x\n\n-- Monad laws:\n-- 1. Left identity: return a >>= f ≡ f a\n-- 2. Right identity: m >>= return ≡ m\n-- 3. Associativity: (m >>= f) >>= g ≡ m >>= (\\x -> f x >>= g)\n\nmain = Just 5 >>= (\\x -> Just (x * 2))"
+  },
+  "yoneda": {
+    "name": "Yoneda Lemma",
+    "description": "The fundamental lemma of category theory",
+    "phi": "-- Yoneda Lemma in Φ\n-- For any functor F and object a:\n-- Nat(Hom(a, -), F) ≅ F(a)\n\ndata Yoneda f a where\n  Yoneda : (forall b. (a -> b) -> f b) -> Yoneda f a\n\n-- Lift a functor value into Yoneda\nlift : Functor f => f a -> Yoneda f a\nlift fa = Yoneda (\\f -> fmap f fa)\n\n-- Lower from Yoneda back to the functor\nlower : Yoneda f a -> f a\nlower (Yoneda k) = k id\n\nmain = lower (lift [1, 2, 3])"
+  }
+}
